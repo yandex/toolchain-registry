@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+
+D=$(dirname ${0})
+
+export IX_PATH="${D}:${D}/ext/ix/pkgs:${D}/ynd"
+
+python3 ${D}/ext/ix/ix "${@}"

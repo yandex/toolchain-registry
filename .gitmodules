@@ -1,0 +1,3 @@
+[submodule "ext/ix"]
+	path = ext/ix
+	url = https://github.com/stal-ix/ix.git
