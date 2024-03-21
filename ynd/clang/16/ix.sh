@@ -68,10 +68,18 @@ EOF
 
 {% block postinstall %}
 :
-{% if linux and x86_64 %}
 cd ${out}/bin
+
+{% if linux and x86_64 %}
 ln -s llvm-cov llvm-gcov
 {% endif %}
+
+{% if mingw32 %}
+ln -s llvm-ar.exe llvm-lib.exe
+{% else %}
+ln -s llvm-ar llvm-lib
+{% endif %}
+
 {% endblock %}
 
 {% block clang_fix_includes %}
