@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <optional>
 #include <string_view>
+#include <tuple>
 
 #include <util/generic/hash.h>
 #include <util/generic/hash_multi_map.h>
@@ -20,6 +21,7 @@
 #include <library/cpp/enumbitset/enumbitset.h>
 
 std::tuple<int, int> test_tuple = {1, 2};
+std::tuple<> test_empty_tuple;
 
 std::vector<int> test_vector = {1, 2, 3, 4};
 

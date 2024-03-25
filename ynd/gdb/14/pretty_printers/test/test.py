@@ -50,6 +50,7 @@ def data(field):
 
 tests = dict(
     test_tuple='tuple = {[0] = 1, [1] = 2}',
+    test_empty_tuple='empty std::__y1::tuple',
     test_vector='std::__y1::vector (length=4, capacity=4) = {[0] = 1, [1] = 2, [2] = 3, [3] = 4}',
     test_hashmap='THashMap of length 2 = {[0] 1 = 2, [1] 3 = 4}',
     test_hashset='THashSet of length 3 = {[0] = 1, [1] = 2, [2] = 3}',
