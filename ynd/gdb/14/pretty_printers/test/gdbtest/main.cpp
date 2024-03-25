@@ -41,7 +41,10 @@ std::pair<int, int> test_pair = {1, 2};
 std::array<int, 4> test_array = {{1, 2, 3, 4}};
 
 std::string test_string = "Это тест.";
+std::string test_nullbyte_string{"\x00тест"sv};
+std::string test_binary_string{"\xff\x00\xff\x00"sv};
 std::string_view test_string_view(test_string);
+std::string_view test_binary_string_view(test_binary_string);
 
 std::unique_ptr<int> test_unique_int(new int(1));
 std::unique_ptr<int> test_unique_empty;
@@ -60,6 +63,8 @@ THashMultiMap<int, int> test_hashmultimap = {{1, 2}, {3, 4}, {1, 4}};
 THashMap<TString, TString> test_tstring_hashmap = {{"Это", "тест"}};
 
 TString test_tstring = "Это тест.";
+TString test_nullbyte_tstring{"\x00тест"sv};
+TString test_binary_tstring{"\xff\x00\xff\x00"sv};
 TUtf16String test_tutf16string = u"Это тест.";
 TUtf32String test_tutf32string = U"Это тест.";  // Untested.
 
