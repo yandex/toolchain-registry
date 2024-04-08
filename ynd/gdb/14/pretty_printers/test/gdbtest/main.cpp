@@ -1,23 +1,25 @@
-#include <vector>
+#include <array>
 #include <bitset>
+#include <deque>
+#include <exception>
 #include <list>
 #include <map>
-#include <set>
-#include <deque>
-#include <array>
-#include <unordered_map>
-#include <unordered_set>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
 #include <util/generic/hash.h>
 #include <util/generic/hash_multi_map.h>
 #include <util/generic/hash_set.h>
 #include <util/generic/string.h>
-#include <util/generic/variant.h>
 #include <util/generic/vector.h>
 #include <util/generic/maybe.h>
+#include <util/system/yassert.h>
 #include <library/cpp/enumbitset/enumbitset.h>
 
 std::tuple<int, int> test_tuple = {1, 2};
@@ -77,6 +79,33 @@ using TVariantType = std::variant<int, TString>;
 TVariantType test_tvariant_default;
 TVariantType test_tvariant_int(10);
 TVariantType test_tvariant_string(test_tstring);
+
+struct TBadMovable {
+    TBadMovable() = default;
+
+    TBadMovable(TBadMovable&&) {
+        throw std::exception{};
+    }
+
+    TBadMovable& operator=(TBadMovable&&) {
+        Y_ABORT("Should not be assigned");
+    }
+};
+
+using TVariantType2 = std::variant<int, TBadMovable>;
+
+TVariantType2 MakeValuelessVariant() {
+    TVariantType2 var;
+    try {
+        var = TBadMovable{};
+    } catch (const std::exception&) {
+        Y_ABORT_UNLESS(var.valueless_by_exception());
+        return var;
+    }
+    Y_ABORT("Move-assignment should throw");
+}
+
+TVariantType2 test_valueless_variant = MakeValuelessVariant();
 
 using TMaybeType = TMaybe<int>;
 

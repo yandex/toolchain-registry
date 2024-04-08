@@ -83,6 +83,7 @@ tests = dict(
     test_tvariant_default='TVariantType = {int = 0}',
     test_tvariant_int='TVariantType = {int = 10}',
     test_tvariant_string='TVariantType = {TString = "Это тест."}',
+    test_valueless_variant='TVariantType2 (valueless by exception)',
     test_maybe='TMaybe = {GetRef() = 465}',
     test_maybe_empty='TMaybe empty',
     test_enumbitset='TEnumBitSet = {A, B}',
@@ -155,6 +156,11 @@ xmethod_tests = dict(
     test_optional_star=('*test_optional_int', re.compile(r' = \(int &\) @0x[0-9a-f]+: 123')),
     test_optional_has_value=('test_optional_int.has_value()', '= true'),
     test_optional_has_value_not=('test_optional_int_empty.has_value()', '= false'),
+    test_variant_value=('test_tvariant_int.value()', re.compile(r' = \(int &\) @0x[0-9a-f]+: 10')),
+    test_variant_star=('*test_tvariant_int', re.compile(r' = \(int &\) @0x[0-9a-f]+: 10')),
+    test_variant_arrow=('test_tvariant_string->length()', re.compile(r' = 16')),
+    test_variant_valueless_by_exception=('test_valueless_variant.valueless_by_exception()', '= true'),
+    test_variant_not_valueless_by_exception=('test_tvariant_int.valueless_by_exception()', '= false'),
     test_atomic_load=('test_atomic_int.load()', '= 12')
 )
 
