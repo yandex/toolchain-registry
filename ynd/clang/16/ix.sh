@@ -10,6 +10,7 @@ lib/llvm/16/tblgen
 {% if linux and x86_64 %}
 LLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;polly"
 {% endif %}
+LLVM_ENABLE_LIBXML2="yes"
 {% endblock %}
 
 {% block llvm_targets %}
@@ -34,6 +35,11 @@ D21113-case-insesitive-include-paths.patch
 D142421.patch
 fix-build.patch
 dwarf-emit-namespaces.patch
+{% endblock %}
+
+{% block bld_libs %}
+lib/xml/2
+{{super()}}
 {% endblock %}
 
 {% block common_patches %}
