@@ -38,6 +38,7 @@
   "ynd/clang/16/patches/clang/clang-format-patches.patch":"toolchains/ynd/clang/16/patches/clang/clang-format-patches.patch",
   "ynd/clang/16/patches/clang/dwarf-emit-namespaces.patch":"toolchains/ynd/clang/16/patches/clang/dwarf-emit-namespaces.patch",
   "ynd/clang/16/patches/clang/fix-build.patch":"toolchains/ynd/clang/16/patches/clang/fix-build.patch",
+  "ynd/clang/16/patches/llvm/spgo-unit32-overflow-fix.patch":"toolchains/ynd/clang/16/patches/llvm/spgo-unit32-overflow-fix.patch",
   "ynd/clang/16/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/16/patches/llvm/vfs-case-insensitive.patch",
   "ynd/gdb/14/ix.sh":"toolchains/ynd/gdb/14/ix.sh",
   "ynd/gdb/14/pretty_printers":"devtools/gdb",

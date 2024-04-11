@@ -1,0 +1,34 @@
+--- a/lib/Transforms/IPO/SampleProfile.cpp
++++ b/lib/Transforms/IPO/SampleProfile.cpp
+@@ -122,6 +122,10 @@ static cl::opt<std::string> SampleProfileFile(
+     "sample-profile-file", cl::init(""), cl::value_desc("filename"),
+     cl::desc("Profile file loaded by -sample-profile"), cl::Hidden);
+
++static cl::opt<bool> DisableSampleFunctionAnnotation(
++    "disable-sample-function-annotation", cl::Hidden, cl::init(false),
++    cl::desc("Disable function calls & invokes anotations"));
++
+ // The named file contains a set of transformations that may have been applied
+ // to the symbol names between the program from which the sample data was
+ // collected and the current program's symbols.
+@@ -1616,7 +1620,7 @@ void SampleProfileLoader::generateMDProfMetadata(Function &F) {
+   for (auto &BI : F) {
+     BasicBlock *BB = &BI;
+
+-    if (BlockWeights[BB]) {
++    if (!DisableSampleFunctionAnnotation && BlockWeights[BB] > 0) {
+       for (auto &I : *BB) {
+         if (!isa<CallInst>(I) && !isa<InvokeInst>(I))
+           continue;
+@@ -1715,9 +1719,9 @@ void SampleProfileLoader::generateMDProfMetadata(Function &F) {
+       // Use uint32_t saturated arithmetic to adjust the incoming weights,
+       // if needed. Sample counts in profiles are 64-bit unsigned values,
+       // but internally branch weights are expressed as 32-bit values.
+-      if (Weight > std::numeric_limits<uint32_t>::max()) {
++      if (Weight >= std::numeric_limits<uint32_t>::max()) {
+         LLVM_DEBUG(dbgs() << " (saturated due to uint32_t overflow)");
+-        Weight = std::numeric_limits<uint32_t>::max();
++        Weight = std::numeric_limits<uint32_t>::max() - 1;
+       }
+       if (!SampleProfileUseProfi) {
+         // Weight is added by one to avoid propagation errors introduced by

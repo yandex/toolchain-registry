@@ -47,6 +47,7 @@ D149723-optimize-renamer-clang-tidy-check.patch
 {% endblock %}
 
 {% block llvm_patches %}
+spgo-unit32-overflow-fix.patch
 vfs-case-insensitive.patch
 {% endblock %}
 
