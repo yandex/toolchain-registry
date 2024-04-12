@@ -45,6 +45,7 @@ std::pair<int, int> test_pair = {1, 2};
 std::array<int, 4> test_array = {{1, 2, 3, 4}};
 
 std::string test_string = "Это тест.";
+std::string test_long_string = "A very long string that will not use small string optimization...";
 std::string test_nullbyte_string{"\x00тест"sv};
 std::string test_binary_string{"\xff\x00\xff\x00"sv};
 std::string_view test_string_view(test_string);
