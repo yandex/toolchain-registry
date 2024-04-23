@@ -10,7 +10,7 @@ lib/llvm/16/tblgen
 {% if linux and x86_64 %}
 LLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;polly"
 {% endif %}
-LLVM_ENABLE_LIBXML2="FORCE_ON"
+LLVM_ENABLE_LIBXML2="yes"
 {% endblock %}
 
 {% block llvm_targets %}
