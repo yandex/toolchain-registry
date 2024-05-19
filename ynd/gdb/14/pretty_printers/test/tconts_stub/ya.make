@@ -1,6 +1,6 @@
 PROGRAM(tconts_stub)
 
-OWNER(orivej halyavin g:yatool)
+SUBSCRIBER(orivej halyavin g:yatool)
 
 CXXFLAGS(
     -g

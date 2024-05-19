@@ -1,4 +1,4 @@
-OWNER(
+SUBSCRIBER(
     g:yatool
     halyavin
 )

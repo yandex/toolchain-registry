@@ -1,6 +1,6 @@
 PROGRAM(gdbtest)
 
-OWNER(orivej halyavin g:yatool)
+SUBSCRIBER(orivej halyavin g:yatool)
 
 CFLAGS(
     -g
