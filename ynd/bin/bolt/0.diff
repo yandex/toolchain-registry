@@ -1,0 +1,31 @@
+diff --git a/bolt/lib/RuntimeLibs/RuntimeLibrary.cpp b/bolt/lib/RuntimeLibs/RuntimeLibrary.cpp
+index 09c488378..edf8184a9 100644
+--- a/bolt/lib/RuntimeLibs/RuntimeLibrary.cpp
++++ b/bolt/lib/RuntimeLibs/RuntimeLibrary.cpp
+@@ -17,6 +17,7 @@
+ #include "llvm/BinaryFormat/Magic.h"
+ #include "llvm/Object/Archive.h"
+ #include "llvm/Object/ObjectFile.h"
++#include "llvm/Support/CommandLine.h"
+ #include "llvm/Support/Path.h"
+ 
+ #define DEBUG_TYPE "bolt-rtlib"
+@@ -26,8 +27,18 @@ using namespace bolt;
+ 
+ void RuntimeLibrary::anchor() {}
+ 
++cl::opt<std::string> RuntimeInstrumentationLibDir(
++    "runtime-instrumentation-lib-dir",
++    cl::desc("specify dir with bolt-rt libs used for instrumentaion"),
++    cl::init(""));
++
+ std::string RuntimeLibrary::getLibPath(StringRef ToolPath,
+                                        StringRef LibFileName) {
++  if (!RuntimeInstrumentationLibDir.empty()) {
++    SmallString<128> LibPath{RuntimeInstrumentationLibDir};
++    llvm::sys::path::append(LibPath, LibFileName);
++    return std::string(LibPath.str());
++  }
+   StringRef Dir = llvm::sys::path::parent_path(ToolPath);
+   SmallString<128> LibPath = llvm::sys::path::parent_path(Dir);
+   llvm::sys::path::append(LibPath, "lib" LLVM_LIBDIR_SUFFIX);
