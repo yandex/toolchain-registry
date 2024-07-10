@@ -30,6 +30,7 @@
   "ix":"toolchains/ix",
   "ynd/bin/bolt/0.diff":"toolchains/ynd/bin/bolt/0.diff",
   "ynd/bin/bolt/ix.sh":"toolchains/ynd/bin/bolt/ix.sh",
+  "ynd/bin/gdb/reloc/ix.sh":"toolchains/ynd/bin/gdb/reloc/ix.sh",
   "ynd/bin/lld/16/optimized/ix.sh":"toolchains/ynd/bin/lld/16/optimized/ix.sh",
   "ynd/bin/lld/16/pgo/ext-profile/ix.sh":"toolchains/ynd/bin/lld/16/pgo/ext-profile/ix.sh",
   "ynd/bin/lld/16/pgo/instrumented/ix.sh":"toolchains/ynd/bin/lld/16/pgo/instrumented/ix.sh",
