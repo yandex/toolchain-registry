@@ -8,6 +8,6 @@ bin/lld/16/pgo/train
 {% block cmake_flags %}
 {{super()}}
 LLVM_ENABLE_LTO=Thin
-LLVM_PROFDATA_FILE=$MERGED_PROFILE
+LLVM_PROFDATA_FILE=$LLD_MERGED_PROFILE
 {% endblock %}
 
