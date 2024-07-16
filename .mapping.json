@@ -87,6 +87,7 @@
   "ynd/gdb/14/pretty_printers/ya.make":"devtools/gdb/ya.make",
   "ynd/gdb/14/pretty_printers/yabs_printers.py":"devtools/gdb/yabs_printers.py",
   "ynd/gdb/14/pretty_printers/yt_fibers_printer.py":"devtools/gdb/yt_fibers_printer.py",
+  "ynd/go/ix.sh":"toolchains/ynd/go/ix.sh",
   "ynd/lib/bolt/ix.sh":"toolchains/ynd/lib/bolt/ix.sh",
   "ynd/lib/compiler_rt/profile/18/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/18/ix.sh",
   "ynd/lib/compiler_rt/profile/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/ix.sh"
