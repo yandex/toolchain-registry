@@ -1,6 +1,6 @@
 PY2TEST()
 
-SUBSCRIBER(orivej halyavin g:yatool)
+SUBSCRIBER(halyavin g:yatool)
 
 DATA(
     arcadia/devtools/gdb

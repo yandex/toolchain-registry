@@ -1,6 +1,6 @@
 PROGRAM(gdbtest)
 
-SUBSCRIBER(orivej halyavin g:yatool)
+SUBSCRIBER(halyavin g:yatool)
 
 CFLAGS(
     -g
