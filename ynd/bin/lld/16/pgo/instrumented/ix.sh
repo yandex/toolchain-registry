@@ -18,10 +18,11 @@ lld
 {% endblock %}
 
 {% block env %}
+{{super()}}
 ## By default lld does not call destructors. For details see
 ## https://github.com/llvm/llvm-project/issues/52861#issuecomment-1724038537
 export LLD_IN_TEST=1
 export LLD_PROFILES_DIR={{ninja_build_dir}}/csprofiles
-{{super()}}
+export INSTR_LLD_PATH="${out}/bin/ld.lld"
 {% endblock %}
 
