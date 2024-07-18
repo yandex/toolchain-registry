@@ -43,6 +43,6 @@ rm -r "test/fixedbugs/issue27836.dir"
 {% endblock %}
 
 {% block install %}
-mv ${tmp}/go ${out}
+mv ${tmp}/go/* ${out}
 {% endblock %}
 
