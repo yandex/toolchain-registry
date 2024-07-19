@@ -1,7 +1,10 @@
 {% extends '//clang/16/ix.sh' %}
 
+{% block c_compiler %}
+bld/compiler(clang_ver=16)
+{% endblock %}
+
 {% block bld_tool %}
-bin/lld/16/clang
 bin/lld/16/pgo/instrumented
 {% endblock %}
 
@@ -10,21 +13,22 @@ bin/lld/16/pgo/instrumented
 LLVM_ENABLE_LTO=Thin
 {% endblock %}
 
-{% block configure %}
-export LDFLAGS="--ld-path=${INSTR_LLD_PATH} ${LDFLAGS}"
+{% block setup_tools %}
+cat << EOF > wrapped_lld
+#!/usr/bin/env sh
+export LLVM_PROFILE_FILE=${out}/profiles/default%m.profraw
+exec ${INSTR_LLD_PATH} "\${@}"
+EOF
+chmod +x wrapped_lld
 {{super()}}
 {% endblock %}
 
-{% block build %}
-rm -rf ${LLD_PROFILES_DIR}/*
+{% block setup_target_flags %}
 {{super()}}
+export LDFLAGS="--ld-path=${tmp}/bin/ut/wrapped_lld ${LDFLAGS}"
 {% endblock %}
 
 {% block postinstall %}
-echo "Copy profiles"
-mkdir ${out}/profiles
-mv ${LLD_PROFILES_DIR}/*.profraw ${out}/profiles
-rm -rf ${LLD_PROFILES_DIR}
 rm -rf ${out}/bin ${out}/lib ${out}/share ${out}/include
 {% endblock %}
 
