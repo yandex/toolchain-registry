@@ -1,8 +1,8 @@
 {% extends '//die/proxy.sh' %}
 
 {% block bld_tool %}
-bin/lld/16/pgo/train/pgo
-bin/lld/16/pgo/train/simple
+bin/lld/16/pgo/train/pgo(clang_ver=16)
+bin/lld/16/pgo/train/simple(clang_ver=16)
 bin/llvm-profdata
 {% endblock %}
 

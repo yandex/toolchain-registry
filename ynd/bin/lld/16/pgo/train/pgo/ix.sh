@@ -1,9 +1,5 @@
 {% extends '//clang/16/ix.sh' %}
 
-{% block c_compiler %}
-bld/compiler(clang_ver=16)
-{% endblock %}
-
 {% block bld_tool %}
 bin/lld/16/pgo/instrumented
 {% endblock %}
