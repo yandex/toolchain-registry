@@ -14,7 +14,7 @@ bin/perf
 {% block setup_tools %}
 cat << EOF > perf_lld
 #!/usr/bin/env sh
-perf record --output ${tmp}/perf_data/lld_perf --timestamp-filename --event cycles:u --branch-filter any,u -- ${LLD_EXT_PROFILE_PATH} "\${@}"
+perf record --output ${tmp}/perf_data/lld_perf_\$(date +%s%N) --event cycles:u --branch-filter any,u -- ${LLD_EXT_PROFILE_PATH} "\${@}"
 EOF
 chmod +x perf_lld
 mkdir ${tmp}/perf_data
@@ -24,6 +24,11 @@ mkdir ${tmp}/perf_data
 {% block setup_target_flags %}
 {{super()}}
 export LDFLAGS="--ld-path=${tmp}/bin/ut/perf_lld ${LDFLAGS}"
+{% endblock %}
+
+{% block cmake_flags %}
+{{super()}}
+LLVM_PARALLEL_LINK_JOBS=1
 {% endblock %}
 
 {% block postinstall %}
@@ -37,7 +42,6 @@ find . -name "lld_perf*" | while read data; do
     perf2bolt -p ${data} -o ../bolt_data/${data}.fdata ${LLD_ABS_PATH}
 done
 cd ${tmp}/bolt_data
-merge-fdata *.fdata > combined.fdata
-llvm-bolt -data=${tmp}/bolt_data/combined.data -o ${out}/bolt.prof -aggregate-only ${LLD_ABS_PATH}
+merge-fdata *.fdata > ${out}/bolt.prof
 rm -rf ${out}/bin ${out}/lib ${out}/share ${out}/include
 {% endblock %}
