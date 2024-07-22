@@ -29,6 +29,7 @@ export LDFLAGS="--ld-path=${tmp}/bin/ut/perf_lld ${LDFLAGS}"
 {% block cmake_flags %}
 {{super()}}
 LLVM_PARALLEL_LINK_JOBS=1
+LLVM_ENABLE_LTO=Thin
 {% endblock %}
 
 {% block postinstall %}
