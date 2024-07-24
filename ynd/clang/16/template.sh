@@ -30,11 +30,9 @@ sancov
 cindex.patch
 clang-format-patches.patch
 asan_static.patch
-D92001.patch
 D21113-case-insesitive-include-paths.patch
+{# https://github.com/llvm/llvm-project/commit/57690a8ece9e5d3b749c66a226a4c79f3d7588aa can be removed in clang18 #}
 D142421.patch
-fix-build.patch
-dwarf-emit-namespaces.patch
 {% endblock %}
 
 {% block bld_libs %}
