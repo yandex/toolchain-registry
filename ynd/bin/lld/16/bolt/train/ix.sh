@@ -14,7 +14,7 @@ bin/perf
 {% block setup_tools %}
 cat << EOF > perf_lld
 #!/usr/bin/env sh
-perf record --output ${tmp}/perf_data/lld_perf_\$(date +%s%N) --event cycles:u --branch-filter any,u -- ${LLD_EXT_PROFILE_PATH} "\${@}"
+perf record --count 100000 --output ${tmp}/perf_data/lld_perf_\$(date +%s%N) --event cycles:u --branch-filter any,u -- ${LLD_EXT_PROFILE_PATH} "\${@}"
 EOF
 chmod +x perf_lld
 mkdir ${tmp}/perf_data
