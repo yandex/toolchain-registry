@@ -4,6 +4,12 @@
 bin/lld/16/profiles/pgo
 {% endblock %}
 
+{% block patch %}
+base64 -d << EOF | patch -p1
+{% include 'emit-compact-unwind-only-for-canonical.diff/base64' %}
+EOF
+{% endblock %}
+
 {% block cmake_flags %}
 {{super()}}
 LLVM_ENABLE_LTO=Thin
