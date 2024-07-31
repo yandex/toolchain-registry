@@ -33,7 +33,6 @@
   "ynd/bin/gdb/reloc/ix.sh":"toolchains/ynd/bin/gdb/reloc/ix.sh",
   "ynd/bin/lld/16/bolt/ext-profile/ix.sh":"toolchains/ynd/bin/lld/16/bolt/ext-profile/ix.sh",
   "ynd/bin/lld/16/bolt/train/ix.sh":"toolchains/ynd/bin/lld/16/bolt/train/ix.sh",
-  "ynd/bin/lld/16/clang/ix.sh":"toolchains/ynd/bin/lld/16/clang/ix.sh",
   "ynd/bin/lld/16/optimized/ix.sh":"toolchains/ynd/bin/lld/16/optimized/ix.sh",
   "ynd/bin/lld/16/pgo/ext-profile/emit-compact-unwind-only-for-canonical.diff":"toolchains/ynd/bin/lld/16/pgo/ext-profile/emit-compact-unwind-only-for-canonical.diff",
   "ynd/bin/lld/16/pgo/ext-profile/ix.sh":"toolchains/ynd/bin/lld/16/pgo/ext-profile/ix.sh",
