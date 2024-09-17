@@ -31,6 +31,43 @@ lib/xml/2
 {{super()}}
 {% endblock %}
 
+
+{% block clang_patches %}
+clang-format-patches.patch
+asan_static.patch
+{# D21113-case-insesitive-include-paths.patch #}
+{% endblock %}
+
+{% block common_patches %}
+{% endblock %}
+
+{% block llvm_patches %}
+spgo-unit32-overflow-fix.patch
+vfs-case-insensitive.patch
+{% endblock %}
+
+{% block patch %}
+{{super()}}
+{% for p in self.common_patches().strip().split() %}
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//clang/18/patches/clang/' + p) | b64e}}
+EOF
+{% endfor %}
+cd llvm
+{% for p in self.llvm_patches().strip().split() %}
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//clang/18/patches/llvm/' + p) | b64e}}
+EOF
+{% endfor %}
+cd ..
+cd clang
+{% for p in self.clang_patches().strip().split() %}
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//clang/18/patches/clang/' + p) | b64e}}
+EOF
+{% endfor %}
+{% endblock %}
+
 {% block postinstall %}
 cd ${out}/bin
 {% if linux and x86_64 %}
