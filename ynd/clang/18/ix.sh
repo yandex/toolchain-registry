@@ -35,7 +35,7 @@ lib/xml/2
 {% block clang_patches %}
 clang-format-patches.patch
 asan_static.patch
-{# D21113-case-insesitive-include-paths.patch #}
+D21113-case-insesitive-include-paths.patch
 {% endblock %}
 
 {% block common_patches %}
