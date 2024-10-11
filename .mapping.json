@@ -32,6 +32,7 @@
   "ynd/bin/bolt/ix.sh":"toolchains/ynd/bin/bolt/ix.sh",
   "ynd/bin/frozen-python3/ix.sh":"toolchains/ynd/bin/frozen-python3/ix.sh",
   "ynd/bin/frozen-python3/unwrap/ix.sh":"toolchains/ynd/bin/frozen-python3/unwrap/ix.sh",
+  "ynd/bin/frozen-python3/unwrap/py.py":"toolchains/ynd/bin/frozen-python3/unwrap/py.py",
   "ynd/bin/gdb/reloc/ix.sh":"toolchains/ynd/bin/gdb/reloc/ix.sh",
   "ynd/bin/lld/16/bolt/ext-profile/ix.sh":"toolchains/ynd/bin/lld/16/bolt/ext-profile/ix.sh",
   "ynd/bin/lld/16/bolt/train/ix.sh":"toolchains/ynd/bin/lld/16/bolt/train/ix.sh",
