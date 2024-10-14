@@ -57,7 +57,11 @@ def run_code(s):
     exec(s, globals(), globals())
 
 def update_env(filepath):
-    sys.path.append(os.path.dirname(filepath))
+    dirname = os.path.dirname(filepath)
+    sys.path.append(dirname)
+    value = os.environ.get('PYTHONPATH') or ''
+    value = f'{dirname}:{value}'
+    os.environ.update({'PYTHONPATH': value})
 
 def main(args):
     if args.command:
