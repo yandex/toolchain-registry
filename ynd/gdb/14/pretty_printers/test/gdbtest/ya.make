@@ -12,6 +12,7 @@ SRCS(
 
 PEERDIR(
     library/cpp/enumbitset
+    taxi/uservices/userver/universal
 )
 
 END()

@@ -21,6 +21,7 @@
 #include <util/generic/maybe.h>
 #include <util/system/yassert.h>
 #include <library/cpp/enumbitset/enumbitset.h>
+#include <userver/formats/json/value.hpp>
 
 std::tuple<int, int> test_tuple = {1, 2};
 std::tuple<> test_empty_tuple;
@@ -143,6 +144,10 @@ std::atomic<std::array<int64_t, 3>> test_atomic_array(std::array<int64_t, 3>{1, 
 
 std::list<int> test_list_empty;
 std::list<int> test_list{1, 2, 3};
+
+formats::json::Value test_json = formats::json::FromString(
+    R"({"a":[1,{}],"b":[true,false],"c":{"internal":{"subkey":2}},"i":-1,"u":1,"i64":-18446744073709551614,"u64":18446744073709551614,"d":0.4})");
+formats::json::Value test_json_empty;
 
 // Variable which can't be statically initialized due to undetermined order
 // of static initialization in C++.
