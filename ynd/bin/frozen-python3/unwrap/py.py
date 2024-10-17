@@ -56,21 +56,12 @@ def parse_args(argv):
 def run_code(s):
     exec(s, globals(), globals())
 
-def update_env(filepath):
-    dirname = os.path.dirname(filepath)
-    sys.path.append(dirname)
-    value = os.environ.get('PYTHONPATH') or ''
-    value = f'{dirname}:{value}'
-    os.environ.update({'PYTHONPATH': value})
-
 def main(args):
     if args.command:
         run_code(args.command)
     elif args.module:
-        update_env(args.module)
         runpy.run_module(args.module, run_name='__main__')
     elif args.file:
-        update_env(args.file)
         runpy.run_path(args.file, run_name='__main__')
     else:
         if sys.stdin.isatty():

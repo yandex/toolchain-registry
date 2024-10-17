@@ -23,6 +23,7 @@ wget {{self.src_url().strip()}} -O src.zip
 set -xue
 unzip src.zip -d bin/ && rm src.zip
 cd bin && unzip python312.zip && rm python312.zip
+mv python.exe python3
 {% endblock %}
 
 {% block install %}
