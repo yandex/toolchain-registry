@@ -1,3 +1,4 @@
 {
-  "project":"toolchain-registry"
+  "project":"toolchain-registry",
+  "repository":"arcadia"
 }
