@@ -27,3 +27,11 @@ cat << EOF > python3
 EOF
 {% endblock %}
 
+{% block install %}
+{{super()}}
+mkdir -p ${out}/fix
+cat << EOF > ${out}/fix/remove_share.sh
+rm -rf share
+EOF
+{% endblock %}
+

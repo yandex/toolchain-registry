@@ -28,6 +28,11 @@ mv python.exe python3
 
 {% block install %}
 mv ${tmp}/* ${out}
+
+mkdir -p ${out}/fix
+cat << EOF > ${out}/fix/remove_tmp.sh
+rm -rf tmp
+EOF
 {% endblock %}
 
 {% block strip_bin %}:{% endblock %}
