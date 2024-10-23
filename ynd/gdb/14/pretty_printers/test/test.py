@@ -105,9 +105,9 @@ tests = dict(
     test_atomic_array='std::atomic = {load() = {__elems_ = {1, 2, 3}}}',
     test_list_empty='empty std::__y1::list',
     test_list='std::__y1::list = {[0] = 1, [1] = 2, [2] = 3}',
-    # test_json=r'formats::json::Value = {value = object of size 8 = {["a"] = array of size 2 = {1, object of size 0}, '
-    #           r'["b"] = array of size 2 = {true, false}, ["c"] = object of size 1 = {["internal"] = object of size 1 = '
-    #           r'{["subkey"] = 2}}, ["i"] = -1, ["u"] = 1, ["i64"] = -1.8446744073709552e+19, ["u64"] = 18446744073709551614, ["d"] = 0.40000000000000002}}',
+    # test_json=r'formats::json::Value = {value = {["a"] = {1, {}, []}, ["b"] = {true, false},'
+    #           r' ["c"] = {["internal"] = {["subkey"] = 2}}, ["i"] = -1, ["u"] = 1, ["i64"] ='
+    #           r' -1.8446744073709552e+19, ["u64"] = 18446744073709551614, ["d"] = 0.40000000000000002}}',
     # test_json_empty=r'formats::json::Value = {value = null}',
 )
 
