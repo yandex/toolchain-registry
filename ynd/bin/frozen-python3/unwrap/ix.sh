@@ -13,12 +13,17 @@ export _PYTHON_SYSCONFIGDATA_NAME='_sysconfigdata__darwin_'
 {% elif mingw32 %}
 export _PYTHON_SYSCONFIGDATA_NAME='_sysconfigdata__win32_'
 {% endif %}
-{{super()}}
-{% endblock %}
 
-{% block extra_modules %}
-sre_parse
-sre_constants
+# Collect all modules
+export PYTHONPLATLIBDIR=${TARGET_PYTHONHOME}/lib/python3.12
+cur=$(pwd)
+cd $PYTHONPLATLIBDIR
+find . -type f -name '*.py' | cut -b3- | sed -E 's|\.py$||g' | sed -E 's|/|\.|g' | grep -v '\-' >> $cur/ext_modules
+cd $cur
+cat modules >> ext_modules
+cat ext_modules | sort | uniq > modules
+
+{{super()}}
 {% endblock %}
 
 {% block step_unpack %}
