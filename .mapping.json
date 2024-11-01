@@ -101,5 +101,7 @@
   "ynd/grpc/java/ix.sh":"toolchains/ynd/grpc/java/ix.sh",
   "ynd/lib/bolt/ix.sh":"toolchains/ynd/lib/bolt/ix.sh",
   "ynd/lib/compiler_rt/profile/18/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/18/ix.sh",
-  "ynd/lib/compiler_rt/profile/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/ix.sh"
+  "ynd/lib/compiler_rt/profile/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/ix.sh",
+  "ynd/lib/xml2/0.diff":"toolchains/ynd/lib/xml2/0.diff",
+  "ynd/lib/xml2/ix.sh":"toolchains/ynd/lib/xml2/ix.sh"
 }

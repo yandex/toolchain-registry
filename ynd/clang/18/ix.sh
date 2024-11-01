@@ -27,7 +27,7 @@ sancov
 {% endblock %}
 
 {% block bld_libs %}
-lib/xml/2
+ynd/lib/xml2
 {{super()}}
 {% endblock %}
 

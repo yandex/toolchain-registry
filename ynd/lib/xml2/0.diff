@@ -1,0 +1,20 @@
+--- a/dict.c
++++ b/dict.c
+@@ -924,7 +924,7 @@
+  * Pseudo-random generator
+  */
+
+-#ifdef _WIN32
++#ifdef _WIN32_FAKE
+   #define WIN32_LEAN_AND_MEAN
+   #include <windows.h>
+   #include <bcrypt.h>
+@@ -954,7 +954,7 @@
+     xmlInitMutex(&xmlRngMutex);
+
+     {
+-#ifdef _WIN32
++#ifdef _WIN32_FAKE
+         NTSTATUS status;
+
+         status = BCryptGenRandom(NULL, (unsigned char *) globalRngState,
