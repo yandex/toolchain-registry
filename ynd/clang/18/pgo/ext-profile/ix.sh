@@ -1,7 +1,7 @@
 {% extends '//clang/18/template.sh' %}
 
 {% block bld_data %}
-clang/18/profiles/pgo
+clang/18/profiles
 {% endblock %}
 
 {% block cmake_flags %}
