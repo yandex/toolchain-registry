@@ -1,0 +1,11 @@
+--- a/lld/ELF/SymbolTable.cpp
++++ b/lld/ELF/SymbolTable.cpp
+@@ -278,7 +278,7 @@
+                                    pat.isExternCpp, /*hasWildCard=*/false},
+                                   id, ver, /*includeNonDefault=*/true);
+       if (!found && !config->undefinedVersion)
+-        errorOrWarn("version script assignment of '" + ver + "' to symbol '" +
++        warn("version script assignment of '" + ver + "' to symbol '" +
+                     pat.name + "' failed: symbol not defined");
+     };
+     for (SymbolVersion &pat : v.nonLocalPatterns)

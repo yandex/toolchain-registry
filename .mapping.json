@@ -49,6 +49,7 @@
   "ynd/bin/lld/16/profiles/bolt/ix.sh":"toolchains/ynd/bin/lld/16/profiles/bolt/ix.sh",
   "ynd/bin/lld/16/profiles/pgo/ix.sh":"toolchains/ynd/bin/lld/16/profiles/pgo/ix.sh",
   "ynd/bin/lld/18/ix.sh":"toolchains/ynd/bin/lld/18/ix.sh",
+  "ynd/bin/lld/18/llvm-issue-61208.diff":"toolchains/ynd/bin/lld/18/llvm-issue-61208.diff",
   "ynd/bin/llvm-profdata/19/ix.sh":"toolchains/ynd/bin/llvm-profdata/19/ix.sh",
   "ynd/bin/llvm-profdata/ix.sh":"toolchains/ynd/bin/llvm-profdata/ix.sh",
   "ynd/clang/16/bolted/ext-profile/ix.sh":"toolchains/ynd/clang/16/bolted/ext-profile/ix.sh",

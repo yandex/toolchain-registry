@@ -21,6 +21,12 @@ bin/muslstack
 lld
 {% endblock %}
 
+{% block patch %}
+base64 -d << EOF | patch -p1
+{% include 'llvm-issue-61208.diff/base64' %}
+EOF
+{% endblock %}
+
 {% block configure %}
 export PYTHON3=$(command -v python3)
 echo ${PYTHON3}
