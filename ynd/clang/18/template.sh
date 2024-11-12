@@ -44,6 +44,7 @@ D21113-case-insesitive-include-paths.patch
 {% block llvm_patches %}
 spgo-unit32-overflow-fix.patch
 vfs-case-insensitive.patch
+dont-remove-dbg-info.patch
 {% endblock %}
 
 {% block patch %}

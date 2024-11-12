@@ -79,6 +79,7 @@
   "ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch":"toolchains/ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch",
   "ynd/clang/18/patches/clang/asan_static.patch":"toolchains/ynd/clang/18/patches/clang/asan_static.patch",
   "ynd/clang/18/patches/clang/clang-format-patches.patch":"toolchains/ynd/clang/18/patches/clang/clang-format-patches.patch",
+  "ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch",
   "ynd/clang/18/patches/llvm/spgo-unit32-overflow-fix.patch":"toolchains/ynd/clang/18/patches/llvm/spgo-unit32-overflow-fix.patch",
   "ynd/clang/18/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/18/patches/llvm/vfs-case-insensitive.patch",
   "ynd/clang/18/pgo/ext-profile/ix.sh":"toolchains/ynd/clang/18/pgo/ext-profile/ix.sh",
