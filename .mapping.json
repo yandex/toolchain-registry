@@ -80,6 +80,7 @@
   "ynd/clang/18/ix.sh":"toolchains/ynd/clang/18/ix.sh",
   "ynd/clang/18/optimized/ix.sh":"toolchains/ynd/clang/18/optimized/ix.sh",
   "ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch":"toolchains/ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch",
+  "ynd/clang/18/patches/clang/Wmissing-designated-field-initializers.patch":"toolchains/ynd/clang/18/patches/clang/Wmissing-designated-field-initializers.patch",
   "ynd/clang/18/patches/clang/asan_static.patch":"toolchains/ynd/clang/18/patches/clang/asan_static.patch",
   "ynd/clang/18/patches/clang/clang-format-patches.patch":"toolchains/ynd/clang/18/patches/clang/clang-format-patches.patch",
   "ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch",
