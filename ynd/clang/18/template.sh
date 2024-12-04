@@ -36,6 +36,7 @@ ynd/lib/xml2
 clang-format-patches.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
+Wmissing-designated-field-initializers.patch
 {% endblock %}
 
 {% block common_patches %}
