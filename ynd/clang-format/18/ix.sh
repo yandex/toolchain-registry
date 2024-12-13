@@ -18,6 +18,7 @@ clang-format
 clang-format-patches.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
+clang-format-issue-99758.patch
 {% endblock %}
 
 {% block common_patches %}
