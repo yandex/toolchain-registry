@@ -1,0 +1,12 @@
+--- a/lib/CodeGen/CGDebugInfo.cpp
++++ b/lib/CodeGen/CGDebugInfo.cpp
+@@ -255,7 +255,8 @@ PrintingPolicy CGDebugInfo::getPrintingPolicy() const {
+ }
+
+ StringRef CGDebugInfo::getFunctionName(const FunctionDecl *FD) {
+-  return internString(GetName(FD));
++  bool forceUseQualifiedName = DebugKind == llvm::codegenoptions::DebugLineTablesOnly && CGM.getCodeGenOpts().DwarfVersion;
++  return internString(GetName(FD, forceUseQualifiedName));
+ }
+
+ StringRef CGDebugInfo::getObjCMethodName(const ObjCMethodDecl *OMD) {

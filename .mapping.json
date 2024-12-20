@@ -84,6 +84,7 @@
   "ynd/clang/18/patches/clang/asan_static.patch":"toolchains/ynd/clang/18/patches/clang/asan_static.patch",
   "ynd/clang/18/patches/clang/clang-format-issue-99758.patch":"toolchains/ynd/clang/18/patches/clang/clang-format-issue-99758.patch",
   "ynd/clang/18/patches/clang/clang-format-patches.patch":"toolchains/ynd/clang/18/patches/clang/clang-format-patches.patch",
+  "ynd/clang/18/patches/clang/dwarf-emit-namespaces.patch":"toolchains/ynd/clang/18/patches/clang/dwarf-emit-namespaces.patch",
   "ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/18/patches/llvm/dont-remove-dbg-info.patch",
   "ynd/clang/18/patches/llvm/spgo-unit32-overflow-fix.patch":"toolchains/ynd/clang/18/patches/llvm/spgo-unit32-overflow-fix.patch",
   "ynd/clang/18/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/18/patches/llvm/vfs-case-insensitive.patch",
