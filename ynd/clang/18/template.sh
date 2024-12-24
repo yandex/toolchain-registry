@@ -37,7 +37,6 @@ clang-format-patches.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
 Wmissing-designated-field-initializers.patch
-dwarf-emit-namespaces.patch
 {% endblock %}
 
 {% block common_patches %}
