@@ -25,6 +25,9 @@ lld
 base64 -d << EOF | patch -p1
 {% include 'llvm-issue-61208.diff/base64' %}
 EOF
+base64 -d << EOF | patch -p1
+{% include 'macho-relocation.patch/base64' %}
+EOF
 {% endblock %}
 
 {% block configure %}

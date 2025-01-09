@@ -1,0 +1,227 @@
+From 58f3c5e696021d9e571f868ed3bb4b27b3722df4 Mon Sep 17 00:00:00 2001
+From: Leonard Grey <lgrey@chromium.org>
+Date: Tue, 23 Jul 2024 11:02:55 -0400
+Subject: [PATCH] [lld-macho] Fix thunks for non-__text TEXT sections (#99052)
+
+This supersedes https://github.com/llvm/llvm-project/pull/87818 and
+fixes https://github.com/llvm/llvm-project/issues/52767
+
+When calculating arm64 thunks, we make a few assumptions that may not
+hold when considering code sections outside of `__text`:
+
+1. That a section needs thunks only if its size is larger than the
+branch range.
+2. That any calls into `__stubs` are necessarily forward jumps (that is,
+the section with the jump is ordered before `__stubs`)
+
+Sections like this exist in the wild, most prominently the
+`__lcxx_overrides` section introduced in
+https://github.com/llvm/llvm-project/pull/69498
+
+This change:
+- Ensures that if one section in `__TEXT` gets thunks, all of them do.
+- Makes all code sections in `__TEXT` contiguous (and guaranteed to be
+placed before `__stubs`)
+---
+ lld/MachO/CMakeLists.txt                   |  1 +
+ lld/MachO/ConcatOutputSection.cpp          | 14 +++++++--
+ lld/MachO/InputSection.cpp                 | 17 ++--------
+ lld/MachO/OutputSegment.cpp                | 16 ++++++++--
+ lld/MachO/OutputSegment.h                  |  1 +
+ lld/MachO/Sections.cpp                     | 36 ++++++++++++++++++++++
+ lld/MachO/Sections.h                       | 19 ++++++++++++
+ lld/test/MachO/arm64-thunks.s              | 21 ++++++++++++-
+ lld/test/MachO/section-order.s             |  8 +++--
+ llvm/utils/gn/secondary/lld/MachO/BUILD.gn |  1 +
+ 10 files changed, 112 insertions(+), 22 deletions(-)
+ create mode 100644 lld/MachO/Sections.cpp
+ create mode 100644 lld/MachO/Sections.h
+
+diff --git a/lld/MachO/CMakeLists.txt b/lld/MachO/CMakeLists.txt
+index 0b92488b00beac..3c8effddbbc9e1 100644
+--- a/lld/MachO/CMakeLists.txt
++++ b/lld/MachO/CMakeLists.txt
+@@ -26,6 +26,7 @@ add_lld_library(lldMachO
+   OutputSegment.cpp
+   Relocations.cpp
+   SectionPriorities.cpp
++  Sections.cpp
+   SymbolTable.cpp
+   Symbols.cpp
+   SyntheticSections.cpp
+diff --git a/lld/MachO/ConcatOutputSection.cpp b/lld/MachO/ConcatOutputSection.cpp
+index 279423720be9d5..e89cafe0d1e6da 100644
+--- a/lld/MachO/ConcatOutputSection.cpp
++++ b/lld/MachO/ConcatOutputSection.cpp
+@@ -127,10 +127,20 @@ bool TextOutputSection::needsThunks() const {
+   uint64_t isecAddr = addr;
+   for (ConcatInputSection *isec : inputs)
+     isecAddr = alignToPowerOf2(isecAddr, isec->align) + isec->getSize();
+-  if (isecAddr - addr + in.stubs->getSize() <=
+-      std::min(target->backwardBranchRange, target->forwardBranchRange))
++  // Other sections besides __text might be small enough to pass this
++  // test but nevertheless need thunks for calling into other sections.
++  // An imperfect heuristic to use in this case is that if a section
++  // we've already processed in this segment needs thunks, so do the
++  // rest.
++  bool needsThunks = parent && parent->needsThunks;
++  if (!needsThunks &&
++      isecAddr - addr + in.stubs->getSize() <=
++          std::min(target->backwardBranchRange, target->forwardBranchRange))
+     return false;
+   // Yes, this program is large enough to need thunks.
++  if (parent) {
++    parent->needsThunks = true;
++  }
+   for (ConcatInputSection *isec : inputs) {
+     for (Reloc &r : isec->relocs) {
+       if (!target->hasAttr(r.type, RelocAttrBits::BRANCH))
+diff --git a/lld/MachO/InputSection.cpp b/lld/MachO/InputSection.cpp
+index 904701731684b3..a9b93e07a60133 100644
+--- a/lld/MachO/InputSection.cpp
++++ b/lld/MachO/InputSection.cpp
+@@ -11,6 +11,7 @@
+ #include "Config.h"
+ #include "InputFiles.h"
+ #include "OutputSegment.h"
++#include "Sections.h"
+ #include "Symbols.h"
+ #include "SyntheticSections.h"
+ #include "Target.h"
+@@ -366,20 +367,8 @@ uint64_t WordLiteralInputSection::getOffset(uint64_t off) const {
+ }
+ 
+ bool macho::isCodeSection(const InputSection *isec) {
+-  uint32_t type = sectionType(isec->getFlags());
+-  if (type != S_REGULAR && type != S_COALESCED)
+-    return false;
+-
+-  uint32_t attr = isec->getFlags() & SECTION_ATTRIBUTES_USR;
+-  if (attr == S_ATTR_PURE_INSTRUCTIONS)
+-    return true;
+-
+-  if (isec->getSegName() == segment_names::text)
+-    return StringSwitch<bool>(isec->getName())
+-        .Cases(section_names::textCoalNt, section_names::staticInit, true)
+-        .Default(false);
+-
+-  return false;
++  return sections::isCodeSection(isec->getName(), isec->getSegName(),
++                                 isec->getFlags());
+ }
+ 
+ bool macho::isCfStringSection(const InputSection *isec) {
+diff --git a/lld/MachO/OutputSegment.cpp b/lld/MachO/OutputSegment.cpp
+index a887bc4d515dec..3d8a8eb61a9bba 100644
+--- a/lld/MachO/OutputSegment.cpp
++++ b/lld/MachO/OutputSegment.cpp
+@@ -9,6 +9,7 @@
+ #include "OutputSegment.h"
+ #include "ConcatOutputSection.h"
+ #include "InputSection.h"
++#include "Sections.h"
+ #include "Symbols.h"
+ #include "SyntheticSections.h"
+ 
+@@ -89,9 +90,20 @@ static int sectionOrder(OutputSection *osec) {
+   StringRef segname = osec->parent->name;
+   // Sections are uniquely identified by their segment + section name.
+   if (segname == segment_names::text) {
++    if (osec->name == section_names::header)
++      return -7;
++    // `__text` needs to precede the other code sections since its
++    // expected to be the largest. This means in effect that it will
++    // be the section that determines whether we need thunks or not.
++    if (osec->name == section_names::text)
++      return -6;
++    // Ensure all code sections are contiguous with `__text` for thunk
++    // calculations.
++    if (sections::isCodeSection(osec->name, segment_names::text, osec->flags) &&
++        osec->name != section_names::stubHelper) {
++      return -5;
++    }
+     return StringSwitch<int>(osec->name)
+-        .Case(section_names::header, -6)
+-        .Case(section_names::text, -5)
+         .Case(section_names::stubs, -4)
+         .Case(section_names::stubHelper, -3)
+         .Case(section_names::objcStubs, -2)
+diff --git a/lld/MachO/OutputSegment.h b/lld/MachO/OutputSegment.h
+index 7a0c4a2065a15b..5f39734ffdbd7a 100644
+--- a/lld/MachO/OutputSegment.h
++++ b/lld/MachO/OutputSegment.h
+@@ -57,6 +57,7 @@ class OutputSegment {
+   uint32_t initProt = 0;
+   uint32_t flags = 0;
+   uint8_t index;
++  bool needsThunks = false;
+ 
+   llvm::TinyPtrVector<Defined *> segmentStartSymbols;
+   llvm::TinyPtrVector<Defined *> segmentEndSymbols;
+diff --git a/lld/MachO/Sections.cpp b/lld/MachO/Sections.cpp
+new file mode 100644
+index 00000000000000..a27d902c0a2273
+--- /dev/null
++++ b/lld/MachO/Sections.cpp
+@@ -0,0 +1,36 @@
++//===- Sections.cpp ---------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include "Sections.h"
++#include "InputSection.h"
++#include "OutputSegment.h"
++
++#include "llvm/ADT/StringSwitch.h"
++
++using namespace llvm;
++using namespace llvm::MachO;
++
++namespace lld::macho::sections {
++bool isCodeSection(StringRef name, StringRef segName, uint32_t flags) {
++  uint32_t type = sectionType(flags);
++  if (type != S_REGULAR && type != S_COALESCED)
++    return false;
++
++  uint32_t attr = flags & SECTION_ATTRIBUTES_USR;
++  if (attr == S_ATTR_PURE_INSTRUCTIONS)
++    return true;
++
++  if (segName == segment_names::text)
++    return StringSwitch<bool>(name)
++        .Cases(section_names::textCoalNt, section_names::staticInit, true)
++        .Default(false);
++
++  return false;
++}
++
++} // namespace lld::macho::sections
+diff --git a/lld/MachO/Sections.h b/lld/MachO/Sections.h
+new file mode 100644
+index 00000000000000..2246333d85729b
+--- /dev/null
++++ b/lld/MachO/Sections.h
+@@ -0,0 +1,19 @@
++//===- Sections.h ------------------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLD_MACHO_SECTIONS_H
++#define LLD_MACHO_SECTIONS_H
++
++#include "llvm/ADT/StringRef.h"
++
++namespace lld::macho::sections {
++bool isCodeSection(llvm::StringRef name, llvm::StringRef segName,
++                   uint32_t flags);
++} // namespace lld::macho::sections
++
++#endif // #ifndef LLD_MACHO_SECTIONS_H
