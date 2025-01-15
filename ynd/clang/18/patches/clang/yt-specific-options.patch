@@ -1,0 +1,162 @@
+--- a/include/clang/Format/Format.h
++++ b/include/clang/Format/Format.h
+@@ -4253,6 +4253,12 @@ struct FormatStyle {
+     ///    void f () {}                    vs.    void f() {}
+     /// \endcode
+     bool AfterFunctionDefinitionName;
++    /// If ``true``, put space between lambda capture list and and opening parentheses.
++    /// \code
++    ///    true:                                  false:
++    ///    auto foo = [] () {};            vs.    auto foo = []() {};
++    /// \endcode
++    bool AfterLambdaCaptureList;
+     /// If ``true``, put space between if macros and opening parentheses.
+     /// \code
+     ///    true:                                  false:
+@@ -4307,7 +4313,7 @@ struct FormatStyle {
+     SpaceBeforeParensCustom()
+         : AfterControlStatements(false), AfterForeachMacros(false),
+           AfterFunctionDeclarationName(false),
+-          AfterFunctionDefinitionName(false), AfterIfMacros(false),
++          AfterFunctionDefinitionName(false), AfterLambdaCaptureList(false), AfterIfMacros(false),
+           AfterOverloadedOperator(false), AfterPlacementOperator(true),
+           AfterRequiresInClause(false), AfterRequiresInExpression(false),
+           BeforeNonEmptyParentheses(false) {}
+@@ -4318,6 +4324,7 @@ struct FormatStyle {
+              AfterFunctionDeclarationName ==
+                  Other.AfterFunctionDeclarationName &&
+              AfterFunctionDefinitionName == Other.AfterFunctionDefinitionName &&
++             AfterLambdaCaptureList == Other.AfterLambdaCaptureList &&
+              AfterIfMacros == Other.AfterIfMacros &&
+              AfterOverloadedOperator == Other.AfterOverloadedOperator &&
+              AfterPlacementOperator == Other.AfterPlacementOperator &&
+@@ -4751,6 +4758,12 @@ struct FormatStyle {
+   /// \version 11
+   std::vector<std::string> WhitespaceSensitiveMacros;
+ 
++  /// If ``true``, continuation indents do not depend on the previous line.
++  bool ContextIndependentContinuationIndent;
++
++  /// If ``true``, lambda capture lists may be split over multiple lines.
++  bool AllowMultilineLambdaCaptureList;
++
+   bool operator==(const FormatStyle &R) const {
+     return AccessModifierOffset == R.AccessModifierOffset &&
+            AlignAfterOpenBracket == R.AlignAfterOpenBracket &&
+@@ -4917,7 +4930,9 @@ struct FormatStyle {
+            UseTab == R.UseTab &&
+            VerilogBreakBetweenInstancePorts ==
+                R.VerilogBreakBetweenInstancePorts &&
+-           WhitespaceSensitiveMacros == R.WhitespaceSensitiveMacros;
++           WhitespaceSensitiveMacros == R.WhitespaceSensitiveMacros &&
++           ContextIndependentContinuationIndent == R.ContextIndependentContinuationIndent &&
++           AllowMultilineLambdaCaptureList == R.AllowMultilineLambdaCaptureList;
+   }
+ 
+   std::optional<FormatStyle> GetLanguageStyle(LanguageKind Language) const;
+--- a/lib/Format/ContinuationIndenter.cpp
++++ b/lib/Format/ContinuationIndenter.cpp
+@@ -1209,7 +1209,7 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
+   const FormatToken &Previous = *Current.Previous;
+   // If we are continuing an expression, we want to use the continuation indent.
+   unsigned ContinuationIndent =
+-      std::max(CurrentState.LastSpace, CurrentState.Indent) +
++      (Style.ContextIndependentContinuationIndent ? CurrentState.Indent : std::max(CurrentState.LastSpace, CurrentState.Indent)) +
+       Style.ContinuationIndentWidth;
+   const FormatToken *PreviousNonComment = Current.getPreviousNonComment();
+   const FormatToken *NextNonComment = Previous.getNextNonComment();
+@@ -1235,7 +1235,12 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
+     return (Style.IndentWidth * State.Line->First->IndentLevel) +
+            Style.IndentWidth;
+   }
+-
++  if (Style.AllowMultilineLambdaCaptureList &&
++      Current.is(tok::r_square) &&
++      Current.MatchingParen && Current.MatchingParen->is(TT_LambdaLSquare) &&
++      State.Stack.size() > 1) {
++    return State.Stack[State.Stack.size() - 2].LastSpace;
++  }
+   if ((NextNonComment->is(tok::l_brace) && NextNonComment->is(BK_Block)) ||
+       (Style.isVerilog() && Keywords.isVerilogBegin(*NextNonComment))) {
+     if (Current.NestingLevel == 0 ||
+@@ -1686,7 +1691,8 @@ void ContinuationIndenter::moveStatePastFakeLParens(LineState &State,
+     // Indent from 'LastSpace' unless these are fake parentheses encapsulating
+     // a builder type call after 'return' or, if the alignment after opening
+     // brackets is disabled.
+-    if (!Current.isTrailingComment() &&
++    if (!Style.ContextIndependentContinuationIndent &&
++        !Current.isTrailingComment() &&
+         (Style.AlignOperands != FormatStyle::OAS_DontAlign ||
+          PrecedenceLevel < prec::Assignment) &&
+         (!Previous || Previous->isNot(tok::kw_return) ||
+@@ -1807,7 +1813,7 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
+           CurrentState.LastSpace + Style.BracedInitializerIndentWidth.value_or(
+                                        Style.ContinuationIndentWidth);
+     } else {
+-      NewIndent = CurrentState.LastSpace + Style.ContinuationIndentWidth;
++      NewIndent = (Style.ContextIndependentContinuationIndent ? CurrentState.Indent : CurrentState.LastSpace) + Style.ContinuationIndentWidth;
+     }
+     const FormatToken *NextNonComment = Current.getNextNonComment();
+     bool EndsInComma = Current.MatchingParen &&
+@@ -1824,7 +1830,7 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
+   } else {
+     NewIndent =
+         Style.ContinuationIndentWidth +
+-        std::max(CurrentState.LastSpace, CurrentState.StartOfFunctionCall);
++        std::max(Style.ContextIndependentContinuationIndent ? CurrentState.Indent : CurrentState.LastSpace, CurrentState.StartOfFunctionCall);
+ 
+     // Ensure that different different brackets force relative alignment, e.g.:
+     // void SomeFunction(vector<  // break
+--- a/lib/Format/Format.cpp
++++ b/lib/Format/Format.cpp
+@@ -638,6 +638,8 @@ template <> struct MappingTraits<FormatStyle::SpaceBeforeParensCustom> {
+     IO.mapOptional("AfterForeachMacros", Spacing.AfterForeachMacros);
+     IO.mapOptional("AfterFunctionDefinitionName",
+                    Spacing.AfterFunctionDefinitionName);
++    IO.mapOptional("AfterLambdaCaptureList",
++                   Spacing.AfterLambdaCaptureList);
+     IO.mapOptional("AfterFunctionDeclarationName",
+                    Spacing.AfterFunctionDeclarationName);
+     IO.mapOptional("AfterIfMacros", Spacing.AfterIfMacros);
+@@ -1035,6 +1037,10 @@ template <> struct MappingTraits<FormatStyle> {
+     IO.mapOptional("UseTab", Style.UseTab);
+     IO.mapOptional("WhitespaceSensitiveMacros",
+                    Style.WhitespaceSensitiveMacros);
++    IO.mapOptional("ContextIndependentContinuationIndent",
++                   Style.ContextIndependentContinuationIndent);
++    IO.mapOptional("AllowMultilineLambdaCaptureList",
++                   Style.AllowMultilineLambdaCaptureList);
+ 
+     // If AlwaysBreakAfterDefinitionReturnType was specified but
+     // AlwaysBreakAfterReturnType was not, initialize the latter from the
+@@ -1468,6 +1474,8 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
+   LLVMStyle.PenaltyBreakOpenParenthesis = 0;
+   LLVMStyle.PenaltyBreakTemplateDeclaration = prec::Relational;
+   LLVMStyle.PenaltyIndentedWhitespace = 0;
++  LLVMStyle.ContextIndependentContinuationIndent = false;
++  LLVMStyle.AllowMultilineLambdaCaptureList = false;
+ 
+   // Defaults that differ when not C++.
+   switch (Language) {
+--- a/lib/Format/TokenAnnotator.cpp
++++ b/lib/Format/TokenAnnotator.cpp
+@@ -3751,6 +3751,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
+     if (Line.Type != LT_PreprocessorDirective && Left.is(tok::r_square) &&
+         Left.MatchingParen && Left.MatchingParen->is(TT_LambdaLSquare)) {
+       return Style.SpaceBeforeParensOptions.AfterFunctionDefinitionName ||
++             Style.SpaceBeforeParensOptions.AfterLambdaCaptureList ||
+              spaceRequiredBeforeParens(Right);
+     }
+     if (!Left.Previous || Left.Previous->isNot(tok::period)) {
+@@ -5118,8 +5119,10 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
+     return false;
+   if (Right.is(tok::r_square) && Right.MatchingParen &&
+       Right.MatchingParen->is(TT_LambdaLSquare)) {
+-    return false;
++    return Style.AllowMultilineLambdaCaptureList;
+   }
++  if (Left.is(TT_LambdaLSquare))
++    return Style.AllowMultilineLambdaCaptureList;
+ 
+   // We only break before r_brace if there was a corresponding break before
+   // the l_brace, which is tracked by BreakBeforeClosingBrace.
