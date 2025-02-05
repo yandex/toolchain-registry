@@ -1,5 +1,5 @@
 {
-  ".":"devtools/contrib/toolchain-registry/github_toplevel",
+  ".":"toolchains",
   ".gitignore":"toolchains/.gitignore",
   ".gitmodules":"toolchains/.gitmodules",
   "LICENSE":"devtools/contrib/toolchain-registry/github_toplevel/LICENSE",
