@@ -1,0 +1,103 @@
+{% extends '//clang/18/template.sh' %}
+
+{% block llvm_targets %}
+clang-tidy
+clang-apply-replacements
+{% endblock %}
+
+{% block check_srcs %}
+bridge_header.h
+ascii_compare_ignore_case_check.cpp
+ascii_compare_ignore_case_check.h
+taxi_coroutine_unsafe_check.cpp
+taxi_coroutine_unsafe_check.h
+taxi_dangling_config_ref_check.cpp
+taxi_dangling_config_ref_check.h
+tidy_module.cpp
+uneeded_temporary_string_check.cpp
+uneeded_temporary_string_check.h
+usage_restriction_checks.cpp
+usage_restriction_checks.h
+util_tstring_methods.cpp
+util_tstring_methods.h
+{% endblock %}
+
+{% block cmake_flags %}
+{{super()}}
+CMAKE_CXX_FLAGS="-DIX_CLANG_TIDY_BUILD=1"
+{% endblock %}
+
+{% block patch %}
+{{super()}}
+
+YANDEX_TIDY_MODULE=${tmp}/src/clang-tools-extra/clang-tidy/yandex/
+mkdir $YANDEX_TIDY_MODULE
+
+# Copy sources into llvm
+{% for check_src in self.check_srcs().strip().split() %}
+base64 -d << EOF > $YANDEX_TIDY_MODULE/{{check_src}}
+{{ix.load_file('//clang-tidy/18/checks/' + check_src) | b64e }}
+EOF
+{% endfor %}
+
+# Create new one more module
+cat << EOF > $YANDEX_TIDY_MODULE/CMakeLists.txt
+set(LLVM_LINK_COMPONENTS FrontendOpenMP Support)
+
+
+add_clang_library(clangTidyYandexModule
+
+{% for check_src in self.check_srcs().strip().split() %}
+{{check_src}}
+{% endfor %}
+
+  LINK_LIBS clangTidy clangTidyUtils
+  DEPENDS omp_gen ClangDriverOptions
+)
+
+clang_target_link_libraries(clangTidyYandexModule
+  PRIVATE clangAST clangASTMatchers clangBasic clangLex
+)
+EOF
+
+# Create anchor for linker
+cat << EOF >> ${tmp}/src/clang-tools-extra/clang-tidy/ClangTidyForceLinker.h
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CLANGTIDYFORCELINKER_H_ADDITION
+#define LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CLANGTIDYFORCELINKER_H_ADDITION
+namespace clang::tidy {
+// This anchor is used to force the linker to link the YandexModule.
+extern volatile int YandexModuleAnchorSource;
+static int LLVM_ATTRIBUTE_UNUSED YandexModuleAnchorDestination = YandexModuleAnchorSource;
+}
+#endif
+EOF
+
+# Register our module in CMake
+base64 -d << EOF | patch -p1 --directory=${tmp}/src
+{% include 'register_yandex.diff/base64' %}
+EOF
+
+{% endblock %}
+
+
+{% block install %}
+{{super()}}
+mkdir -p ${out}/fix
+cat << EOF > ${out}/fix/remove_unused.sh
+rm -rf share
+rm -rf lib
+
+mv bin/clang-tidy clang-tidy
+mv bin/clang-apply-replacements clang-apply-replacements
+rm -rf bin
+
+mkdir bin
+mv clang-tidy bin/
+mv clang-apply-replacements bin/
+EOF
+{% endblock %}
+
+
+
+
+
