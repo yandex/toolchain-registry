@@ -71,6 +71,7 @@
   "ynd/clang-tidy/18/checks/util_tstring_methods.cpp":"toolchains/ynd/clang-tidy/18/checks/util_tstring_methods.cpp",
   "ynd/clang-tidy/18/checks/util_tstring_methods.h":"toolchains/ynd/clang-tidy/18/checks/util_tstring_methods.h",
   "ynd/clang-tidy/18/checks/ya.make":"toolchains/ynd/clang-tidy/18/checks/ya.make",
+  "ynd/clang-tidy/18/cross.diff":"toolchains/ynd/clang-tidy/18/cross.diff",
   "ynd/clang-tidy/18/ix.sh":"toolchains/ynd/clang-tidy/18/ix.sh",
   "ynd/clang-tidy/18/register_yandex.diff":"toolchains/ynd/clang-tidy/18/register_yandex.diff",
   "ynd/clang/16/bolted/ext-profile/ix.sh":"toolchains/ynd/clang/16/bolted/ext-profile/ix.sh",

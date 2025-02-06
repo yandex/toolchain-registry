@@ -1,0 +1,14 @@
+--- a/llvm/cmake/modules/CrossCompile.cmake
++++ b/llvm/cmake/modules/CrossCompile.cmake
+@@ -90,6 +90,11 @@ function(llvm_create_cross_target project_name target_name toolchain buildtype)
+         -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN="${LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN}"
+         -DLLVM_INCLUDE_BENCHMARKS=OFF
+         -DLLVM_INCLUDE_TESTS=OFF
++        -DCLANG_INCLUDE_TESTS=OFF
++        -DLLVM_BUILD_TESTS=OFF -DCLANG_PLUGIN_SUPPORT="${CLANG_PLUGIN_SUPPORT}"
++        -DCMAKE_C_COMPILER="${NATIVE_CLANG_DIR}"/clang
++        -DCMAKE_CXX_COMPILER="${NATIVE_CLANG_DIR}"/clang++
++        -DCMAKE_CXX_FLAGS='-fuse-ld=lld' -DCMAKE_C_FLAGS='-fuse-ld=lld'
+         ${build_type_flags} ${linker_flag} ${external_clang_dir} ${libc_flags}
+         ${ARGN}
+     WORKING_DIRECTORY ${${project_name}_${target_name}_BUILD}

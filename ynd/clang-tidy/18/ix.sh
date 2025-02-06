@@ -1,8 +1,15 @@
 {% extends '//clang/18/template.sh' %}
 
+
+{% block bld_deps %}
+{{super()}}
+//clang/18
+{% endblock %}
+
 {% block llvm_targets %}
 clang-tidy
 clang-apply-replacements
+clang-resource-headers
 {% endblock %}
 
 {% block check_srcs %}
@@ -25,10 +32,19 @@ util_tstring_methods.h
 {% block cmake_flags %}
 {{super()}}
 CMAKE_CXX_FLAGS="-DIX_CLANG_TIDY_BUILD=1"
+LLVM_ENABLE_PROJECTS="llvm;clang;clang-tools-extra"
+CLANG_PLUGIN_SUPPORT=FALSE
+NATIVE_CLANG_DIR=$NATIVE_CLANG_DIR
 {% endblock %}
 
 {% block patch %}
 {{super()}}
+# Adjust cross compilation
+base64 -d << EOF | patch -p1 --directory=${tmp}/src
+{% include 'cross.diff/base64' %}
+EOF
+# Disable zstd (also need for cross compilation)
+echo > ${tmp}/src/llvm/cmake/modules/Findzstd.cmake
 
 YANDEX_TIDY_MODULE=${tmp}/src/clang-tools-extra/clang-tidy/yandex/
 mkdir $YANDEX_TIDY_MODULE
@@ -84,16 +100,13 @@ EOF
 {{super()}}
 mkdir -p ${out}/fix
 cat << EOF > ${out}/fix/remove_unused.sh
-rm -rf share
-rm -rf lib
+mkdir bin1
 
-mv bin/clang-tidy clang-tidy
-mv bin/clang-apply-replacements clang-apply-replacements
+mv bin/clang-tidy* bin1/.
+mv bin/clang-apply-replacements* bin1/.
 rm -rf bin
 
-mkdir bin
-mv clang-tidy bin/
-mv clang-apply-replacements bin/
+mv bin1 bin
 EOF
 {% endblock %}
 
