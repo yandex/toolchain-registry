@@ -37,8 +37,21 @@ CLANG_PLUGIN_SUPPORT=FALSE
 NATIVE_CLANG_DIR=$NATIVE_CLANG_DIR
 {% endblock %}
 
+{% block tidy_patches %}
+dont-triggers-on-class-decls.patch
+{% endblock %}
+
 {% block patch %}
 {{super()}}
+
+cd ${tmp}/src
+{% for p in self.tidy_patches().strip().split() %}
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//clang-tidy/18/patches/' + p) | b64e}}
+EOF
+{% endfor %}
+
+
 # Adjust cross compilation
 base64 -d << EOF | patch -p1 --directory=${tmp}/src
 {% include 'cross.diff/base64' %}

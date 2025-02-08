@@ -73,6 +73,7 @@
   "ynd/clang-tidy/18/checks/ya.make":"toolchains/ynd/clang-tidy/18/checks/ya.make",
   "ynd/clang-tidy/18/cross.diff":"toolchains/ynd/clang-tidy/18/cross.diff",
   "ynd/clang-tidy/18/ix.sh":"toolchains/ynd/clang-tidy/18/ix.sh",
+  "ynd/clang-tidy/18/patches/dont-triggers-on-class-decls.patch":"toolchains/ynd/clang-tidy/18/patches/dont-triggers-on-class-decls.patch",
   "ynd/clang-tidy/18/register_yandex.diff":"toolchains/ynd/clang-tidy/18/register_yandex.diff",
   "ynd/clang/16/bolted/ext-profile/ix.sh":"toolchains/ynd/clang/16/bolted/ext-profile/ix.sh",
   "ynd/clang/16/ix.sh":"toolchains/ynd/clang/16/ix.sh",
