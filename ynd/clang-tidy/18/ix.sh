@@ -27,6 +27,7 @@ usage_restriction_checks.cpp
 usage_restriction_checks.h
 util_tstring_methods.cpp
 util_tstring_methods.h
+possible_nullptr_check.cpp
 {% endblock %}
 
 {% block cmake_flags %}
@@ -104,6 +105,11 @@ EOF
 # Register our module in CMake
 base64 -d << EOF | patch -p1 --directory=${tmp}/src
 {% include 'register_yandex.diff/base64' %}
+EOF
+
+# Register clang-static-analyzer
+base64 -d << EOF >> ${tmp}/src/clang/include/clang/StaticAnalyzer/Checkers/Checkers.td
+{{ix.load_file('//clang-tidy/18/patches/options.td') | b64e }}
 EOF
 
 {% endblock %}

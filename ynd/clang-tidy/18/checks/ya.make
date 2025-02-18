@@ -19,6 +19,7 @@ SRCS(
     usage_restriction_checks.cpp
     uneeded_temporary_string_check.cpp
     util_tstring_methods.cpp
+    possible_nullptr_check.cpp
 )
 
 END()
