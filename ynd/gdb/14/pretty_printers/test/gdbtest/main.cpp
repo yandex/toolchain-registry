@@ -71,6 +71,7 @@ THashMap<TString, TString> test_tstring_hashmap = {{"Это", "тест"}};
 TString test_tstring = "Это тест.";
 TString test_nullbyte_tstring{"\x00тест"sv};
 TString test_binary_tstring{"\xff\x00\xff\x00"sv};
+TCowString test_tcowstring = "Это тест.";
 TUtf16String test_tutf16string = u"Это тест.";
 TUtf32String test_tutf32string = U"Это тест.";  // Untested.
 

@@ -4,6 +4,7 @@
 
 {% block pretty_printers %}
 __init__.py
+arcadia_helpers.py
 arcadia_printers.py
 arcadia_xmethods.py
 libc_printers.py

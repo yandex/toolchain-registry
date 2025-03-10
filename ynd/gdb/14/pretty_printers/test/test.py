@@ -79,6 +79,7 @@ tests = dict(
     test_tstring='"Это тест."',
     test_nullbyte_tstring='"\\000тест"',
     test_binary_tstring='"\\377\\000\\377\\000"',
+    test_tcowstring='"Это тест."',
     test_tutf16string='L"Это тест."',
     test_tstringbuf='"Это тест."',
     test_tvariant_default='TVariantType = {int = 0}',
@@ -178,6 +179,7 @@ xmethod_tests = dict(
 def test_xmethod(test_name, test_check):
     test_call, test_output = test_check
     actual_output = data(test_call)
+    # raise Exception(actual_output)
     if hasattr(test_output, 'search'):
         assert test_output.search(actual_output) is not None, test_call + '\n' + actual_output
     else:

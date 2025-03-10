@@ -1,0 +1,14 @@
+service: cc
+title: Pertty-printers for gdb in ya tool gdb
+arcanum:
+  review:
+    auto_assign: true
+    groups:
+      - name: reviewers
+        roles: [ "cc:duty", "cc:developer", "cc:consultant"]
+    rules:
+      - reviewers:
+          - name: reviewers
+            assign: 1
+            ship: 1
+            ignore_self_ship: false
