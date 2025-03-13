@@ -17,7 +17,7 @@ def PossibleNullptr : Checker<"PossibleNullptr">,
     CmdLineOption<String,
                   "ExcludeSrcRe",
                   "Regexpr for exclude sources",
-                  "",
+                  ".*",
                   Released>
   ]>,
   Documentation<HasDocumentation>;
