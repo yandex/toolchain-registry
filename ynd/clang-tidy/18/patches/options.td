@@ -18,6 +18,11 @@ def PossibleNullptr : Checker<"PossibleNullptr">,
                   "ExcludeSrcRe",
                   "Regexpr for exclude sources",
                   ".*",
+                  Released>,
+    CmdLineOption<String,
+                  "NonNullFuncs",
+                  "Comma separated list of functions that always return nonnull",
+                  "",
                   Released>
   ]>,
   Documentation<HasDocumentation>;

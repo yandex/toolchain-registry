@@ -19,6 +19,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerHelpers.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/AST/ParentMap.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
@@ -39,6 +40,7 @@ namespace {
         bool suppressReport(CheckerContext& C, const Expr* E) const;
 
     public:
+        llvm::SmallVector<llvm::StringRef, 4> NonNullFuncs;
         llvm::Regex IncludeSrcRe;
         llvm::Regex ExcludeSrcRe;
         bool ShouldScanFile(StringRef filepath) const {
@@ -72,8 +74,14 @@ namespace {
             bool is_stl = false;
             if (func) {
                 auto name = func->getNameInfo().getAsString();
-                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (!NonNullFuncs.empty()) {
+                    llvm::StringRef ref = name;
+                    for (auto prefix : NonNullFuncs)
+                        if(ref.starts_with(prefix))
+                            return true; 
+                }
                 auto startswith = [&](const char* pre) { return name.rfind(pre, 0) == 0; };
+                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
                 is_proto |= startswith("mutable_") || startswith("add_");
                 is_proto |= startswith("mutable") || startswith("add");
                 is_proto &= func->param_empty();
@@ -104,7 +112,10 @@ namespace {
             if (const MemRegion* Region = Loc.getAsRegion()) {
                 if (auto SR = Region->getAs<VarRegion>()) {
                     auto* VD = SR->getDecl();
-                    return Region->hasStackStorage() || VD && isa<ParmVarDecl>(VD);
+                    bool isParam = VD && isa<ParmVarDecl>(VD);
+                    /* Dont analyze function params that marked as NonNull */
+                    if (isParam && VD->hasAttr<NonNullAttr>()) return false; 
+                    return Region->hasStackStorage() || isParam;
                 }
             }
             return false;
@@ -370,6 +381,8 @@ CSA_REGISTER(PossibleNullptr)
 
     check->IncludeSrcRe = llvm::Regex(options.getCheckerStringOption(checkName, "IncludeSrcRe"));
     check->ExcludeSrcRe = llvm::Regex(options.getCheckerStringOption(checkName, "ExcludeSrcRe"));
+
+    options.getCheckerStringOption(checkName, "NonNullFuncs").split(check->NonNullFuncs, ',');
 }
 
 CSA_ENABLE(PossibleNullptr)
