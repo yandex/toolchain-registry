@@ -69,29 +69,29 @@ namespace {
                 return false;
             }
 
-            auto func = CallDeclaration->getAsFunction();
-            bool is_proto = false;
-            bool is_stl = false;
-            if (func) {
-                auto name = func->getNameInfo().getAsString();
-                if (!NonNullFuncs.empty()) {
-                    llvm::StringRef ref = name;
-                    for (auto prefix : NonNullFuncs)
-                        if(ref.starts_with(prefix))
-                            return true; 
-                }
-                auto startswith = [&](const char* pre) { return name.rfind(pre, 0) == 0; };
-                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-                is_proto |= startswith("mutable_") || startswith("add_");
-                is_proto |= startswith("mutable") || startswith("add");
-                is_proto &= func->param_empty();
-                is_stl |= startswith("std::find_if") || startswith("findif") || startswith("find_if");
-                is_stl |= startswith("std::lower_bound") || startswith("lowerbound") || startswith("lower_bound");
-                is_stl |= startswith("std::upper_bound") || startswith("upperbound") || startswith("upper_bound");
-                is_stl |= startswith("std::min_element") || startswith("minelement") || startswith("min_element");
-                is_stl |= startswith("std::max_element") || startswith("maxelement") || startswith("max_element");
+            if (CallDeclaration->hasAttr<ReturnsNonNullAttr>()) {
+                return true;
             }
-            return is_proto || is_stl || CallDeclaration->hasAttr<ReturnsNonNullAttr>();
+
+            auto func = CallDeclaration->getAsFunction();
+            if (!func) {
+                return false;
+            }
+            if (!NonNullFuncs.empty()) {
+                std::string full = func->getQualifiedNameAsString();
+                llvm::StringRef ref = full;
+                for (auto prefix : NonNullFuncs)
+                    if(ref.starts_with(prefix))
+                        return true; 
+            }
+            auto name = func->getNameInfo().getAsString();
+            auto startswith = [&](const char* pre) { return name.rfind(pre, 0) == 0; };
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            bool is_proto = false;
+            is_proto |= startswith("mutable_") || startswith("add_");
+            is_proto |= startswith("mutable") || startswith("add");
+            is_proto &= func->param_empty();
+            return is_proto;
         }
 
         template <typename T>
@@ -114,7 +114,7 @@ namespace {
                     auto* VD = SR->getDecl();
                     bool isParam = VD && isa<ParmVarDecl>(VD);
                     /* Dont analyze function params that marked as NonNull */
-                    if (isParam && VD->hasAttr<NonNullAttr>()) return false; 
+                    if (isParam && VD->hasAttr<NonNullAttr>()) return false;
                     return Region->hasStackStorage() || isParam;
                 }
             }
@@ -381,8 +381,8 @@ CSA_REGISTER(PossibleNullptr)
 
     check->IncludeSrcRe = llvm::Regex(options.getCheckerStringOption(checkName, "IncludeSrcRe"));
     check->ExcludeSrcRe = llvm::Regex(options.getCheckerStringOption(checkName, "ExcludeSrcRe"));
-
     options.getCheckerStringOption(checkName, "NonNullFuncs").split(check->NonNullFuncs, ',');
+    llvm::erase_if(check->NonNullFuncs, [](auto& str) { return str.empty(); });
 }
 
 CSA_ENABLE(PossibleNullptr)
