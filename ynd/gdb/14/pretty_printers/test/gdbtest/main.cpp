@@ -21,6 +21,7 @@
 #include <util/generic/maybe.h>
 #include <util/system/yassert.h>
 #include <library/cpp/enumbitset/enumbitset.h>
+#include <userver/formats/json/serialize.hpp>
 #include <userver/formats/json/value.hpp>
 
 std::tuple<int, int> test_tuple = {1, 2};
