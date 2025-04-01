@@ -15,7 +15,7 @@ mkdir src
 {% endblock %}
 
 {% block go_version %}
-1.23.6
+1.23.7
 {% endblock %}
 
 {% block go_src %}
