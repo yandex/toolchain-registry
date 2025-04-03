@@ -4,8 +4,8 @@
 1.23.8
 {% endblock %}
 
+{# curl 'https://go.dev/dl/?mode=json' | jq '.[] | select(.version=="go1.23.8") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin")))' #}
 {% block archive_hash %}
-# curl 'https://go.dev/dl/?mode=json' | jq '.[] | select(.version=="go1.23.8") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin")))'
 {% if linux and x86_64 %}
     45b87381172a58d62c977f27c4683c8681ef36580abecd14fd124d24ca306d3f
 {% elif linux and aarch64 %}
