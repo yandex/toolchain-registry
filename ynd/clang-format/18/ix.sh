@@ -20,6 +20,7 @@ asan_static.patch
 D21113-case-insesitive-include-paths.patch
 clang-format-issue-99758.patch
 yt-specific-options.patch
+clang-format-better-brakes-in-ctor-init-inheritance-lists.patch
 {% endblock %}
 
 {% block common_patches %}
