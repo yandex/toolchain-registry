@@ -2,6 +2,7 @@
 #include <bitset>
 #include <deque>
 #include <exception>
+#include <forward_list>
 #include <list>
 #include <map>
 #include <optional>
@@ -145,6 +146,8 @@ std::atomic<std::array<int64_t, 3>> test_atomic_array(std::array<int64_t, 3>{1, 
 
 std::list<int> test_list_empty;
 std::list<int> test_list{1, 2, 3};
+std::forward_list<int> test_forward_list_empty;
+std::forward_list<int> test_forward_list{1, 2, 3};
 
 formats::json::Value test_json = formats::json::FromString(
     R"({"a":[1,{},[]],"b":[true,false],"c":{"internal":{"subkey":2}},"i":-1,"u":1,"i64":-18446744073709551614,"u64":18446744073709551614,"d":0.4})");

@@ -105,6 +105,8 @@ tests = dict(
     test_atomic_array='std::atomic = {load() = {__elems_ = {1, 2, 3}}}',
     test_list_empty='empty std::__y1::list',
     test_list='std::__y1::list = {[0] = 1, [1] = 2, [2] = 3}',
+    test_forward_list_empty='empty std::__y1::forward_list',
+    test_forward_list='std::__y1::forward_list = {[0] = 1, [1] = 2, [2] = 3}',
     # test_json=r'formats::json::Value = {value = {["a"] = {1, {}, []}, ["b"] = {true, false},'
     #           r' ["c"] = {["internal"] = {["subkey"] = 2}}, ["i"] = -1, ["u"] = 1, ["i64"] ='
     #           r' -1.8446744073709552e+19, ["u64"] = 18446744073709551614, ["d"] = 0.40000000000000002}}',
