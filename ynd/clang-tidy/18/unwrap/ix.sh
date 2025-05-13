@@ -16,6 +16,8 @@ clang-resource-headers
 bridge_header.h
 ascii_compare_ignore_case_check.cpp
 ascii_compare_ignore_case_check.h
+taxi_async_use_after_free_check.cpp
+taxi_async_use_after_free_check.h
 taxi_coroutine_unsafe_check.cpp
 taxi_coroutine_unsafe_check.h
 taxi_dangling_config_ref_check.cpp

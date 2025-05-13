@@ -62,6 +62,8 @@
   "ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.h":"toolchains/ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.h",
   "ynd/clang-tidy/18/checks/bridge_header.h":"toolchains/ynd/clang-tidy/18/checks/bridge_header.h",
   "ynd/clang-tidy/18/checks/possible_nullptr_check.cpp":"toolchains/ynd/clang-tidy/18/checks/possible_nullptr_check.cpp",
+  "ynd/clang-tidy/18/checks/taxi_async_use_after_free_check.cpp":"toolchains/ynd/clang-tidy/18/checks/taxi_async_use_after_free_check.cpp",
+  "ynd/clang-tidy/18/checks/taxi_async_use_after_free_check.h":"toolchains/ynd/clang-tidy/18/checks/taxi_async_use_after_free_check.h",
   "ynd/clang-tidy/18/checks/taxi_coroutine_unsafe_check.cpp":"toolchains/ynd/clang-tidy/18/checks/taxi_coroutine_unsafe_check.cpp",
   "ynd/clang-tidy/18/checks/taxi_coroutine_unsafe_check.h":"toolchains/ynd/clang-tidy/18/checks/taxi_coroutine_unsafe_check.h",
   "ynd/clang-tidy/18/checks/taxi_dangling_config_ref_check.cpp":"toolchains/ynd/clang-tidy/18/checks/taxi_dangling_config_ref_check.cpp",

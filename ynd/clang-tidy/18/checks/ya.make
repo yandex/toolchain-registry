@@ -16,6 +16,7 @@ SRCS(
     ascii_compare_ignore_case_check.cpp
     taxi_coroutine_unsafe_check.cpp
     taxi_dangling_config_ref_check.cpp
+    taxi_async_use_after_free_check.cpp
     usage_restriction_checks.cpp
     uneeded_temporary_string_check.cpp
     util_tstring_methods.cpp
