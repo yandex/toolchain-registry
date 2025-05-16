@@ -68,6 +68,7 @@ cd clang
 {{ix.load_file('//clang/18/patches/clang/' + p) | b64e}}
 EOF
 {% endfor %}
+cd ..
 {% endblock %}
 
 {% block postinstall %}

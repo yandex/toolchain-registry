@@ -1,0 +1,223 @@
+[clangd] Add config option to allow detection of unused angled includes (#87208)
+Can be removed in clang20
+https://github.com/llvm/llvm-project/pull/87208 (8c5a7a1)
+
+--- a/clang-tools-extra/clangd/Config.h
++++ b/clang-tools-extra/clangd/Config.h
+@@ -110,10 +110,11 @@ struct Config {
+     IncludesPolicy UnusedIncludes = IncludesPolicy::Strict;
+     IncludesPolicy MissingIncludes = IncludesPolicy::None;
+ 
+-    /// IncludeCleaner will not diagnose usages of these headers matched by
+-    /// these regexes.
+     struct {
++      /// IncludeCleaner will not diagnose usages of these headers matched by
++      /// these regexes.
+       std::vector<std::function<bool(llvm::StringRef)>> IgnoreHeader;
++      bool AnalyzeAngledIncludes = false;
+     } Includes;
+   } Diagnostics;
+ 
+--- a/clang-tools-extra/clangd/ConfigCompile.cpp
++++ b/clang-tools-extra/clangd/ConfigCompile.cpp
+@@ -572,32 +572,46 @@ struct FragmentCompiler {
+ #else
+     static llvm::Regex::RegexFlags Flags = llvm::Regex::NoFlags;
+ #endif
+-    auto Filters = std::make_shared<std::vector<llvm::Regex>>();
+-    for (auto &HeaderPattern : F.IgnoreHeader) {
+-      // Anchor on the right.
+-      std::string AnchoredPattern = "(" + *HeaderPattern + ")$";
+-      llvm::Regex CompiledRegex(AnchoredPattern, Flags);
+-      std::string RegexError;
+-      if (!CompiledRegex.isValid(RegexError)) {
+-        diag(Warning,
+-             llvm::formatv("Invalid regular expression '{0}': {1}",
+-                           *HeaderPattern, RegexError)
+-                 .str(),
+-             HeaderPattern.Range);
+-        continue;
++    std::shared_ptr<std::vector<llvm::Regex>> Filters;
++    if (!F.IgnoreHeader.empty()) {
++      Filters = std::make_shared<std::vector<llvm::Regex>>();
++      for (auto &HeaderPattern : F.IgnoreHeader) {
++        // Anchor on the right.
++        std::string AnchoredPattern = "(" + *HeaderPattern + ")$";
++        llvm::Regex CompiledRegex(AnchoredPattern, Flags);
++        std::string RegexError;
++        if (!CompiledRegex.isValid(RegexError)) {
++          diag(Warning,
++               llvm::formatv("Invalid regular expression '{0}': {1}",
++                             *HeaderPattern, RegexError)
++                   .str(),
++               HeaderPattern.Range);
++          continue;
++        }
++        Filters->push_back(std::move(CompiledRegex));
+       }
+-      Filters->push_back(std::move(CompiledRegex));
+     }
+-    if (Filters->empty())
++    // Optional to override the resulting AnalyzeAngledIncludes
++    // only if it's explicitly set in the current fragment.
++    // Otherwise it's inherited from parent fragment.
++    std::optional<bool> AnalyzeAngledIncludes;
++    if (F.AnalyzeAngledIncludes.has_value())
++      AnalyzeAngledIncludes = **F.AnalyzeAngledIncludes;
++    if (!Filters && !AnalyzeAngledIncludes.has_value())
+       return;
+-    auto Filter = [Filters](llvm::StringRef Path) {
+-      for (auto &Regex : *Filters)
+-        if (Regex.match(Path))
+-          return true;
+-      return false;
+-    };
+-    Out.Apply.push_back([Filter](const Params &, Config &C) {
+-      C.Diagnostics.Includes.IgnoreHeader.emplace_back(Filter);
++    Out.Apply.push_back([Filters = std::move(Filters),
++                         AnalyzeAngledIncludes](const Params &, Config &C) {
++      if (Filters) {
++        auto Filter = [Filters](llvm::StringRef Path) {
++          for (auto &Regex : *Filters)
++            if (Regex.match(Path))
++              return true;
++          return false;
++        };
++        C.Diagnostics.Includes.IgnoreHeader.emplace_back(std::move(Filter));
++      }
++      if (AnalyzeAngledIncludes.has_value())
++        C.Diagnostics.Includes.AnalyzeAngledIncludes = *AnalyzeAngledIncludes;
+     });
+   }
+ 
+--- a/clang-tools-extra/clangd/ConfigFragment.h
++++ b/clang-tools-extra/clangd/ConfigFragment.h
+@@ -254,6 +254,10 @@ struct Fragment {
+       /// unused or missing. These can match any suffix of the header file in
+       /// question.
+       std::vector<Located<std::string>> IgnoreHeader;
++
++      /// If false (default), unused system headers will be ignored.
++      /// Standard library headers are analyzed regardless of this option.
++      std::optional<Located<bool>> AnalyzeAngledIncludes;
+     };
+     IncludesBlock Includes;
+ 
+--- a/clang-tools-extra/clangd/ConfigYAML.cpp
++++ b/clang-tools-extra/clangd/ConfigYAML.cpp
+@@ -169,6 +169,10 @@ private:
+       if (auto Values = scalarValues(N))
+         F.IgnoreHeader = std::move(*Values);
+     });
++    Dict.handle("AnalyzeAngledIncludes", [&](Node &N) {
++      if (auto Value = boolValue(N, "AnalyzeAngledIncludes"))
++        F.AnalyzeAngledIncludes = *Value;
++    });
+     Dict.parse(N);
+   }
+ 
+--- a/clang-tools-extra/clangd/IncludeCleaner.cpp
++++ b/clang-tools-extra/clangd/IncludeCleaner.cpp
+@@ -68,24 +68,30 @@ bool isIgnored(llvm::StringRef HeaderPath, HeaderFilter IgnoreHeaders) {
+ }
+ 
+ bool mayConsiderUnused(const Inclusion &Inc, ParsedAST &AST,
+-                       const include_cleaner::PragmaIncludes *PI) {
++                       const include_cleaner::PragmaIncludes *PI,
++                       bool AnalyzeAngledIncludes) {
+   assert(Inc.HeaderID);
+   auto HID = static_cast<IncludeStructure::HeaderID>(*Inc.HeaderID);
+   auto FE = AST.getSourceManager().getFileManager().getFileRef(
+       AST.getIncludeStructure().getRealPath(HID));
+   assert(FE);
+   if (FE->getDir() == AST.getPreprocessor()
+-                  .getHeaderSearchInfo()
+-                  .getModuleMap()
+-                  .getBuiltinDir()) 
++                          .getHeaderSearchInfo()
++                          .getModuleMap()
++                          .getBuiltinDir())
+     return false;
+   if (PI && PI->shouldKeep(*FE))
+     return false;
+   // FIXME(kirillbobyrev): We currently do not support the umbrella headers.
+   // System headers are likely to be standard library headers.
+-  // Until we have good support for umbrella headers, don't warn about them.
+-  if (Inc.Written.front() == '<')
+-    return tooling::stdlib::Header::named(Inc.Written).has_value();
++  // Until we have good support for umbrella headers, don't warn about them
++  // (unless analysis is explicitly enabled).
++  if (Inc.Written.front() == '<') {
++    if (tooling::stdlib::Header::named(Inc.Written))
++      return true;
++    if (!AnalyzeAngledIncludes)
++      return false;
++  }
+   if (PI) {
+     // Check if main file is the public interface for a private header. If so we
+     // shouldn't diagnose it as unused.
+@@ -272,7 +278,8 @@ Fix fixAll(const Fix &RemoveAllUnused, const Fix &AddAllMissing) {
+ 
+ std::vector<const Inclusion *>
+ getUnused(ParsedAST &AST,
+-          const llvm::DenseSet<IncludeStructure::HeaderID> &ReferencedFiles) {
++          const llvm::DenseSet<IncludeStructure::HeaderID> &ReferencedFiles,
++          bool AnalyzeAngledIncludes) {
+   trace::Span Tracer("IncludeCleaner::getUnused");
+   std::vector<const Inclusion *> Unused;
+   for (const Inclusion &MFI : AST.getIncludeStructure().MainFileIncludes) {
+@@ -281,7 +288,8 @@ getUnused(ParsedAST &AST,
+     auto IncludeID = static_cast<IncludeStructure::HeaderID>(*MFI.HeaderID);
+     if (ReferencedFiles.contains(IncludeID))
+       continue;
+-    if (!mayConsiderUnused(MFI, AST, &AST.getPragmaIncludes())) {
++    if (!mayConsiderUnused(MFI, AST, &AST.getPragmaIncludes(),
++                           AnalyzeAngledIncludes)) {
+       dlog("{0} was not used, but is not eligible to be diagnosed as unused",
+            MFI.Written);
+       continue;
+@@ -353,7 +361,8 @@ include_cleaner::Includes convertIncludes(const ParsedAST &AST) {
+   return ConvertedIncludes;
+ }
+ 
+-IncludeCleanerFindings computeIncludeCleanerFindings(ParsedAST &AST) {
++IncludeCleanerFindings
++computeIncludeCleanerFindings(ParsedAST &AST, bool AnalyzeAngledIncludes) {
+   // Interaction is only polished for C/CPP.
+   if (AST.getLangOpts().ObjC)
+     return {};
+@@ -438,7 +447,8 @@ IncludeCleanerFindings computeIncludeCleanerFindings(ParsedAST &AST) {
+            MapInfo::getHashValue(RHS.Symbol);
+   });
+   MissingIncludes.erase(llvm::unique(MissingIncludes), MissingIncludes.end());
+-  std::vector<const Inclusion *> UnusedIncludes = getUnused(AST, Used);
++  std::vector<const Inclusion *> UnusedIncludes =
++      getUnused(AST, Used, AnalyzeAngledIncludes);
+   return {std::move(UnusedIncludes), std::move(MissingIncludes)};
+ }
+ 
+--- a/clang-tools-extra/clangd/IncludeCleaner.h
++++ b/clang-tools-extra/clangd/IncludeCleaner.h
+@@ -53,7 +53,9 @@ struct IncludeCleanerFindings {
+   std::vector<MissingIncludeDiagInfo> MissingIncludes;
+ };
+ 
+-IncludeCleanerFindings computeIncludeCleanerFindings(ParsedAST &AST);
++IncludeCleanerFindings
++computeIncludeCleanerFindings(ParsedAST &AST,
++                              bool AnalyzeAngledIncludes = false);
+ 
+ using HeaderFilter = llvm::ArrayRef<std::function<bool(llvm::StringRef)>>;
+ std::vector<Diag>
+--- a/clang-tools-extra/clangd/ParsedAST.cpp
++++ b/clang-tools-extra/clangd/ParsedAST.cpp
+@@ -372,7 +372,8 @@ std::vector<Diag> getIncludeCleanerDiags(ParsedAST &AST, llvm::StringRef Code) {
+       Cfg.Diagnostics.UnusedIncludes == Config::IncludesPolicy::None;
+   if (SuppressMissing && SuppressUnused)
+     return {};
+-  auto Findings = computeIncludeCleanerFindings(AST);
++  auto Findings = computeIncludeCleanerFindings(
++      AST, Cfg.Diagnostics.Includes.AnalyzeAngledIncludes);
+   if (SuppressMissing)
+     Findings.MissingIncludes.clear();
+   if (SuppressUnused)

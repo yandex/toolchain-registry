@@ -47,7 +47,6 @@ dont-triggers-on-class-decls.patch
 {% block patch %}
 {{super()}}
 
-cd ${tmp}/src
 {% for p in self.tidy_patches().strip().split() %}
 (base64 -d | patch -p1) << EOF
 {{ix.load_file('//clang-tidy/18/patches/' + p) | b64e}}
