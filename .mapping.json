@@ -104,6 +104,7 @@
   "ynd/clang/18/bolted/ext-profile/ix.sh":"toolchains/ynd/clang/18/bolted/ext-profile/ix.sh",
   "ynd/clang/18/bolted/ix.sh":"toolchains/ynd/clang/18/bolted/ix.sh",
   "ynd/clang/18/bolted/train/ix.sh":"toolchains/ynd/clang/18/bolted/train/ix.sh",
+  "ynd/clang/18/d/ix.sh":"toolchains/ynd/clang/18/d/ix.sh",
   "ynd/clang/18/ix.sh":"toolchains/ynd/clang/18/ix.sh",
   "ynd/clang/18/optimized/ix.sh":"toolchains/ynd/clang/18/optimized/ix.sh",
   "ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch":"toolchains/ynd/clang/18/patches/clang/D21113-case-insesitive-include-paths.patch",
