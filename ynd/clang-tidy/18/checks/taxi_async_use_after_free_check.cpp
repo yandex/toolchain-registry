@@ -14,42 +14,49 @@ using namespace clang::ast_matchers;
 namespace clang::tidy::bugprone {
 
 void TaxiAsyncUseAfterFreeCheck::registerMatchers(MatchFinder* Finder) {
-  auto hasAsyncName = hasAnyName(
-      "Async", "AsyncNoSpan", "SharedAsyncNoSpan", "CriticalAsyncNoSpan",
-      "SharedCriticalAsyncNoSpan", "CriticalAsync", "SharedCriticalAsync");
+    auto hasAsyncName = hasAnyName(
+        "Async",
+        "AsyncNoSpan",
+        "SharedAsyncNoSpan",
+        "CriticalAsyncNoSpan",
+        "SharedCriticalAsyncNoSpan",
+        "CriticalAsync",
+        "SharedCriticalAsync"
+    );
 
-  Finder->addMatcher(
-      lambdaExpr(
-          hasParent(materializeTemporaryExpr(hasParent(callExpr(
-              hasParent(cxxMemberCallExpr(
+    Finder->addMatcher(
+        lambdaExpr(hasParent(materializeTemporaryExpr(hasParent(callExpr(
+                       hasParent(cxxBindTemporaryExpr(hasParent(materializeTemporaryExpr(hasParent(cxxMemberCallExpr(
 
-                  callee(cxxMethodDecl(hasName("push_back"))),
+                           callee(cxxMethodDecl(hasName("push_back"))),
 
-                  on(declRefExpr(hasDeclaration(varDecl().bind("tasks")))))),
+                           on(declRefExpr(hasDeclaration(varDecl().bind("tasks"))))
+                       )))))),
 
-              callee(functionDecl(hasAsyncName)))))))
-          .bind("lambda"),
-      this);
+                       callee(functionDecl(hasAsyncName))
+                   )))))
+            .bind("lambda"),
+        this
+    );
 }
 
 void TaxiAsyncUseAfterFreeCheck::check(const MatchFinder::MatchResult& Result) {
-  const auto* MatchedLambda = Result.Nodes.getNodeAs<LambdaExpr>("lambda");
-  const auto* MatchedTasks = Result.Nodes.getNodeAs<VarDecl>("tasks");
-  const SourceLocation TasksLocation = MatchedTasks->getLocation();
+    const auto* MatchedLambda = Result.Nodes.getNodeAs<LambdaExpr>("lambda");
+    const auto* MatchedTasks = Result.Nodes.getNodeAs<VarDecl>("tasks");
+    const SourceLocation TasksLocation = MatchedTasks->getLocation();
 
-  for (const auto& Capture : MatchedLambda->captures()) {
-    if (!Capture.capturesVariable() || Capture.getCaptureKind() != LCK_ByRef)
-      continue;
+    for (const auto& Capture : MatchedLambda->captures()) {
+        if (!Capture.capturesVariable() || Capture.getCaptureKind() != LCK_ByRef) continue;
 
-    const ValueDecl* CapturedVarDecl = Capture.getCapturedVar();
-    if (CapturedVarDecl->getLocation() >= TasksLocation) {
-      diag(Capture.getLocation(), "variable can be used after free");
-      diag(CapturedVarDecl->getLocation(), "variable was declared here",
-           DiagnosticIDs::Level::Note);
-      diag(TasksLocation, "task container was declared here",
-           DiagnosticIDs::Level::Note);
+        const ValueDecl* CapturedVarDecl = Capture.getCapturedVar();
+        if (CapturedVarDecl->getType()->isLValueReferenceType()) continue;
+
+        if (CapturedVarDecl->getLocation() >= TasksLocation) {
+            diag(Capture.getLocation(), "variable can be used after free");
+            diag(CapturedVarDecl->getLocation(), "variable was declared here", DiagnosticIDs::Level::Note);
+            diag(TasksLocation, "task container was declared here", DiagnosticIDs::Level::Note);
+        }
     }
-  }
 }
 
 }  // namespace clang::tidy::bugprone
