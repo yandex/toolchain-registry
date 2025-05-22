@@ -29,6 +29,7 @@ mkdir bin_gdb
 mv gdb bin_gdb/
 cat << EOF > gdb
 #!/bin/sh
+export PATH=/bin:/usr/bin:\${PATH}
 p1=\$(dirname \$(readlink -f "\${0}"))
 p2=\$(dirname \${p1})
 export TERMINFO=\${p2}/share/terminfo
