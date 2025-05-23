@@ -1,6 +1,6 @@
 {% extends '//bin/gdb/reloc/ix.sh' %}
 
-{% block gdb_args %}--eval-command="source \${p2}/share/gdb/python/arc/__init__.py"{% endblock %}
+{% block gdb_args %}--eval-command="source \${p2}/share/gdb/python/arc/__init__.py --data-directory=\${p2}/share/gdb"{% endblock %}
 
 {% block pretty_printers %}
 __init__.py
