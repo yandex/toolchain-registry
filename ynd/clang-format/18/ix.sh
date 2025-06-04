@@ -57,8 +57,13 @@ EOF
 {{super()}}
 mkdir -p ${out}/fix
 cat << EOF > ${out}/fix/remove_unused.sh
+set -xue
 rm -rf share
+{% if mingw32 %}
+mv bin/clang-format.exe clang-format.exe
+{% else %}
 mv bin/clang-format clang-format
+{% endif %}
 rm -rf bin
 EOF
 {% endblock %}
