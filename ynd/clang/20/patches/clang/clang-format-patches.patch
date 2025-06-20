@@ -1,0 +1,258 @@
+--- a/lib/Format/ContinuationIndenter.cpp
++++ b/lib/Format/ContinuationIndenter.cpp
+@@ -290,6 +290,12 @@ LineState ContinuationIndenter::getInitialState(unsigned FirstIndent,
+ bool ContinuationIndenter::canBreak(const LineState &State) {
+   const FormatToken &Current = *State.NextToken;
+   const FormatToken &Previous = *Current.Previous;
++
++  // Breaking after a comma should always be allowed.
++  if (Previous.is(tok::comma)) {
++    return true;
++  }
++
+   const auto &CurrentState = State.Stack.back();
+   assert(&Previous == Current.Previous);
+   if (!Current.CanBreakBefore && !(CurrentState.BreakBeforeClosingBrace &&
+@@ -360,9 +366,65 @@ bool ContinuationIndenter::canBreak(const LineState &State) {
+   return !State.NoLineBreak && !CurrentState.NoLineBreak;
+ }
+ 
++static bool possibleClassName(const FormatToken *Current) {
++    if (!Current) {
++        return false;
++    }
++
++    auto N = Current->Next;
++
++    if (!N) {
++        return false;
++    }
++
++    auto L = Current->TokenText[0];
++
++    if (L == 'T') {
++        if (N->isOneOf(tok::l_brace, TT_TemplateOpener)) {
++            return true;
++        }
++    }
++
++    if (L == 'T' || L == 'N') {
++        if (N->TokenText == "::") {
++            return possibleClassName(N->Next);
++        }
++    }
++
++    return false;
++}
++
++static bool shouldContinue(const FormatToken &Current, const LineState &State) {
++  if (Current.isOneOf(tok::l_brace, tok::r_brace)) {
++    return false;
++  }
++
++  // field initializer
++  if (Current.is(TT_DesignatedInitializerPeriod)) {
++    return false;
++  }
++
++  if (possibleClassName(&Current)) {
++    return false;
++  }
++
++  for (const auto& s : State.Stack) {
++    if (auto t = s.Tok; t && t->TokenText == "(") {
++      return true;
++    }
++  }
++
++  return false;
++}
++
+ bool ContinuationIndenter::mustBreak(const LineState &State) {
+   const FormatToken &Current = *State.NextToken;
+   const FormatToken &Previous = *Current.Previous;
++  if (Previous.TokenText == ",") {
++    if (shouldContinue(Current, State)) {
++      return false;
++    }
++  }
+   const auto &CurrentState = State.Stack.back();
+   if (Style.BraceWrapping.BeforeLambdaBody && Current.CanBreakBefore &&
+       Current.is(TT_LambdaLBrace) && Previous.isNot(TT_LineComment)) {
+@@ -693,6 +755,7 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
+         if (BlockParameterCount > 1)
+           return true;
+ 
++#if 0
+         // A lambda followed by another arg.
+         if (!PrevNonComment->Role)
+           return false;
+@@ -702,6 +765,8 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
+         auto Next = Comma->getNextNonComment();
+         return Next &&
+                !Next->isOneOf(TT_LambdaLSquare, tok::l_brace, tok::caret);
++#endif
++        return false;
+       }();
+ 
+   if (DisallowLineBreaksOnThisLine)
+
+--- a/lib/Format/TokenAnnotator.cpp
++++ b/lib/Format/TokenAnnotator.cpp
+@@ -1975,6 +1975,26 @@ private:
+     return false;
+   }
+ 
++  bool possibleTrailingArrowStart(FormatToken* Current) {
++    if (!Current) {
++      return false;
++    }
++
++    if (Current->isOneOf(tok::r_paren, tok::kw_const, tok::kw_volatile, tok::kw_mutable, tok::kw_noexcept)) {
++      return true;
++    }
++
++    if (Current->TokenText == "&") {
++      return true;
++    }
++
++    if (Current->TokenText == "&&") {
++      return true;
++    }
++
++    return false;
++  }
++
+   void determineTokenType(FormatToken &Current) {
+     if (Current.isNot(TT_Unknown)) {
+       // The token type is already known.
+@@ -2030,6 +2050,7 @@ private:
+       Current.setType(TT_BinaryOperator);
+     } else if (Current.is(tok::arrow) && AutoFound &&
+                Line.MightBeFunctionDecl && Current.NestingLevel == 0 &&
++               possibleTrailingArrowStart(Current.Previous) &&
+                !Current.Previous->isOneOf(tok::kw_operator, tok::identifier)) {
+       // not auto operator->() -> xxx;
+       Current.setType(TT_TrailingReturnArrow);
+@@ -3950,6 +3971,16 @@ bool TokenAnnotator::spaceRequiredBeforeParens(const FormatToken &Right) const {
+ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
+                                           const FormatToken &Left,
+                                           const FormatToken &Right) const {
++  if (Left.isOneOf(tok::kw_new, tok::kw_delete) &&
++      Right.is(tok::semi)) {
++    return false;
++  }
++  if (Left.isOneOf(tok::kw_new, tok::kw_delete) &&
++      Right.isNot(TT_OverloadedOperatorLParen) &&
++      Right.isNot(tok::l_square) && // Fixes `delete[] SomeObject;` turning into `delete [] SomeObject;`
++      !(Line.MightBeFunctionDecl && Left.is(TT_FunctionDeclarationName))) {
++    return true;
++  }
+   if (Left.is(tok::kw_return) &&
+       !Right.isOneOf(tok::semi, tok::r_paren, tok::hashhash)) {
+     return true;
+@@ -4401,6 +4432,20 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
+                                          const FormatToken &Right) const {
+   const FormatToken &Left = *Right.Previous;
+ 
++  if (Right.is(tok::colon)) {
++    auto n = Right.Next;
++
++    if (n && n->isOneOf(tok::kw_public, tok::kw_private, tok::kw_protected, tok::kw_virtual)) {
++      return Style.SpaceBeforeInheritanceColon;
++    }
++
++    auto p = Left.Previous;
++
++    if (p && p->isOneOf(tok::kw_class, tok::kw_struct, tok::kw_enum)) {
++      return Style.SpaceBeforeInheritanceColon;
++    }
++  }
++
+   // If the token is finalized don't touch it (as it could be in a
+   // clang-format-off section).
+   if (Left.Finalized)
+@@ -5599,14 +5599,53 @@ static bool isAllmanLambdaBrace(const FormatToken &Tok) {
+          !Tok.isOneOf(TT_ObjCBlockLBrace, TT_DictLiteral);
+ }
+ 
++template <class T>
++static const T* CalcPrev(const T* v, size_t n) noexcept {
++    while (v && n) {
++        v = v->Previous;
++        n -= 1;
++    }
++
++    return v;
++}
++
+ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
+                                      const FormatToken &Right) const {
+   const FormatToken &Left = *Right.Previous;
++
++  //llvm::errs() << Left.TokenText << " " << Right.TokenText << " " << Right.LastNewlineOffset << "\n";
++
+   if (Right.NewlinesBefore > 1 && Style.MaxEmptyLinesToKeep > 0 &&
+       (!Style.RemoveEmptyLinesInUnwrappedLines || &Right == Line.First)) {
+     return true;
+   }
+ 
++  if (Left.TokenText == "{" && Right.is(tok::identifier)) {
++    if (auto m = CalcPrev(&Left, 2); m && m->TokenText == "enum") {
++      return true;
++    }
++
++    if (auto m = CalcPrev(&Left, 4); m && m->TokenText == "enum") {
++      return true;
++    }
++  }
++
++  if (Left.TokenText == "}" && Right.TokenText == "{") {
++    return true;
++  }
++
++  if (Left.TokenText == ")" && Right.TokenText == "{") {
++    if (Right.LastNewlineOffset == 1) {
++      return true;
++    }
++
++    auto m = CalcPrev(Left.MatchingParen, 2);
++
++    if (m && m->isOneOf(TT_CtorInitializerComma, TT_CtorInitializerColon)) {
++      return true;
++    }
++  }
++
+   if (Style.BreakFunctionDefinitionParameters && Line.MightBeFunctionDecl &&
+       Line.mightBeFunctionDefinition() && Left.MightBeFunctionDeclParen &&
+       Left.ParameterCount > 0) {
+@@ -5414,6 +5498,9 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
+ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
+                                     const FormatToken &Right) const {
+   const FormatToken &Left = *Right.Previous;
++  if (Left.is(TT_AttributeMacro)) {
++    return false;
++  }
+   // Language-specific stuff.
+   if (Style.isCSharp()) {
+     if (Left.isOneOf(TT_CSharpNamedArgumentColon, TT_AttributeColon) ||
+--- a/lib/Format/UnwrappedLineParser.cpp
++++ b/lib/Format/UnwrappedLineParser.cpp
+@@ -2036,6 +2036,7 @@ void UnwrappedLineParser::parseStructuralElement(
+       }
+ 
+       // See if the following token should start a new unwrapped line.
++      auto isAttr = FormatTok->is(TT_AttributeMacro);
+       StringRef Text = FormatTok->TokenText;
+ 
+       FormatToken *PreviousToken = FormatTok;
+@@ -2047,7 +2047,7 @@ void UnwrappedLineParser::parseStructuralElement(
+         if (FollowedByNewline &&
+             (Text.size() >= 5 ||
+              (FunctionLike && FormatTok->isNot(tok::l_paren))) &&
+-            tokenCanStartNewLine(*FormatTok) && Text == Text.upper()) {
++            tokenCanStartNewLine(*FormatTok) && Text == Text.upper() && !isAttr) {
+           if (PreviousToken->isNot(TT_UntouchableMacroFunc))
+             PreviousToken->setFinalizedType(TT_FunctionLikeOrFreestandingMacro);
+           addUnwrappedLine();
+
