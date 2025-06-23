@@ -49,7 +49,8 @@ void TaxiAsyncUseAfterFreeCheck::check(const MatchFinder::MatchResult& Result) {
         if (!Capture.capturesVariable() || Capture.getCaptureKind() != LCK_ByRef) continue;
 
         const ValueDecl* CapturedVarDecl = Capture.getCapturedVar();
-        if (CapturedVarDecl->getType()->isLValueReferenceType()) continue;
+        if (CapturedVarDecl->getType().getCanonicalType()->isLValueReferenceType()) continue;
+        if (CapturedVarDecl->getType().getCanonicalType()->isRValueReferenceType()) continue;
 
         if (CapturedVarDecl->getLocation() >= TasksLocation) {
             diag(Capture.getLocation(), "variable can be used after free");
