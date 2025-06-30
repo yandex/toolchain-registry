@@ -30,7 +30,8 @@ def parse_args_1(argv, rest):
     return args
 
 def parse_args_max(argv):
-    for l in reversed(range(0, len(argv) + 1)):
+    UPPER_BOUND = 50
+    for l in reversed(range(0, min(UPPER_BOUND, len(argv) + 1))):
         try:
             return parse_args_1(argv[:l], argv[l:])
         except Exception:
