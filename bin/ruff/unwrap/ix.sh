@@ -1,11 +1,11 @@
 {% extends '//ext/ix/pkgs/bin/ruff/unwrap/ix.sh' %}
 
 {% block version %}
-0.12.0
+0.12.1
 {% endblock %}
 
 {% block cargo_sha %}
-56ccbf0c506c604439e06f9f7c12a2031dc7d831dee33b312bb182dd85e4cd2e
+d3379afa5c27ac23fa9ba8413efb765c69a8fe7fe8cb8c12ce8f49a79a931081
 {% endblock %}
 
 {% block cargoc_ver %}
