@@ -1,23 +1,23 @@
 {% extends '//die/std/ix.sh' %}
 
 {% block go_version %}
-1.25rc1
+1.25rc2
 {% endblock %}
 
 {#
-curl 'https://go.dev/dl/?mode=json&include=all' | jq '.[] | select(.version=="go1.25rc1") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | .filename, .sha256, ""'
+curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version=="go1.25rc2") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | "", .filename, .sha256'
 #}
 {% block archive_hash %}
 {% if linux and x86_64 %}
-    7588a720e243e4672e0dc1c7942ec7592d480a80440fa2829be8b22c9c44a5b7
+    efcd3a151b174ffebde86b9d391ad59084300a4c5e9ea8c1d5dff90bbac38820
 {% elif linux and aarch64 %}
-    ee0b82bc1421c66f3f322a214218b423beddb64182e0105dbff142e777e96fc1
+    e9a077cef12d5c4a82df6d85a76f5bb7a4abd69c7d0fbab89d072591ef219ed3
 {% elif darwin and x86_64 %}
-    1c0ba988b1457f845bcb3d7efedf4f2fed072fc0d5cad64b90091513df9530d5
+    a09e19acff22863dfad464aee1b8b83689b75b233d65406b1d9e63d1dea21296
 {% elif darwin and arm64 %}
-    8df00c64e37e13270add03560ba2f11a7e2c498ae1e122065f694d79682c05d4
+    995979864ed7a80a81fc5c20381da9973f8528f3776ddcebf542d888e72991d2
 {% elif mingw32 %}
-    0879e884a1300034f7ae48180b12a9fedec861c2c2f94b9af4b6604cf06cc9d7
+    f0dadd0cdebbf56ad4ae7a010a5e980b64d6e4ddd13d6d294c0dad9e42285d09
 {% endif %}
 {% endblock %}
 
