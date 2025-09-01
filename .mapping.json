@@ -58,7 +58,6 @@
   "ynd/bin/llvm-profdata/19/ix.sh":"toolchains/ynd/bin/llvm-profdata/19/ix.sh",
   "ynd/bin/llvm-profdata/ix.sh":"toolchains/ynd/bin/llvm-profdata/ix.sh",
   "ynd/bin/yq/ix.sh":"toolchains/ynd/bin/yq/ix.sh",
-  "ynd/clang-format/16/ix.sh":"toolchains/ynd/clang-format/16/ix.sh",
   "ynd/clang-format/18/ix.sh":"toolchains/ynd/clang-format/18/ix.sh",
   "ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.cpp":"toolchains/ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.cpp",
   "ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.h":"toolchains/ynd/clang-tidy/18/checks/ascii_compare_ignore_case_check.h",
