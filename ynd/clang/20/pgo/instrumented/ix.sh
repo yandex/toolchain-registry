@@ -2,15 +2,13 @@
 
 {% block bld_libs %}
 {{super()}}
-ynd/lib/compiler_rt/profile/20
+ynd/lib/compiler_rt/profile/19
 {% endblock %}
 
 {% block cmake_flags %}
 {{super()}}
 LLVM_ENABLE_PROJECTS="clang"
-LLVM_ENABLE_LTO=Thin
-LLVM_BUILD_INSTRUMENTED=CSIR
-LLVM_BUILD_RUNTIME=NO
+LLVM_BUILD_INSTRUMENTED=ON
 {% endblock %}
 
 {% block llvm_targets %}
@@ -25,7 +23,7 @@ rm -rf ${out}/lib
 {% endblock %}
 
 {% block env %}
-export PROFILES_DIR={{ninja_build_dir}}/csprofiles
+export PROFILES_DIR={{ninja_build_dir}}/profiles
 {{super()}}
 {% endblock %}
 
