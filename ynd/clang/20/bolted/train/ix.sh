@@ -1,5 +1,7 @@
 {% extends '//clang/20/template.sh' %}
 
+{% set clang_ver=20 %}
+
 {% block bld_tool %}
 {{super()}}
 bin/perf
