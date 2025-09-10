@@ -33,3 +33,24 @@ rm -rf ${out}/perf.data ${out}/bolt.fdata ${out}/clang-20
 {% block env %}
 export MERGED_BOLT_PROFILE=${out}/bolt.prof
 {% endblock %}
+
+{# for correct work 'perf record' we need to break 'jail' #}
+
+{% block script_confine %}
+{% if jail or tmpfs %}
+{% elif stalix %}
+  {% if isfile('/bin/confine') %}
+    /ix/realm/system/bin/confine
+    {{ix_dir}}
+  {% endif %}
+  {% if skipsrc or skipsrc_one %}
+  {% elif isfile('/bin/tmpfs') %}
+    /ix/realm/system/bin/tmpfs
+    {{ix_dir}}
+  {% endif %}
+{% endif %}
+{% block script_parts %}
+sh
+-s
+{% endblock %}
+{% endblock %}
