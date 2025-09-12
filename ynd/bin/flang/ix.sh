@@ -6,6 +6,10 @@ LLVM_ENABLE_PROJECTS="clang;flang"
 CMAKE_CROSSCOMPILING=NO
 {% endblock %}
 
+{% block common_patches %}
+fix-flang-build-win32.patch
+{% endblock %}
+
 {% block llvm_targets %}
 flang
 {% endblock %}
