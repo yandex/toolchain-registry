@@ -2,7 +2,7 @@
 
 {% block cmake_flags %}
 {{super()}}
-LLVM_ENABLE_PROJECTS="flang"
+LLVM_ENABLE_PROJECTS="clang;flang"
 {% endblock %}
 
 {% block llvm_targets %}
