@@ -52,6 +52,10 @@ void TaxiAsyncUseAfterFreeCheck::check(const MatchFinder::MatchResult& Result) {
         if (CapturedVarDecl->getType().getCanonicalType()->isLValueReferenceType()) continue;
         if (CapturedVarDecl->getType().getCanonicalType()->isRValueReferenceType()) continue;
 
+        if (const auto* BD = llvm::dyn_cast<BindingDecl>(CapturedVarDecl)) {
+            continue;
+        }
+
         if (CapturedVarDecl->getLocation() >= TasksLocation) {
             diag(Capture.getLocation(), "variable can be used after free");
             diag(CapturedVarDecl->getLocation(), "variable was declared here", DiagnosticIDs::Level::Note);
