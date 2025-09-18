@@ -1,9 +1,8 @@
-{% extends '//clang/18/template.sh' %}
-
+{% extends '//clang/20/template.sh' %}
 
 {% block bld_deps %}
 {{super()}}
-//clang/18
+//clang/20
 {% endblock %}
 
 {% block llvm_targets %}
@@ -49,7 +48,7 @@ dont-triggers-on-class-decls.patch
 
 {% for p in self.tidy_patches().strip().split() %}
 (base64 -d | patch -p1) << EOF
-{{ix.load_file('//clang-tidy/18/patches/' + p) | b64e}}
+{{ix.load_file('//clang-tidy/20/patches/' + p) | b64e}}
 EOF
 {% endfor %}
 
@@ -110,7 +109,7 @@ EOF
 
 # Register clang-static-analyzer
 base64 -d << EOF >> ${tmp}/src/clang/include/clang/StaticAnalyzer/Checkers/Checkers.td
-{{ix.load_file('//clang-tidy/18/patches/options.td') | b64e }}
+{{ix.load_file('//clang-tidy/20/patches/options.td') | b64e }}
 EOF
 
 {% endblock %}
