@@ -1,7 +1,7 @@
 {% extends '//bin/clang/t/t/ix.sh' %}
 
 {% block fetch %}
-{% include '//lib/llvm/20/ver.sh' %}
+{% include '//ynd/lib/llvm/20/ver.sh' %}
 {% endblock %}
 
 {% block bld_libs %}

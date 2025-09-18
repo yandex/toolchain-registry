@@ -1,5 +1,9 @@
 {% extends '//bin/clang/20/ix.sh' %}
 
+{% block fetch %}
+{% include '//ynd/lib/llvm/20/ver.sh' %}
+{% endblock %}
+
 {% block cmake_flags %}
 {{super()}}
 {% if linux and x86_64 %}
