@@ -155,6 +155,7 @@
   "ynd/clang/20/patches/clang/clang-format-patches.patch":"toolchains/ynd/clang/20/patches/clang/clang-format-patches.patch",
   "ynd/clang/20/patches/clang/clang-xstring.patch":"toolchains/ynd/clang/20/patches/clang/clang-xstring.patch",
   "ynd/clang/20/patches/clang/fix-flang-build-win32.patch":"toolchains/ynd/clang/20/patches/clang/fix-flang-build-win32.patch",
+  "ynd/clang/20/patches/clang/llvm-21-mmacosx-version-min.patch":"toolchains/ynd/clang/20/patches/clang/llvm-21-mmacosx-version-min.patch",
   "ynd/clang/20/patches/clang/yt-specific-options.patch":"toolchains/ynd/clang/20/patches/clang/yt-specific-options.patch",
   "ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch",
   "ynd/clang/20/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/20/patches/llvm/vfs-case-insensitive.patch",

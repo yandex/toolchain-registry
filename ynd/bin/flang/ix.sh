@@ -8,6 +8,7 @@ CMAKE_CROSSCOMPILING=NO
 
 {% block common_patches %}
 fix-flang-build-win32.patch
+llvm-21-mmacosx-version-min.patch
 {% endblock %}
 
 {% block llvm_targets %}
