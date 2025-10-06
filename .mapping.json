@@ -34,6 +34,8 @@
   "ynd/bin/bolt/0.diff":"toolchains/ynd/bin/bolt/0.diff",
   "ynd/bin/bolt/19/ix.sh":"toolchains/ynd/bin/bolt/19/ix.sh",
   "ynd/bin/bolt/20/ix.sh":"toolchains/ynd/bin/bolt/20/ix.sh",
+  "ynd/bin/bolt/20/patches/01-pr-151927.patch":"toolchains/ynd/bin/bolt/20/patches/01-pr-151927.patch",
+  "ynd/bin/bolt/20/patches/02-pr-151923.patch":"toolchains/ynd/bin/bolt/20/patches/02-pr-151923.patch",
   "ynd/bin/bolt/ix.sh":"toolchains/ynd/bin/bolt/ix.sh",
   "ynd/bin/flang/ix.sh":"toolchains/ynd/bin/flang/ix.sh",
   "ynd/bin/frozen-python3/ix.sh":"toolchains/ynd/bin/frozen-python3/ix.sh",

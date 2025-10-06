@@ -1,0 +1,51 @@
+Subject: [PATCH] [BOLT] Don't emit invalid (gdb-breaking) address ranges in gdb-index (#151923)
+---
+Index: bolt/lib/Core/GDBIndex.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/bolt/lib/Core/GDBIndex.cpp b/bolt/lib/Core/GDBIndex.cpp
+--- a/bolt/lib/Core/GDBIndex.cpp	(revision 95386cc8961de840fc712619fa140aa594273dae)
++++ b/bolt/lib/Core/GDBIndex.cpp	(revision cccc9d32219dc788e1948f12e500002e03f6a668)
+@@ -100,10 +100,19 @@
+   Data += SymbolTableOffset - CUTypesOffset;
+ 
+   // Calculate the size of the new address table.
++  const auto IsValidAddressRange = [](const DebugAddressRange &Range) {
++    return Range.HighPC > Range.LowPC;
++  };
++
+   uint32_t NewAddressTableSize = 0;
+   for (const auto &CURangesPair : ARangesSectionWriter.getCUAddressRanges()) {
+     const SmallVector<DebugAddressRange, 2> &Ranges = CURangesPair.second;
+-    NewAddressTableSize += Ranges.size() * 20;
++    NewAddressTableSize +=
++        llvm::count_if(Ranges,
++                       [&IsValidAddressRange](const DebugAddressRange &Range) {
++                         return IsValidAddressRange(Range);
++                       }) *
++        20;
+   }
+ 
+   // Difference between old and new table (and section) sizes.
+@@ -201,10 +210,15 @@
+     const uint32_t UpdatedCUIndex = RemapCUIndex(OriginalCUIndex);
+     const DebugAddressRangesVector &Ranges = CURangesPair.second;
+     for (const DebugAddressRange &Range : Ranges) {
+-      write64le(Buffer, Range.LowPC);
+-      write64le(Buffer + 8, Range.HighPC);
+-      write32le(Buffer + 16, UpdatedCUIndex);
+-      Buffer += 20;
++      // Don't emit ranges that break gdb,
++      // https://sourceware.org/bugzilla/show_bug.cgi?id=33247.
++      // We've seen [0, 0) ranges here, for instance.
++      if (IsValidAddressRange(Range)) {
++        write64le(Buffer, Range.LowPC);
++        write64le(Buffer + 8, Range.HighPC);
++        write32le(Buffer + 16, UpdatedCUIndex);
++        Buffer += 20;
++      }
+     }
+   }
+ 

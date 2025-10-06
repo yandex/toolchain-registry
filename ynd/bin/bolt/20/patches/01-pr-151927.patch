@@ -1,0 +1,361 @@
+From 78ce26965bb15a197d73a1d7ce7d5fbfb37c70da Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Mon, 4 Aug 2025 12:07:11 +0300
+Subject: [PATCH 1/6] [BOLT] Fix possibly incorrect CU-indicies in gdb-index
+
+---
+ bolt/lib/Core/GDBIndex.cpp | 75 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 73 insertions(+), 2 deletions(-)
+
+diff --git a/bolt/lib/Core/GDBIndex.cpp b/bolt/lib/Core/GDBIndex.cpp
+index c7fb4889646b4..0fe1c5de94138 100644
+--- a/bolt/lib/Core/GDBIndex.cpp
++++ b/bolt/lib/Core/GDBIndex.cpp
+@@ -130,6 +130,26 @@ void GDBIndex::updateGdbIndexSection(
+             [](const MapEntry &E1, const MapEntry &E2) -> bool {
+               return E1.second.Offset < E2.second.Offset;
+             });
++  // Create the original CU index -> updated CU index mapping,
++  // as the sort above could've changed the order and we have to update
++  // indexes correspondingly in address map and constant pool.
++  std::unordered_map<uint32_t, uint32_t> OriginalCUIndexToUpdatedCUIndexMap;
++  OriginalCUIndexToUpdatedCUIndexMap.reserve(CUVector.size());
++  for (uint32_t I = 0; I < CUVector.size(); ++I) {
++    OriginalCUIndexToUpdatedCUIndexMap[OffsetToIndexMap.at(CUVector[I].first)] =
++        I;
++  }
++  const auto RemapCUIndex =
++      [&OriginalCUIndexToUpdatedCUIndexMap](uint32_t OriginalIndex) {
++        const auto it = OriginalCUIndexToUpdatedCUIndexMap.find(OriginalIndex);
++        if (it == OriginalCUIndexToUpdatedCUIndexMap.end()) {
++          errs() << "BOLT-ERROR: .gdb_index unknown CU index\n";
++          exit(1);
++        }
++
++        return it->second;
++      };
++
+   // Writing out CU List <Offset, Size>
+   for (auto &CUInfo : CUVector) {
+     // Skipping TU for DWARF5 when they are not included in CU list.
+@@ -160,12 +180,13 @@ void GDBIndex::updateGdbIndexSection(
+   // Generate new address table.
+   for (const std::pair<const uint64_t, DebugAddressRangesVector> &CURangesPair :
+        ARangesSectionWriter.getCUAddressRanges()) {
+-    const uint32_t CUIndex = OffsetToIndexMap[CURangesPair.first];
++    const uint32_t OriginalCUIndex = OffsetToIndexMap[CURangesPair.first];
++    const uint32_t UpdatedCUIndex = RemapCUIndex(OriginalCUIndex);
+     const DebugAddressRangesVector &Ranges = CURangesPair.second;
+     for (const DebugAddressRange &Range : Ranges) {
+       write64le(Buffer, Range.LowPC);
+       write64le(Buffer + 8, Range.HighPC);
+-      write32le(Buffer + 16, CUIndex);
++      write32le(Buffer + 16, UpdatedCUIndex);
+       Buffer += 20;
+     }
+   }
+@@ -178,6 +199,56 @@ void GDBIndex::updateGdbIndexSection(
+   // Copy over the rest of the original data.
+   memcpy(Buffer, Data, TrailingSize);
+
++  // Fixup CU-indicies in constant pool.
++  const char *const OriginalConstantPoolData =
++      GdbIndexContents.data() + ConstantPoolOffset;
++  uint8_t *const UpdatedConstantPoolData =
++      NewGdbIndexContents + ConstantPoolOffset + Delta;
++
++  const char *OriginalSymbolTableData =
++      GdbIndexContents.data() + SymbolTableOffset;
++  std::set<uint32_t> CUVectorOffsets;
++  // Parse the symbol map and extract constant pool CU offsets from it.
++  while (OriginalSymbolTableData < OriginalConstantPoolData) {
++    const uint32_t NameOffset = read32le(OriginalSymbolTableData);
++    const uint32_t CUVectorOffset = read32le(OriginalSymbolTableData + 4);
++    OriginalSymbolTableData += 8;
++
++    // Iff both are zero, then the slot is considered empty in the hash-map.
++    if (NameOffset || CUVectorOffset) {
++      CUVectorOffsets.insert(CUVectorOffset);
++    }
++  }
++
++  // Update the CU-indicies in the constant pool
++  for (const auto CUVectorOffset : CUVectorOffsets) {
++    const char *CurrentOriginalConstantPoolData =
++        OriginalConstantPoolData + CUVectorOffset;
++    uint8_t *CurrentUpdatedConstantPoolData =
++        UpdatedConstantPoolData + CUVectorOffset;
++
++    const uint32_t Num = read32le(CurrentOriginalConstantPoolData);
++    CurrentOriginalConstantPoolData += 4;
++    CurrentUpdatedConstantPoolData += 4;
++
++    for (uint32_t J = 0; J < Num; ++J) {
++      const uint32_t OriginalCUIndexAndAttributes =
++          read32le(CurrentOriginalConstantPoolData);
++      CurrentOriginalConstantPoolData += 4;
++
++      // We only care for the index, which is the lowest 24 bits, other bits are
++      // left as is.
++      const uint32_t OriginalCUIndex =
++          OriginalCUIndexAndAttributes & ((1 << 24) - 1);
++      const uint32_t Attributes = OriginalCUIndexAndAttributes >> 24;
++      const uint32_t UpdatedCUIndexAndAttributes =
++          RemapCUIndex(OriginalCUIndex) | (Attributes << 24);
++
++      write32le(CurrentUpdatedConstantPoolData, UpdatedCUIndexAndAttributes);
++      CurrentUpdatedConstantPoolData += 4;
++    }
++  }
++
+   // Register the new section.
+   BC.registerOrUpdateNoteSection(".gdb_index", NewGdbIndexContents,
+                                  NewGdbIndexSize);
+
+From e7880538e7911cfe2d502f1628d4f48ce9080467 Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Mon, 4 Aug 2025 12:17:12 +0300
+Subject: [PATCH 2/6] typo fixes
+
+---
+ bolt/lib/Core/GDBIndex.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bolt/lib/Core/GDBIndex.cpp b/bolt/lib/Core/GDBIndex.cpp
+index 0fe1c5de94138..fbbbac1ee910f 100644
+--- a/bolt/lib/Core/GDBIndex.cpp
++++ b/bolt/lib/Core/GDBIndex.cpp
+@@ -132,7 +132,7 @@ void GDBIndex::updateGdbIndexSection(
+             });
+   // Create the original CU index -> updated CU index mapping,
+   // as the sort above could've changed the order and we have to update
+-  // indexes correspondingly in address map and constant pool.
++  // indices correspondingly in address map and constant pool.
+   std::unordered_map<uint32_t, uint32_t> OriginalCUIndexToUpdatedCUIndexMap;
+   OriginalCUIndexToUpdatedCUIndexMap.reserve(CUVector.size());
+   for (uint32_t I = 0; I < CUVector.size(); ++I) {
+@@ -199,7 +199,7 @@ void GDBIndex::updateGdbIndexSection(
+   // Copy over the rest of the original data.
+   memcpy(Buffer, Data, TrailingSize);
+
+-  // Fixup CU-indicies in constant pool.
++  // Fixup CU-indices in constant pool.
+   const char *const OriginalConstantPoolData =
+       GdbIndexContents.data() + ConstantPoolOffset;
+   uint8_t *const UpdatedConstantPoolData =
+
+From 82a7610e46daec7e2f23b047875af14256d77057 Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Mon, 4 Aug 2025 20:45:11 +0300
+Subject: [PATCH 3/6] fix the remapping logic for skipped CUs and indices into
+ CU TU List
+
+---
+ bolt/lib/Core/GDBIndex.cpp | 40 ++++++++++++++++++++++++++------------
+ 1 file changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/bolt/lib/Core/GDBIndex.cpp b/bolt/lib/Core/GDBIndex.cpp
+index fbbbac1ee910f..95d016292df86 100644
+--- a/bolt/lib/Core/GDBIndex.cpp
++++ b/bolt/lib/Core/GDBIndex.cpp
+@@ -125,6 +125,14 @@ void GDBIndex::updateGdbIndexSection(
+
+   using MapEntry = std::pair<uint32_t, CUInfo>;
+   std::vector<MapEntry> CUVector(CUMap.begin(), CUMap.end());
++  // Remove the CUs we won't emit anyway.
++  CUVector.erase(std::remove_if(CUVector.begin(), CUVector.end(),
++                                [&OriginalOffsets](const MapEntry &It) {
++                                  // Skipping TU for DWARF5 when they are not
++                                  // included in CU list.
++                                  return OriginalOffsets.count(It.first) == 0;
++                                }),
++                 CUVector.end());
+   // Need to sort since we write out all of TUs in .debug_info before CUs.
+   std::sort(CUVector.begin(), CUVector.end(),
+             [](const MapEntry &E1, const MapEntry &E2) -> bool {
+@@ -139,22 +147,30 @@ void GDBIndex::updateGdbIndexSection(
+     OriginalCUIndexToUpdatedCUIndexMap[OffsetToIndexMap.at(CUVector[I].first)] =
+         I;
+   }
+-  const auto RemapCUIndex =
+-      [&OriginalCUIndexToUpdatedCUIndexMap](uint32_t OriginalIndex) {
+-        const auto it = OriginalCUIndexToUpdatedCUIndexMap.find(OriginalIndex);
+-        if (it == OriginalCUIndexToUpdatedCUIndexMap.end()) {
+-          errs() << "BOLT-ERROR: .gdb_index unknown CU index\n";
+-          exit(1);
+-        }
++  const auto RemapCUIndex = [&OriginalCUIndexToUpdatedCUIndexMap,
++                             CUVectorSize = CUVector.size(),
++                             TUVectorSize = getGDBIndexTUEntryVector().size()](
++                                uint32_t OriginalIndex) {
++    if (OriginalIndex >= CUVectorSize) {
++      if (OriginalIndex >= CUVectorSize + TUVectorSize) {
++        errs() << "BOLT-ERROR: .gdb_index unknown CU index\n";
++        exit(1);
++      }
++      // The index is into TU CU List, which we don't reorder, so return as is.
++      return OriginalIndex;
++    }
+
+-        return it->second;
+-      };
++    const auto It = OriginalCUIndexToUpdatedCUIndexMap.find(OriginalIndex);
++    if (It == OriginalCUIndexToUpdatedCUIndexMap.end()) {
++      errs() << "BOLT-ERROR: .gdb_index unknown CU index\n";
++      exit(1);
++    }
++
++    return It->second;
++  };
+
+   // Writing out CU List <Offset, Size>
+   for (auto &CUInfo : CUVector) {
+-    // Skipping TU for DWARF5 when they are not included in CU list.
+-    if (!OriginalOffsets.count(CUInfo.first))
+-      continue;
+     write64le(Buffer, CUInfo.second.Offset);
+     // Length encoded in CU doesn't contain first 4 bytes that encode length.
+     write64le(Buffer + 8, CUInfo.second.Length + 4);
+
+From c9cb15e738ca86c90d25e259446ae948627554d9 Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Tue, 5 Aug 2025 11:46:58 +0300
+Subject: [PATCH 4/6] fix calculation of OffsetToIndexMap
+
+---
+ bolt/lib/Core/GDBIndex.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/bolt/lib/Core/GDBIndex.cpp b/bolt/lib/Core/GDBIndex.cpp
+index 95d016292df86..7ccbd2e50db68 100644
+--- a/bolt/lib/Core/GDBIndex.cpp
++++ b/bolt/lib/Core/GDBIndex.cpp
+@@ -77,7 +77,8 @@ void GDBIndex::updateGdbIndexSection(
+     exit(1);
+   }
+   DenseSet<uint64_t> OriginalOffsets;
+-  for (unsigned Index = 0, Units = BC.DwCtx->getNumCompileUnits();
++  for (unsigned Index = 0, PresentUnitsIndex = 0,
++                Units = BC.DwCtx->getNumCompileUnits();
+        Index < Units; ++Index) {
+     const DWARFUnit *CU = BC.DwCtx->getUnitAtIndex(Index);
+     if (SkipTypeUnits && CU->isTypeUnit())
+@@ -90,7 +91,7 @@ void GDBIndex::updateGdbIndexSection(
+     }
+
+     OriginalOffsets.insert(Offset);
+-    OffsetToIndexMap[Offset] = Index;
++    OffsetToIndexMap[Offset] = PresentUnitsIndex++;
+   }
+
+   // Ignore old address table.
+
+From c0be916c2924f737e2246ef2d2ca7ba3ebcb972f Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Tue, 5 Aug 2025 12:48:31 +0300
+Subject: [PATCH 5/6] fix tests pt.1
+
+---
+ .../dwarf5-dwarf4-gdb-index-types-gdb-generated-gdb11.test    | 4 ++--
+ .../test/X86/dwarf5-dwarf4-gdb-index-types-lld-generated.test | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-gdb-generated-gdb11.test b/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-gdb-generated-gdb11.test
+index 465062560d4fc..9b20325bd1fab 100644
+--- a/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-gdb-generated-gdb11.test
++++ b/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-gdb-generated-gdb11.test
+@@ -18,9 +18,9 @@
+ # POSTCHECK-NEXT:       1: offset = 0x00000000, type_offset = 0x0000001e, type_signature = 0x00f6cca4e3a15118
+ # POSTCHECK:          Address area offset = 0x68, has 2 entries
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR:]],
+-# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 1
++# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 0
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR1:]],
+-# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 2
++# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 1
+ # POSTCHECK:          Symbol table offset = 0x90, size = 1024, filled slots
+ # POSTCHECK-NEXT:       2: Name offset = 0x20, CU vector offset = 0x0
+ # POSTCHECK-NEXT:         String name: S, CU vector index: 0
+diff --git a/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-lld-generated.test b/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-lld-generated.test
+index 7589bfac57f58..e70bc89c42e22 100644
+--- a/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-lld-generated.test
++++ b/bolt/test/X86/dwarf5-dwarf4-gdb-index-types-lld-generated.test
+@@ -15,9 +15,9 @@
+ # POSTCHECK:          Types CU list offset = 0x38, has 0 entries
+ # POSTCHECK:          Address area offset = 0x38, has 2 entries
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR:]],
+-# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 1
++# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 0
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR1:]],
+-# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 2
++# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 1
+ # POSTCHECK:          Symbol table offset = 0x60, size = 1024, filled slots
+ # POSTCHECK-NEXT:         2: Name offset = 0x38, CU vector offset = 0x0
+ # POSTCHECK-NEXT:             String name: S, CU vector index: 0
+
+From 11fc708c0f9db2d28a019a3d81fa36be8b10bbaa Mon Sep 17 00:00:00 2001
+From: Ivan Trofimov <i.trofimow@yandex.ru>
+Date: Tue, 5 Aug 2025 13:21:38 +0300
+Subject: [PATCH 6/6] fix the tests pt.2
+
+---
+ .../X86/dwarf5-gdb-index-types-gdb-generated-gdb11.test     | 4 ++--
+ .../test/X86/dwarf5-gdb-index-types-gdb-generated-gdb9.test | 6 +++---
+ bolt/test/X86/dwarf5-gdb-index-types-lld-generated.test     | 4 ++--
+ 3 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb11.test b/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb11.test
+index 139b24afa1b0d..2426f240ad11c 100644
+--- a/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb11.test
++++ b/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb11.test
+@@ -18,9 +18,9 @@
+ # POSTCHECK-NEXT:       1: offset = 0x00000040, type_offset = 0x00000023, type_signature = 0x00f6cca4e3a15118
+ # POSTCHECK:          Address area offset = 0x68, has 2 entries
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR:]],
+-# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 1
++# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 0
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR1:]],
+-# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 3
++# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 1
+ # POSTCHECK:          Symbol table offset = 0x90, size = 1024, filled slots
+ # POSTCHECK-NEXT:       2: Name offset = 0x28, CU vector offset = 0x0
+ # POSTCHECK-NEXT:         String name: S, CU vector index: 0
+diff --git a/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb9.test b/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb9.test
+index 26ee101e9d1d1..b67c5b28e7ce9 100644
+--- a/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb9.test
++++ b/bolt/test/X86/dwarf5-gdb-index-types-gdb-generated-gdb9.test
+@@ -20,7 +20,7 @@
+ # POSTCHECK-NEXT:       1: offset = 0x00000040, type_offset = 0x00000023, type_signature = 0x00f6cca4e3a15118
+ # POSTCHECK:          Address area offset = 0x88, has 2 entries
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR:]],
+-# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 1
++# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 2
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR1:]],
+ # POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 3
+ # POSTCHECK:          Symbol table offset = 0xb0, size = 1024, filled slots
+@@ -37,7 +37,7 @@
+ # POSTCHECK-NEXT:       754: Name offset = 0x43, CU vector offset = 0x0
+ # POSTCHECK-NEXT:         String name: int, CU vector index: 0
+ # POSTCHECK:          Constant pool offset = 0x20b0, has 5 CU vectors
+-# POSTCHECK-NEXT:       0(0x0): 0x90000001
++# POSTCHECK-NEXT:       0(0x0): 0x90000002
+ # POSTCHECK-NEXT:       1(0x8): 0x90000003
+-# POSTCHECK-NEXT:       2(0x10): 0x30000001
++# POSTCHECK-NEXT:       2(0x10): 0x30000002
+ # POSTCHECK-NEXT:       3(0x18): 0x30000003
+diff --git a/bolt/test/X86/dwarf5-gdb-index-types-lld-generated.test b/bolt/test/X86/dwarf5-gdb-index-types-lld-generated.test
+index 731c560133399..740f199d14042 100644
+--- a/bolt/test/X86/dwarf5-gdb-index-types-lld-generated.test
++++ b/bolt/test/X86/dwarf5-gdb-index-types-lld-generated.test
+@@ -15,9 +15,9 @@
+ # POSTCHECK:          Types CU list offset = 0x38, has 0 entries
+ # POSTCHECK:          Address area offset = 0x38, has 2 entries
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR:]],
+-# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 1
++# POSTCHECK-SAME:           0x[[#ADDR + 0xf]]) (Size: 0xf), CU id = 0
+ # POSTCHECK-NEXT:         Low/High address = [0x[[#%.4x,ADDR1:]],
+-# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 3
++# POSTCHECK-SAME:           0x[[#ADDR1 + 0xd]]) (Size: 0xd), CU id = 1
+ # POSTCHECK:          Symbol table offset = 0x60, size = 1024, filled slots
+ # POSTCHECK-NEXT:         2: Name offset = 0x38, CU vector offset = 0x0
+ # POSTCHECK-NEXT:             String name: S, CU vector index: 0
