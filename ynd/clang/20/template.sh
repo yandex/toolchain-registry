@@ -41,6 +41,7 @@ D21113-case-insesitive-include-paths.patch
 {% endblock %}
 
 {% block llvm_patches %}
+01-PR159119-backport-mcdc-executed-test-vectors.patch
 vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 {% endblock %}
