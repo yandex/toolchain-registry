@@ -1,4 +1,4 @@
-{% extends '//bin/gdb/reloc/14/ix.sh' %}
+{% extends '//bin/gdb/reloc/16/ix.sh' %}
 
 {% block gdb_args %}--eval-command="source \${p2}/share/gdb/python/arc/__init__.py" --data-directory=\${p2}/share/gdb{% endblock %}
 
@@ -25,7 +25,7 @@ cd ${out}/share/gdb/python
 mkdir arc; cd arc
 {% for pp in self.pretty_printers().strip().split() %}
 base64 -d << EOF > {{pp}}
-{{ix.load_file('../../bin/gdb/pretty_printers/' + pp) | b64e}}
+{{ix.load_file('../pretty_printers/' + pp) | b64e}}
 EOF
 {% endfor %}
 
