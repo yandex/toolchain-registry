@@ -37,6 +37,7 @@
   "ynd/bin/bolt/20/patches/01-pr-151927.patch":"toolchains/ynd/bin/bolt/20/patches/01-pr-151927.patch",
   "ynd/bin/bolt/20/patches/02-pr-151923.patch":"toolchains/ynd/bin/bolt/20/patches/02-pr-151923.patch",
   "ynd/bin/bolt/ix.sh":"toolchains/ynd/bin/bolt/ix.sh",
+  "ynd/bin/compiler/huge_stack/ix.sh":"toolchains/ynd/bin/compiler/huge_stack/ix.sh",
   "ynd/bin/flang/ix.sh":"toolchains/ynd/bin/flang/ix.sh",
   "ynd/bin/frozen-python3/ix.sh":"toolchains/ynd/bin/frozen-python3/ix.sh",
   "ynd/bin/frozen-python3/unwrap/ix.sh":"toolchains/ynd/bin/frozen-python3/unwrap/ix.sh",

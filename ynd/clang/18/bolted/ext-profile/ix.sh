@@ -1,6 +1,7 @@
 {% extends '//clang/18/template.sh' %}
 
 {% block bld_tool %}
+ynd/bin/compiler/huge_stack
 {{super()}}
 bin/bolt/19
 {% endblock %}
