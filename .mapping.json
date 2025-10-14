@@ -170,6 +170,7 @@
   "ynd/lib/compiler_rt/profile/19/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/19/ix.sh",
   "ynd/lib/compiler_rt/profile/20/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/20/ix.sh",
   "ynd/lib/compiler_rt/profile/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/ix.sh",
+  "ynd/lib/llvm/20/tblgen/ix.sh":"toolchains/ynd/lib/llvm/20/tblgen/ix.sh",
   "ynd/lib/llvm/20/ver.sh":"toolchains/ynd/lib/llvm/20/ver.sh",
   "ynd/lib/xml2/0.diff":"toolchains/ynd/lib/xml2/0.diff",
   "ynd/lib/xml2/ix.sh":"toolchains/ynd/lib/xml2/ix.sh"
