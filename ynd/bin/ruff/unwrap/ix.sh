@@ -1,11 +1,11 @@
 {% extends '//bin/ruff/unwrap/ix.sh' %}
 
 {% block version %}
-0.14.0
+0.13.0
 {% endblock %}
 
 {% block cargo_sha %}
-9701d24322802e2ce66fd9d9929faf04c5b34d7b7a99f8cf1e4157bcce4fd07b
+3238859a723e88d79c8f57a07d68584edfe3abce452922b7631676cb547b6637
 {% endblock %}
 
 {% block bld_tool %}
@@ -18,4 +18,8 @@ bld/compiler
 ln -s $(which llvm-objcopy) rust-objcopy
 {% endif %}
 {{super()}}
+{% endblock %}
+
+{% block cargo_tool %}
+bld/rust/87
 {% endblock %}
