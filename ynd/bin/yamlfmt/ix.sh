@@ -46,7 +46,6 @@ bin/go/lang/23
 {% block install %}
 mkdir -p ${out}/bin
 cp {{self.go_bins().strip()}} ${out}/bin
-{{super()}}
 {% endblock %}
 
 
