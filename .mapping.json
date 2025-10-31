@@ -80,6 +80,8 @@
   "ynd/bin/llvm-profdata/ix.sh":"toolchains/ynd/bin/llvm-profdata/ix.sh",
   "ynd/bin/ruff/ix.sh":"toolchains/ynd/bin/ruff/ix.sh",
   "ynd/bin/ruff/unwrap/ix.sh":"toolchains/ynd/bin/ruff/unwrap/ix.sh",
+  "ynd/bin/yaml2json/ix.sh":"toolchains/ynd/bin/yaml2json/ix.sh",
+  "ynd/bin/yaml2json/main.go":"toolchains/ynd/bin/yaml2json/main.go",
   "ynd/bin/yamlfmt/ix.sh":"toolchains/ynd/bin/yamlfmt/ix.sh",
   "ynd/bin/yq/ix.sh":"toolchains/ynd/bin/yq/ix.sh",
   "ynd/clang-format/18/ix.sh":"toolchains/ynd/clang-format/18/ix.sh",

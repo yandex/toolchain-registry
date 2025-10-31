@@ -121,6 +121,7 @@ mkdir -p ${out}/fix
 cat << EOF > ${out}/fix/remove_unused.sh
 mkdir bin1
 
+mv bin/yaml2json bin1/.
 mv bin/clang-tidy* bin1/.
 mv bin/clang-apply-replacements* bin1/.
 rm -rf bin
