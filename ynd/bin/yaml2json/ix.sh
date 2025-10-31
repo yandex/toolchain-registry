@@ -8,6 +8,14 @@ https://github.com/go-yaml/yaml/archive/refs/tags/v3.0.1.tar.gz
 f99272ba651b0bca3d9bfc160297b7c6985ad90ca6bdb1b0fd339bf02da23355
 {% endblock %}
 
+
+{% block step_setup %}
+{{super()}}
+{% if mingw32 %}
+export GOOS=windows
+{% endif %}
+{% endblock %}
+
 {% block patch %}
 {{super()}}
 
@@ -24,10 +32,14 @@ EOF
 
 
 {% block go_build_flags %}
+{% if mingw32 %}
+-o yaml2json.exe
+{% else %}
 -o yaml2json
+{% endif %}
 {% endblock %}
 
 {% block install %}
 mkdir ${out}/bin
-cp yaml2json ${out}/bin
+cp yaml2json* ${out}/bin
 {% endblock %}
