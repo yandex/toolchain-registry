@@ -170,6 +170,7 @@
   "ynd/go/1.23/ix.sh":"toolchains/ynd/go/1.23/ix.sh",
   "ynd/go/1.24/ix.sh":"toolchains/ynd/go/1.24/ix.sh",
   "ynd/go/1.25/ix.sh":"toolchains/ynd/go/1.25/ix.sh",
+  "ynd/go/1.25/old_coverage.diff":"toolchains/ynd/go/1.25/old_coverage.diff",
   "ynd/grpc/java/ix.sh":"toolchains/ynd/grpc/java/ix.sh",
   "ynd/lib/bolt/ix.sh":"toolchains/ynd/lib/bolt/ix.sh",
   "ynd/lib/compiler_rt/profile/18/ix.sh":"toolchains/ynd/lib/compiler_rt/profile/18/ix.sh",

@@ -35,6 +35,10 @@ curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version==
 {% endif %}
 {% endblock %}
 
+{% block step_patch %}
+patch -p1 < ${src}/old_coverage.diff
+{% endblock %}
+
 {% block fetch %}
 https://go.dev/dl/go{{self.go_version().strip()}}.{{self.archive_name().strip()}}
 sha:{{self.archive_hash().strip()}}
