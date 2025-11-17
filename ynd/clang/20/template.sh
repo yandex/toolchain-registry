@@ -45,6 +45,7 @@ D21113-case-insesitive-include-paths.patch
 vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 backport-objcopy-macho.patch
+fix-objcopy-elf.patch
 {% endblock %}
 
 {% block patch %}

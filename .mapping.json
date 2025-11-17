@@ -160,6 +160,7 @@
   "ynd/clang/20/patches/llvm/01-PR159119-backport-mcdc-executed-test-vectors.patch":"toolchains/ynd/clang/20/patches/llvm/01-PR159119-backport-mcdc-executed-test-vectors.patch",
   "ynd/clang/20/patches/llvm/backport-objcopy-macho.patch":"toolchains/ynd/clang/20/patches/llvm/backport-objcopy-macho.patch",
   "ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch",
+  "ynd/clang/20/patches/llvm/fix-objcopy-elf.patch":"toolchains/ynd/clang/20/patches/llvm/fix-objcopy-elf.patch",
   "ynd/clang/20/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/20/patches/llvm/vfs-case-insensitive.patch",
   "ynd/clang/20/pgo/ext-profile/ix.sh":"toolchains/ynd/clang/20/pgo/ext-profile/ix.sh",
   "ynd/clang/20/pgo/instrumented/ix.sh":"toolchains/ynd/clang/20/pgo/instrumented/ix.sh",
