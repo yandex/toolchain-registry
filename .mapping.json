@@ -168,7 +168,6 @@
   "ynd/clang/20/pgo/train/ix.sh":"toolchains/ynd/clang/20/pgo/train/ix.sh",
   "ynd/clang/20/profiles/ix.sh":"toolchains/ynd/clang/20/profiles/ix.sh",
   "ynd/clang/20/template.sh":"toolchains/ynd/clang/20/template.sh",
-  "ynd/go/1.23/ix.sh":"toolchains/ynd/go/1.23/ix.sh",
   "ynd/go/1.24/ix.sh":"toolchains/ynd/go/1.24/ix.sh",
   "ynd/go/1.25/base.sh":"toolchains/ynd/go/1.25/base.sh",
   "ynd/go/1.25/go/ix.sh":"toolchains/ynd/go/1.25/go/ix.sh",
