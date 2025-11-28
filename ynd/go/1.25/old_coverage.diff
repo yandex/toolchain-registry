@@ -1043,7 +1043,7 @@ diff --git a/src/internal/buildcfg/exp.go b/src/internal/buildcfg/exp.go
 -		Dwarf5:          dwarf5Supported,
 +		RegabiWrappers:   regabiSupported,
 +		RegabiArgs:       regabiSupported,
-+		CoverageRedesign: true,
++		CoverageRedesign: false,
 +		AliasTypeParams:  true,
 +		SwissMap:         true,
 +		SyncHashTrieMap:  true,
@@ -1413,3 +1413,19 @@ diff --git a/src/testing/testing.go b/src/testing/testing.go
  	Init()
  	return &M{
  		deps:        deps,
+Index: src/bootstrap.bash
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/bootstrap.bash b/src/bootstrap.bash
+--- a/src/bootstrap.bash	(revision 61da2759634a0dba979198580dc4d593e932dd90)
++++ b/src/bootstrap.bash	(date 1760969018723)
+@@ -79,6 +79,7 @@
+ echo ----
+ echo Bootstrap toolchain for "$GOOS/$GOARCH" installed in "$(pwd)".
+ echo Building tbz.
+ cd ..
++exit 0
+ tar cf - "go-${GOOS}-${GOARCH}-bootstrap" | bzip2 -9 >"go-${GOOS}-${GOARCH}-bootstrap.tbz"
+ ls -l "$(pwd)/go-${GOOS}-${GOARCH}-bootstrap.tbz"

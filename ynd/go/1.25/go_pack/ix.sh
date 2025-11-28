@@ -1,36 +1,50 @@
 {% extends '//ynd/go/1.25/base.sh' %}
 
+{% block bld_tool %}
+bld/bash
+{% endblock %}
+
 {% block build_tool %}true{% endblock %}
 
-{% block tool_folder_name %}
-{% if linux and x86_64 %}
-    linux_amd64
-{% elif linux and aarch64 %}
-    linux_arm64
-{% elif darwin and x86_64 %}
-    darwin_amd64
-{% elif darwin and arm64 %}
-    darwin_arm64
+{% block goos %}
+{% if linux %}
+    linux
+{% elif darwin %}
+    darwin
 {% elif mingw32 %}
-    windows_amd64
+    windows
 {% endif %}
+{% endblock %}
+
+{% block goarch %}
+{% if (linux and x86_64) or (darwin and x86_64) or mingw32 %}
+    amd64
+{% elif (linux and aarch64) or (darwin and arm64) %}
+    arm64
+{% endif %}
+{% endblock %}
+
+{% block tool_folder_name %}
+{{self.goos().strip()}}_{{self.goarch().strip()}}
 {% endblock %}
 
 {% block step_build %}
 {{super()}}
 
-{% if mingw32 %}
-export GOOS="windows"
-export GOARCH="amd64"
-{% else %}
-export GOOS={{target.os}}
-export GOARCH={{target.go_arch}}
-{% endif %}
+export GOOS={{self.goos().strip()}}
+export GOARCH={{self.goarch().strip()}}
 
-bin/go build -o bin/ ./src/cmd/pack
+export GOROOT_BOOTSTRAP=$(pwd)
+cd src
+bash ./bootstrap.bash
+cd ..
+
+bin/go build ./src/cmd/pack
 {% endblock %}
 
 {% block install %}
-mkdir -p ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
-cp -r ${tmp}/src/bin/pack{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
+mv ${tmp}/go-{{self.goos().strip()}}-{{self.goarch().strip()}}-bootstrap/pkg ${out}
+mv ${tmp}/go-{{self.goos().strip()}}-{{self.goarch().strip()}}-bootstrap/bin ${out}
+
+cp ${tmp}/src/pack{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}/
 {% endblock %}
