@@ -4,6 +4,7 @@
   ".gitmodules":"toolchains/.gitmodules",
   "LICENSE":"devtools/contrib/toolchain-registry/github_toplevel/LICENSE",
   "README.md":"devtools/contrib/toolchain-registry/github_toplevel/README.md",
+  "bin/bpf/tool/ix.sh":"toolchains/bin/bpf/tool/ix.sh",
   "bld/rust/88/ix.sh":"toolchains/bld/rust/88/ix.sh",
   "bld/rust/88/linux/ix.sh":"toolchains/bld/rust/88/linux/ix.sh",
   "devtools/contrib/toolchain-registry/github_toplevel/LICENSE":"devtools/contrib/toolchain-registry/github_toplevel/LICENSE",

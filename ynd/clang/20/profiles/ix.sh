@@ -1,8 +1,8 @@
 {% extends '//die/std/ix.sh' %}
 
 {% block fetch %}
-https://devtools-registry.s3.yandex.net/9692301394-clang-20-profiles.tgz
-sha:a19e77e01d98338bf63a3ea625f49b1eb59a861d40a5181016860267c90e9964
+https://devtools-registry.s3.yandex.net/10491236631-clang-20-profiles.tgz
+sha:5fcba5e77e1349169681c8369fbb41a0a86569b30365e679d0171419d3657dca
 {% endblock %}
 
 {% block unpack %}
