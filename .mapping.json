@@ -32,6 +32,8 @@
   "devtools/gdb/yt_fibers_printer.py":"devtools/gdb/yt_fibers_printer.py",
   "ix":"toolchains/ix",
   "lib/c++/19/patched/ix.sh":"toolchains/lib/c++/19/patched/ix.sh",
+  "ynd/bin/ast-index/ix.sh":"toolchains/ynd/bin/ast-index/ix.sh",
+  "ynd/bin/ast-index/unwrap/ix.sh":"toolchains/ynd/bin/ast-index/unwrap/ix.sh",
   "ynd/bin/bolt/0.diff":"toolchains/ynd/bin/bolt/0.diff",
   "ynd/bin/bolt/19/ix.sh":"toolchains/ynd/bin/bolt/19/ix.sh",
   "ynd/bin/bolt/20/ix.sh":"toolchains/ynd/bin/bolt/20/ix.sh",
