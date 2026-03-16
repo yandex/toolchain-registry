@@ -5,7 +5,7 @@ ast-index
 {% endblock %}
 
 {% block version %}
-3.29.0
+3.29.1
 {% endblock %}
 
 {% block cargo_url %}
@@ -13,7 +13,7 @@ https://github.com/defendend/Claude-ast-index-search/archive/refs/tags/v{{self.v
 {% endblock %}
 
 {% block cargo_sha %}
-1617f41b302b964e49f6e64dfda005e9e9b606101cc83fb940da0ffa7f438231
+0ec5f5b60b16692039c32971924ec0a453aead3e7597cc35426bdc360fc51933
 {% endblock %}
 
 {% block cargo_bins %}
