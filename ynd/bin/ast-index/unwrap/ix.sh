@@ -13,7 +13,7 @@ https://github.com/defendend/Claude-ast-index-search/archive/refs/tags/v{{self.v
 {% endblock %}
 
 {% block cargo_sha %}
-0ec5f5b60b16692039c32971924ec0a453aead3e7597cc35426bdc360fc51933
+9d1c26f44cee4b2abda18366b9fdf2cecca403404e8f2995e35495ef97e97c4a
 {% endblock %}
 
 {% block cargo_bins %}
