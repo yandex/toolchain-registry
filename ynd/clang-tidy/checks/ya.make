@@ -19,6 +19,7 @@ SRCS(
     taxi_async_use_after_free_check.cpp
     usage_restriction_checks.cpp
     uneeded_temporary_string_check.cpp
+    using_namespace_in_header_check.cpp
     util_tstring_methods.cpp
     possible_nullptr_check.cpp
 )

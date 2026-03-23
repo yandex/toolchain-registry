@@ -115,6 +115,8 @@
   "ynd/clang-tidy/checks/uneeded_temporary_string_check.h":"toolchains/ynd/clang-tidy/checks/uneeded_temporary_string_check.h",
   "ynd/clang-tidy/checks/usage_restriction_checks.cpp":"toolchains/ynd/clang-tidy/checks/usage_restriction_checks.cpp",
   "ynd/clang-tidy/checks/usage_restriction_checks.h":"toolchains/ynd/clang-tidy/checks/usage_restriction_checks.h",
+  "ynd/clang-tidy/checks/using_namespace_in_header_check.cpp":"toolchains/ynd/clang-tidy/checks/using_namespace_in_header_check.cpp",
+  "ynd/clang-tidy/checks/using_namespace_in_header_check.h":"toolchains/ynd/clang-tidy/checks/using_namespace_in_header_check.h",
   "ynd/clang-tidy/checks/util_tstring_methods.cpp":"toolchains/ynd/clang-tidy/checks/util_tstring_methods.cpp",
   "ynd/clang-tidy/checks/util_tstring_methods.h":"toolchains/ynd/clang-tidy/checks/util_tstring_methods.h",
   "ynd/clang-tidy/checks/ya.make":"toolchains/ynd/clang-tidy/checks/ya.make",

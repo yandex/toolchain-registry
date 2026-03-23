@@ -7,6 +7,7 @@
 #include "ascii_compare_ignore_case_check.h"
 #include "uneeded_temporary_string_check.h"
 #include "usage_restriction_checks.h"
+#include "using_namespace_in_header_check.h"
 #include "util_tstring_methods.h"
 
 using namespace clang::ast_matchers;
@@ -23,6 +24,7 @@ public:
         CheckFactories.registerCheck<TypeidNameRestrictionCheck>("arcadia-typeid-name-restriction");
         CheckFactories.registerCheck<AsciiCompareIgnoreCaseCheck>("arcadia-ascii-compare-ignorecase");
         CheckFactories.registerCheck<UnneededTemporaryStringCheck>("arcadia-unneeded-temporary-string");
+        CheckFactories.registerCheck<UsingNamespaceInHeaderCheck>("arcadia-using-namespace-in-header");
         CheckFactories.registerCheck<UtilTStringUpperCaseMethodsCheck>("arcadia-util-tstring-methods");
     }
 };

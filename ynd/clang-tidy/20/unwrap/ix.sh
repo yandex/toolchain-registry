@@ -26,6 +26,8 @@ uneeded_temporary_string_check.cpp
 uneeded_temporary_string_check.h
 usage_restriction_checks.cpp
 usage_restriction_checks.h
+using_namespace_in_header_check.cpp
+using_namespace_in_header_check.h
 util_tstring_methods.cpp
 util_tstring_methods.h
 possible_nullptr_check.cpp
