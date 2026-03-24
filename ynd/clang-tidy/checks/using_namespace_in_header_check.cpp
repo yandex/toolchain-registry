@@ -55,12 +55,12 @@ bool UsingNamespaceInHeaderCheck::isHeaderFile(StringRef filename) {
         return false;
 
     // Check common header file extensions
-    return filename.endswith(".h") ||
-           filename.endswith(".hh") ||
-           filename.endswith(".hpp") ||
-           filename.endswith(".hxx") ||
-           filename.endswith(".h++") ||
-           filename.endswith(".H");
+    return filename.ends_with(".h") ||
+           filename.ends_with(".hh") ||
+           filename.ends_with(".hpp") ||
+           filename.ends_with(".hxx") ||
+           filename.ends_with(".h++") ||
+           filename.ends_with(".H");
 }
 
 }  // namespace clang::tidy::arcadia
