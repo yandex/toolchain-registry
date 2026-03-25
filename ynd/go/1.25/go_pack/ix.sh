@@ -1,5 +1,9 @@
 {% extends '//ynd/go/1.25/base.sh' %}
 
+{% block bld_tool %}
+bld/bash
+{% endblock %}
+
 {% block build_tool %}true{% endblock %}
 
 {% block goos %}
@@ -30,12 +34,17 @@
 export GOOS={{self.goos().strip()}}
 export GOARCH={{self.goarch().strip()}}
 
-bin/go build -o bin ./src/cmd/pack
-bin/go build -o bin ./src/cmd/covdata
+export GOROOT_BOOTSTRAP=$(pwd)
+cd src
+bash ./bootstrap.bash
+cd ..
+
+bin/go build ./src/cmd/pack
 {% endblock %}
 
 {% block install %}
-mkdir -p ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
-cp -r ${tmp}/src/bin/pack{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
-cp -r ${tmp}/src/bin/covdata{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
+mv ${tmp}/go-{{self.goos().strip()}}-{{self.goarch().strip()}}-bootstrap/pkg ${out}
+mv ${tmp}/go-{{self.goos().strip()}}-{{self.goarch().strip()}}-bootstrap/bin ${out}
+
+cp ${tmp}/src/pack{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}/
 {% endblock %}

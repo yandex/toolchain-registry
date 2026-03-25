@@ -1,25 +1,25 @@
 {% extends '//die/std/ix.sh' %}
 
 {% block go_version %}
-1.25.5
+1.25.8
 {% endblock %}
 
 {% set build_tool %}{% block build_tool %}{% endblock %}{% endset %}
 
 {#
-curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version=="go1.25.5") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | "", .filename, .sha256'
+curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version=="go1.25.8") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | "", .filename, .sha256'
 #}
 {% block archive_hash %}
 {% if linux and x86_64 or build_tool %}
-    9e9b755d63b36acf30c12a9a3fc379243714c1c6d3dd72861da637f336ebb35b
+    ceb5e041bbc3893846bd1614d76cb4681c91dadee579426cf21a63f2d7e03be6
 {% elif linux and aarch64 %}
-    b00b694903d126c588c378e72d3545549935d3982635ba3f7a964c9fa23fe3b9
+    7d137f59f66bb93f40a6b2b11e713adc2a9d0c8d9ae581718e3fad19e5295dc7
 {% elif darwin and x86_64 %}
-    b69d51bce599e5381a94ce15263ae644ec84667a5ce23d58dc2e63e2c12a9f56
+    a0b8136598baf192af400051cee2481ffb407f4c113a81ff400896e26cbce9e4
 {% elif darwin and arm64 %}
-    bed8ebe824e3d3b27e8471d1307f803fc6ab8e1d0eb7a4ae196979bd9b801dd3
+    c6547959f5dbe8440bf3da972bd65ba900168de5e7ab01464fbdc7ac8375c21c
 {% elif mingw32 %}
-    ae756cce1cb80c819b4fe01b0353807178f532211b47f72d7fa77949de054ebb
+    8d4ed9a270b33df7a6d3ff3a5316e103e0042fcc4f0c9a80e40378700bab6794
 {% endif %}
 {% endblock %}
 
@@ -35,6 +35,12 @@ curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version==
 {% elif mingw32 %}
     windows-amd64.zip
 {% endif %}
+{% endblock %}
+
+{% block step_patch %}
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//go/1.25/old_coverage.diff') | b64e}}
+EOF
 {% endblock %}
 
 {% block fetch %}
