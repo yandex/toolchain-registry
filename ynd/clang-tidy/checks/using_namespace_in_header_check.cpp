@@ -36,7 +36,7 @@ void UsingNamespaceInHeaderCheck::check(const MatchFinder::MatchResult& result) 
 }
 
 bool UsingNamespaceInHeaderCheck::isStdLiteralsNamespace(const NamespaceDecl* NS) {
-    if (!NS->getName().endswith("literals"))
+    if (!NS->getName().ends_with("literals"))
         return false;
 
     const auto* Parent = dyn_cast_or_null<NamespaceDecl>(NS->getParent());
