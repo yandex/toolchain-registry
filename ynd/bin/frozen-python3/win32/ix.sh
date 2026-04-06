@@ -5,12 +5,12 @@ bin/wget
 bin/unzip
 {% endblock %}
 
-{% block py_version %}3.12.6{% endblock %}
+{% block py_version %}3.13.12{% endblock %}
 {% block src_url %}https://www.python.org/ftp/python/{{self.py_version().strip()}}/python-{{self.py_version().strip()}}-embed-win32.zip{% endblock %}
 
 {% block fetch %}
 {{self.src_url().strip()}}
-sha:8c1b9cd9f63001a58f986f8570a5ab79276e8c1a048f7bfe3efe631a878e189c
+sha:51ec4c741212f9488d678033bd2c8a67fc27cf7d36abffee7cb9f4481c9fb52b
 {% endblock %}
 
 

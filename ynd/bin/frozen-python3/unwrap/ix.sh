@@ -15,7 +15,7 @@ export _PYTHON_SYSCONFIGDATA_NAME='_sysconfigdata__win32_'
 {% endif %}
 
 # Collect all modules
-export PYTHONPLATLIBDIR=${TARGET_PYTHONHOME}/lib/python3.12
+export PYTHONPLATLIBDIR=${TARGET_PYTHONHOME}/lib/python3.{{python_ver}}
 cur=$(pwd)
 cd $PYTHONPLATLIBDIR
 find . -type f -name '*.py' | cut -b3- | sed -E 's|\.py$||g' | sed -E 's|/|\.|g' | grep -v '\-' >> $cur/ext_modules

@@ -4,6 +4,6 @@
 {% if mingw32 %}
 ynd/bin/frozen-python3/win32
 {% else %}
-ynd/bin/frozen-python3/unwrap(python_ver=12)
+ynd/bin/frozen-python3/unwrap(python_ver=13)
 {% endif %}
 {% endblock %}
