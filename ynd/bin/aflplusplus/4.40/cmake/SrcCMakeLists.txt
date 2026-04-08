@@ -1,0 +1,83 @@
+cmake_minimum_required(VERSION 3.20)
+
+if(NOT DEFINED LLVM_VERSION_MAJOR)
+  message(FATAL_ERROR "LLVM_VERSION_MAJOR is not set. This must be built as part of LLVM.")
+endif()
+
+if(LLVM_VERSION_MAJOR LESS 12)
+  message(FATAL_ERROR "AFL++ LTO requires LLVM >= 12, got ${LLVM_VERSION_MAJOR}")
+endif()
+
+set(AFL_VERSION "++4.40c")
+set(AFL_PATH "${CMAKE_INSTALL_PREFIX}/lib/afl" CACHE STRING "")
+set(AFL_BIN_PATH "${CMAKE_INSTALL_PREFIX}/bin" CACHE STRING "")
+set(AFL_INCLUDE_PATH "${CMAKE_INSTALL_PREFIX}/include/afl" CACHE STRING "")
+set(AFL_LLVM_BINDIR "${CMAKE_INSTALL_PREFIX}/bin")
+set(AFL_LLVM_LIBDIR "${CMAKE_INSTALL_PREFIX}/lib")
+set(AFL_CLANG_BIN "${AFL_LLVM_BINDIR}/clang")
+set(AFL_CLANGPP_BIN "${AFL_LLVM_BINDIR}/clang++")
+
+set(AFL_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+foreach(_src
+  "${AFL_SRC_DIR}/src/afl-cc.c"
+  "${AFL_SRC_DIR}/src/afl-common.c"
+)
+  if(NOT EXISTS "${_src}")
+    message(FATAL_ERROR "Required AFL++ source file not found: ${_src}")
+  endif()
+endforeach()
+
+add_executable(afl-cc
+  ${AFL_SRC_DIR}/src/afl-cc.c
+  ${AFL_SRC_DIR}/src/afl-common.c
+)
+
+target_include_directories(afl-cc PRIVATE
+  ${AFL_SRC_DIR}/include
+  ${AFL_SRC_DIR}/instrumentation
+)
+
+target_compile_definitions(afl-cc PRIVATE
+  AFL_STATIC_LLVM_PASS=1
+  AFL_PATH="${AFL_PATH}"
+  BIN_PATH="${AFL_BIN_PATH}"
+  AFL_INCLUDE_PATH="${AFL_INCLUDE_PATH}"
+  LLVM_BINDIR="${AFL_LLVM_BINDIR}"
+  LLVM_LIBDIR="${AFL_LLVM_LIBDIR}"
+  LLVM_VERSION="${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}"
+  LLVM_MAJOR=${LLVM_VERSION_MAJOR}
+  LLVM_MINOR=${LLVM_VERSION_MINOR}
+  VERSION="${AFL_VERSION}"
+  CLANG_BIN="${AFL_CLANG_BIN}"
+  CLANGPP_BIN="${AFL_CLANGPP_BIN}"
+  USE_BINDIR=1
+  CFLAGS_OPT=""
+  AFL_CLANG_FLTO="-flto=full"
+  AFL_REAL_LD=""
+  AFL_CLANG_LDPATH=""
+  AFL_CLANG_FUSELD=""
+)
+
+target_compile_options(afl-cc PRIVATE
+  -O3 -funroll-loops -Wall -Wno-unused-function -Wno-deprecated -Wno-pointer-sign -Wno-cast-qual -Wno-variadic-macros
+)
+
+target_link_libraries(afl-cc PRIVATE m)
+
+install(TARGETS afl-cc
+  RUNTIME DESTINATION bin
+  COMPONENT afl-cc
+)
+
+add_custom_target(install-afl-cc
+  DEPENDS afl-cc
+  COMMAND ${CMAKE_COMMAND} -DCMAKE_INSTALL_COMPONENT=afl-cc
+    -P ${CMAKE_BINARY_DIR}/cmake_install.cmake
+)
+
+install(FILES
+  ${AFL_SRC_DIR}/dynamic_list.txt
+  DESTINATION lib/afl
+  COMPONENT afl-cc
+)

@@ -1,0 +1,46 @@
+cmake_minimum_required(VERSION 3.20)
+project(AFLplusplus)
+
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+include(AddLLVM)
+
+add_llvm_pass_plugin(AFLCLANGLTO
+  SanitizerCoverageLTO.so.cc
+  afl-llvm-common.cc
+
+  PARTIAL_SOURCES_INTENDED
+)
+
+target_include_directories(AFLCLANGLTO PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_llvm_pass_plugin(AFLCLANGFAST
+  SanitizerCoveragePCGUARD.so.cc
+  split-compares-pass.so.cc
+  split-switches-pass.so.cc
+  compare-transform-pass.so.cc
+  cmplog-switches-pass.cc
+  cmplog-instructions-pass.cc
+  cmplog-routines-pass.cc
+  afl-llvm-dict2file.so.cc
+  afl-llvm-lto-instrumentlist.so.cc
+  injection-pass.cc
+  afl-llvm-pass.so.cc
+  afl-llvm-ijon-pass.so.cc
+  afl-llvm-common.cc
+
+  PARTIAL_SOURCES_INTENDED
+)
+
+add_definitions(
+  -DLLVM_MAJOR=${LLVM_VERSION_MAJOR}
+  -DLLVM_MINOR=${LLVM_VERSION_MINOR}
+  -DAFL_STATIC_LLVM_PASS=1
+)
+
+target_include_directories(AFLCLANGFAST PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)

@@ -1,0 +1,554 @@
+diff --git a/instrumentation/SanitizerCoverageLTO.so.cc b/instrumentation/SanitizerCoverageLTO.so.cc
+index 4a9e720..508a27d 100644
+--- a/instrumentation/SanitizerCoverageLTO.so.cc
++++ b/instrumentation/SanitizerCoverageLTO.so.cc
+@@ -324,8 +324,37 @@ class ModuleSanitizerCoverageLTOLegacyPass : public ModulePass {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++static cl::opt<bool> ClLtoEnable(
++  "afl-clang-lto",
++  cl::desc("Enable AFL LTO instrumentation"),
++  cl::init(false));
++extern cl::opt<bool> ClSplitComparesEnable;
++extern cl::opt<bool> ClSplitSwitchesEnable;
++extern cl::opt<bool> ClCompareTransformEnable;
++extern cl::opt<bool> ClCmplogSwitchesEnable;
++extern cl::opt<bool> ClCmplogInstructionsEnable;
++extern cl::opt<bool> ClCmplogRoutinesEnable;
++extern cl::opt<bool> ClDict2FileEnable;
++extern cl::opt<bool> ClInstrumentListEnable;
++extern cl::opt<bool> ClInjectionEnable;
++extern cl::opt<bool> ClAFLCoverageEnable;
++extern cl::opt<bool> ClIJONEnable;
++
++extern "C" void aflAddSplitComparesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddSplitSwitchesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCompareTransformPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogSwitchesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogInstructionsPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogRoutinesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddDict2FilePass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddInstrumentListPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddInjectionPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCoveragePass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddIJONPass(llvm::ModulePassManager &MPM);
++#endif
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+-llvmGetPassPluginInfo() {
++llvmGetPassPluginInfoAflClangLto() {
+
+   return {LLVM_PLUGIN_API_VERSION, "SanitizerCoverageLTO", "v0.1",
+           /* lambda to insert our pass into the pass pipeline. */
+@@ -341,7 +370,21 @@ llvmGetPassPluginInfo() {
+ #endif
+                 [](ModulePassManager &MPM, OptimizationLevel OL) {
+
++#ifndef AFL_STATIC_LLVM_PASS
+                   MPM.addPass(ModuleSanitizerCoverageLTO());
++#else
++                  if (ClInstrumentListEnable)     aflAddInstrumentListPass(MPM);
++                  if (ClDict2FileEnable)          aflAddDict2FilePass(MPM);
++                  if (ClSplitSwitchesEnable)      aflAddSplitSwitchesPass(MPM);
++                  if (ClCompareTransformEnable)   aflAddCompareTransformPass(MPM);
++                  if (ClSplitComparesEnable)      aflAddSplitComparesPass(MPM);
++                  if (ClCmplogSwitchesEnable)     aflAddCmplogSwitchesPass(MPM);
++                  if (ClLtoEnable)                MPM.addPass(ModuleSanitizerCoverageLTO());
++                  if (ClCmplogInstructionsEnable) aflAddCmplogInstructionsPass(MPM);
++                  if (ClCmplogRoutinesEnable)     aflAddCmplogRoutinesPass(MPM);
++                  if (ClInjectionEnable)          aflAddInjectionPass(MPM);
++                  if (ClIJONEnable)               aflAddIJONPass(MPM);
++#endif
+
+                 });
+
+@@ -349,6 +392,10 @@ llvmGetPassPluginInfo() {
+
+ }
+
++llvm::PassPluginLibraryInfo getAFLCLANGLTOPluginInfo() {
++  return llvmGetPassPluginInfoAflClangLto();
++}
++
+ PreservedAnalyses ModuleSanitizerCoverageLTO::run(Module                &M,
+                                                   ModuleAnalysisManager &MAM) {
+
+diff --git a/instrumentation/SanitizerCoveragePCGUARD.so.cc b/instrumentation/SanitizerCoveragePCGUARD.so.cc
+index e88b6ed..b76f0f7 100644
+--- a/instrumentation/SanitizerCoveragePCGUARD.so.cc
++++ b/instrumentation/SanitizerCoveragePCGUARD.so.cc
+@@ -205,8 +205,39 @@ class ModuleSanitizerCoverageAFL
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++static cl::opt<bool> ClFastEnable(
++  "afl-clang-fast",
++  cl::desc("Enable AFL FAST instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern cl::opt<bool> ClSplitComparesEnable;
++extern cl::opt<bool> ClSplitSwitchesEnable;
++extern cl::opt<bool> ClCompareTransformEnable;
++extern cl::opt<bool> ClCmplogSwitchesEnable;
++extern cl::opt<bool> ClCmplogInstructionsEnable;
++extern cl::opt<bool> ClCmplogRoutinesEnable;
++extern cl::opt<bool> ClDict2FileEnable;
++extern cl::opt<bool> ClInstrumentListEnable;
++extern cl::opt<bool> ClInjectionEnable;
++extern cl::opt<bool> ClAFLCoverageEnable;
++extern cl::opt<bool> ClIJONEnable;
++
++extern "C" void aflAddSplitComparesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddSplitSwitchesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCompareTransformPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogSwitchesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogInstructionsPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCmplogRoutinesPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddDict2FilePass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddInstrumentListPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddInjectionPass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddCoveragePass(llvm::ModulePassManager &MPM);
++extern "C" void aflAddIJONPass(llvm::ModulePassManager &MPM);
++#endif
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+-llvmGetPassPluginInfo() {
++llvmGetPassPluginInfoPCGUARD() {
+
+   return {LLVM_PLUGIN_API_VERSION, "SanitizerCoveragePCGUARD", "v0.2",
+           [](PassBuilder &PB) {
+@@ -220,6 +251,7 @@ llvmGetPassPluginInfo() {
+   #endif
+                                                 ) {
+
++#ifndef AFL_STATIC_LLVM_PASS
+   #if LLVM_MAJOR >= 20
+               // Only add the pass for non-LTO phases to avoid conflicts
+               if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink &&
+@@ -233,6 +265,36 @@ llvmGetPassPluginInfo() {
+               MPM.addPass(ModuleSanitizerCoverageAFL());
+   #endif
+
++#else
++              if (ClInstrumentListEnable)     aflAddInstrumentListPass(MPM);
++              if (ClDict2FileEnable)          aflAddDict2FilePass(MPM);
++              // laf-intel — BEFORE coverage
++              if (ClSplitSwitchesEnable)      aflAddSplitSwitchesPass(MPM);
++              if (ClCompareTransformEnable)   aflAddCompareTransformPass(MPM);
++              if (ClSplitComparesEnable)      aflAddSplitComparesPass(MPM);
++              // cmplog switches
++              if (ClCmplogSwitchesEnable)     aflAddCmplogSwitchesPass(MPM);
++              // coverage — PCGUARD
++              if (ClFastEnable) {
++  #if LLVM_MAJOR >= 20
++                if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink &&
++                    Phase != ThinOrFullLTOPhase::FullLTOPreLink) {
++                  MPM.addPass(ModuleSanitizerCoverageAFL());
++                }
++  #else
++                MPM.addPass(ModuleSanitizerCoverageAFL());
++  #endif
++              }
++              // coverage — CLASSIC
++              if (ClAFLCoverageEnable)        aflAddCoveragePass(MPM);
++              // cmplog instructions + routines — AFTER coverage
++              if (ClCmplogInstructionsEnable) aflAddCmplogInstructionsPass(MPM);
++              if (ClCmplogRoutinesEnable)     aflAddCmplogRoutinesPass(MPM);
++              // injection + ijon
++              if (ClInjectionEnable)          aflAddInjectionPass(MPM);
++              if (ClIJONEnable)               aflAddIJONPass(MPM);
++#endif
++
+             });
+
+ #else
+@@ -249,6 +311,10 @@ llvmGetPassPluginInfo() {
+
+ }
+
++llvm::PassPluginLibraryInfo getAFLCLANGFASTPluginInfo() {
++  return llvmGetPassPluginInfoPCGUARD();
++}
++
+ PreservedAnalyses ModuleSanitizerCoverageAFL::run(Module                &M,
+                                                   ModuleAnalysisManager &MAM) {
+
+diff --git a/instrumentation/afl-llvm-common.h b/instrumentation/afl-llvm-common.h
+index 8027b7b..6e6b7be 100644
+--- a/instrumentation/afl-llvm-common.h
++++ b/instrumentation/afl-llvm-common.h
+@@ -63,8 +63,13 @@ llvm::GlobalVariable *createIJONStateGlobal(llvm::Module &M,
+   #define IS_EXTERN
+ #endif
+
+-IS_EXTERN int debug;
+-IS_EXTERN int be_quiet;
++#ifdef AFL_STATIC_LLVM_PASS
++  inline int debug;
++  inline int be_quiet;
++#else
++  IS_EXTERN int debug;
++  IS_EXTERN int be_quiet;
++#endif
+
+ #undef IS_EXTERN
+
+diff --git a/instrumentation/afl-llvm-dict2file.so.cc b/instrumentation/afl-llvm-dict2file.so.cc
+index ddfcec1..8d14cee 100644
+--- a/instrumentation/afl-llvm-dict2file.so.cc
++++ b/instrumentation/afl-llvm-dict2file.so.cc
+@@ -90,6 +90,18 @@ class AFLdict2filePass : public PassInfoMixin<AFLdict2filePass> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClDict2FileEnable(
++  "afl-dict2file",
++  cl::desc("Enable AFL dict2file instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddDict2FilePass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(AFLdict2filePass());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -112,6 +124,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ void AFLdict2filePass::dict2file(u8 *mem, u32 len) {
+
+diff --git a/instrumentation/afl-llvm-ijon-pass.so.cc b/instrumentation/afl-llvm-ijon-pass.so.cc
+index 3b33282..978a8cb 100644
+--- a/instrumentation/afl-llvm-ijon-pass.so.cc
++++ b/instrumentation/afl-llvm-ijon-pass.so.cc
+@@ -685,6 +685,18 @@ Value *IJONInstrumentation::castToInt64(Value *V, IRBuilder<> &IRB) {
+
+ }
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClIJONEnable(
++  "afl-ijon",
++  cl::desc("Enable AFL IJON instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddIJONPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(IJONInstrumentation());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -702,9 +714,13 @@ llvmGetPassPluginInfo() {
+                    ,
+                    ThinOrFullLTOPhase Phase
+ #endif
+-                ) { MPM.addPass(IJONInstrumentation()); });
++                ) {
++
++                    MPM.addPass(IJONInstrumentation());
++                });
+
+           }};
+
+ }
++#endif
+
+diff --git a/instrumentation/afl-llvm-lto-instrumentlist.so.cc b/instrumentation/afl-llvm-lto-instrumentlist.so.cc
+index 18e4276..54c1a81 100644
+--- a/instrumentation/afl-llvm-lto-instrumentlist.so.cc
++++ b/instrumentation/afl-llvm-lto-instrumentlist.so.cc
+@@ -75,6 +75,18 @@ class AFLcheckIfInstrument : public PassInfoMixin<AFLcheckIfInstrument> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClInstrumentListEnable(
++  "afl-instrumentlist",
++  cl::desc("Enable AFL LTO instrument list filtering"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddInstrumentListPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(AFLcheckIfInstrument());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -97,6 +109,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ PreservedAnalyses AFLcheckIfInstrument::run(Module                &M,
+                                             ModuleAnalysisManager &MAM) {
+diff --git a/instrumentation/afl-llvm-pass.so.cc b/instrumentation/afl-llvm-pass.so.cc
+index 31076b2..c47b000 100644
+--- a/instrumentation/afl-llvm-pass.so.cc
++++ b/instrumentation/afl-llvm-pass.so.cc
+@@ -87,6 +87,18 @@ class AFLCoverage : public PassInfoMixin<AFLCoverage> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClAFLCoverageEnable(
++  "afl-coverage",
++  cl::desc("Enable AFL classic coverage instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddCoveragePass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(AFLCoverage());
++}
++
++#else
+ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+
+   return {LLVM_PLUGIN_API_VERSION, "AFLCoverage", "v0.1",
+@@ -112,6 +124,7 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ /* #if LLVM_VERSION_STRING >= "4.0.1" */
+ #define AFL_HAVE_VECTOR_INTRINSICS 1
+diff --git a/instrumentation/cmplog-instructions-pass.cc b/instrumentation/cmplog-instructions-pass.cc
+index 8a2d50c..72e9584 100644
+--- a/instrumentation/cmplog-instructions-pass.cc
++++ b/instrumentation/cmplog-instructions-pass.cc
+@@ -80,6 +80,18 @@ class CmpLogInstructions : public PassInfoMixin<CmpLogInstructions> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClCmplogInstructionsEnable(
++  "afl-cmplog-instructions",
++  cl::desc("Enable AFL cmplog instructions instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddCmplogInstructionsPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(CmpLogInstructions());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -105,6 +117,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ template <class Iterator>
+ Iterator Unique(Iterator first, Iterator last) {
+diff --git a/instrumentation/cmplog-routines-pass.cc b/instrumentation/cmplog-routines-pass.cc
+index 601c38a..f74678f 100644
+--- a/instrumentation/cmplog-routines-pass.cc
++++ b/instrumentation/cmplog-routines-pass.cc
+@@ -73,6 +73,18 @@ class CmpLogRoutines : public PassInfoMixin<CmpLogRoutines> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClCmplogRoutinesEnable(
++  "afl-cmplog-routines",
++  cl::desc("Enable AFL cmplog routines instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddCmplogRoutinesPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(CmpLogRoutines());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -98,6 +110,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ bool CmpLogRoutines::hookRtns(Module &M) {
+
+diff --git a/instrumentation/cmplog-switches-pass.cc b/instrumentation/cmplog-switches-pass.cc
+index 318bb8e..ca866aa 100644
+--- a/instrumentation/cmplog-switches-pass.cc
++++ b/instrumentation/cmplog-switches-pass.cc
+@@ -75,6 +75,18 @@ class CmplogSwitches : public PassInfoMixin<CmplogSwitches> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClCmplogSwitchesEnable(
++  "afl-cmplog-switches",
++  cl::desc("Enable AFL cmplog switches instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddCmplogSwitchesPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(CmplogSwitches());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -100,6 +112,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ template <class Iterator>
+ Iterator Unique(Iterator first, Iterator last) {
+diff --git a/instrumentation/compare-transform-pass.so.cc b/instrumentation/compare-transform-pass.so.cc
+index a0232f1..5afa0ef 100644
+--- a/instrumentation/compare-transform-pass.so.cc
++++ b/instrumentation/compare-transform-pass.so.cc
+@@ -121,6 +121,18 @@ class CompareTransform : public ModulePass {
+ }  // namespace
+
+ #if LLVM_MAJOR >= 11                                /* use new pass manager */
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClCompareTransformEnable(
++  "afl-compare-transform",
++  cl::desc("Enable AFL compare transform instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddCompareTransformPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(CompareTransform());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -144,6 +156,7 @@ llvmGetPassPluginInfo() {
+     #endif
+                 ) {
+
++                  if (!ClCompareTransformEnable) return;
+                   MPM.addPass(CompareTransform());
+
+                 });
+@@ -173,6 +186,8 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
++
+
+ #else
+ char CompareTransform::ID = 0;
+diff --git a/instrumentation/injection-pass.cc b/instrumentation/injection-pass.cc
+index e3a93ac..4950746 100644
+--- a/instrumentation/injection-pass.cc
++++ b/instrumentation/injection-pass.cc
+@@ -77,6 +77,18 @@ class InjectionRoutines : public PassInfoMixin<InjectionRoutines> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClInjectionEnable(
++  "afl-injection",
++  cl::desc("Enable AFL injection instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddInjectionPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(InjectionRoutines());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -99,6 +111,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ bool InjectionRoutines::hookRtns(Module &M) {
+
+diff --git a/instrumentation/split-compares-pass.so.cc b/instrumentation/split-compares-pass.so.cc
+index ffcf6ac..7294aa0 100644
+--- a/instrumentation/split-compares-pass.so.cc
++++ b/instrumentation/split-compares-pass.so.cc
+@@ -150,6 +150,18 @@ class SplitComparesTransform : public PassInfoMixin<SplitComparesTransform> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClSplitComparesEnable(
++  "afl-split-compares",
++  cl::desc("Enable AFL split compares instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddSplitComparesPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(SplitComparesTransform());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -176,6 +188,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ /// This function splits FCMP instructions with xGE or xLE predicates into two
+ /// FCMP instructions with predicate xGT or xLT and EQ
+diff --git a/instrumentation/split-switches-pass.so.cc b/instrumentation/split-switches-pass.so.cc
+index 690c41f..a396af9 100644
+--- a/instrumentation/split-switches-pass.so.cc
++++ b/instrumentation/split-switches-pass.so.cc
+@@ -89,6 +89,18 @@ class SplitSwitchesTransform : public PassInfoMixin<SplitSwitchesTransform> {
+
+ }  // namespace
+
++#ifdef AFL_STATIC_LLVM_PASS
++cl::opt<bool> ClSplitSwitchesEnable(
++  "afl-split-switches",
++  cl::desc("Enable AFL split switches instrumentation"),
++  cl::Hidden,
++  cl::init(false));
++
++extern "C" void aflAddSplitSwitchesPass(llvm::ModulePassManager &MPM) {
++  MPM.addPass(SplitSwitchesTransform());
++}
++
++#else
+ extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+ llvmGetPassPluginInfo() {
+
+@@ -116,6 +128,7 @@ llvmGetPassPluginInfo() {
+           }};
+
+ }
++#endif
+
+ /* switchConvert - Transform simple list of Cases into list of CaseRange's */
+ BasicBlock *SplitSwitchesTransform::switchConvert(

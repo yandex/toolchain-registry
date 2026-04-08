@@ -1,0 +1,13 @@
+diff --git a/utils/aflpp_driver/aflpp_driver.c b/utils/aflpp_driver/aflpp_driver.c
+index 866d82c..62607f4 100644
+--- a/utils/aflpp_driver/aflpp_driver.c
++++ b/utils/aflpp_driver/aflpp_driver.c
+@@ -427,6 +427,8 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
+ 
+   assert(N > 0);
+ 
++  __asm__ volatile("" :: "r"(AFL_PERSISTENT), "r"(AFL_DEFER_FORKSVR));
++
+   __afl_manual_init();
+ 
+   size_t prev_length = 0;

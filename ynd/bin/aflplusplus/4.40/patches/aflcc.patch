@@ -1,0 +1,306 @@
+diff --git a/src/afl-cc.c b/src/afl-cc.c
+index 9093ba5..2a337a9 100644
+--- a/src/afl-cc.c
++++ b/src/afl-cc.c
+@@ -593,6 +593,11 @@ void find_built_deps(aflcc_state_t *aflcc) {
+
+ #endif
+
++#ifdef AFL_STATIC_LLVM_PASS
++  aflcc->have_optimized_pcguard = 1;
++  aflcc->have_lto = 1;
++  aflcc->have_llvm = 1;
++#else
+   if ((ptr = find_object(aflcc, "SanitizerCoveragePCGUARD.so")) != NULL) {
+
+     aflcc->have_optimized_pcguard = 1;
+@@ -617,6 +622,7 @@ void find_built_deps(aflcc_state_t *aflcc) {
+   }
+
+ #endif
++#endif
+
+ #ifdef __ANDROID__
+   aflcc->have_llvm = 1;
+@@ -1503,6 +1509,30 @@ void add_real_argv0(aflcc_state_t *aflcc) {
+   static u8 llvm_fullpath[PATH_MAX];
+   u8       *compiler_path = NULL;
+
++#ifdef AFL_STATIC_LLVM_PASS
++  /* When built as a static toolchain, resolve the companion clang binary
++     relative to our own executable location via /proc/self/exe.  This
++     makes the toolchain relocatable – no hard-coded install prefix. */
++  static u8 self_dir[PATH_MAX];
++  static int self_dir_resolved = 0;
++  if (!self_dir_resolved) {
++    ssize_t len = readlink("/proc/self/exe", self_dir, sizeof(self_dir) - 1);
++    if (len > 0) {
++      self_dir[len] = 0;
++      char *sl = strrchr(self_dir, '/');
++      if (sl) *sl = 0;
++      self_dir_resolved = 1;
++    }
++  }
++#define RESOLVE_SIBLING(name) \
++  do { \
++    if (self_dir_resolved) \
++      snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/" name, self_dir); \
++    else \
++      snprintf(llvm_fullpath, sizeof(llvm_fullpath), name); \
++  } while(0)
++#endif
++
+   if (aflcc->plusplus_mode) {
+
+     u8 *alt_cxx = getenv("AFL_CXX");
+@@ -1519,11 +1549,16 @@ void add_real_argv0(aflcc_state_t *aflcc) {
+
+       } else {
+
++#ifdef AFL_STATIC_LLVM_PASS
++        RESOLVE_SIBLING("clang++");
++#else
++
+         if (USE_BINDIR)
+           snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/clang++",
+                    LLVM_BINDIR);
+         else
+           snprintf(llvm_fullpath, sizeof(llvm_fullpath), CLANGPP_BIN);
++#endif
+         alt_cxx = llvm_fullpath;
+
+       }
+@@ -1552,11 +1587,16 @@ void add_real_argv0(aflcc_state_t *aflcc) {
+   #define CLANG_BIN "/there/is/no/clang/defined/use/LLVM_CONFIG"
+ #endif
+
++#ifdef AFL_STATIC_LLVM_PASS
++        RESOLVE_SIBLING("clang");
++#else
++
+         if (USE_BINDIR)
+           snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/clang",
+                    LLVM_BINDIR);
+         else
+           snprintf(llvm_fullpath, sizeof(llvm_fullpath), CLANG_BIN);
++#endif
+         alt_cc = llvm_fullpath;
+
+       }
+@@ -2247,7 +2287,12 @@ void add_optimized_pcguard(aflcc_state_t *aflcc) {
+     insert_param(aflcc, "-fexperimental-new-pass-manager");
+       #endif
+     #endif
++#ifdef AFL_STATIC_LLVM_PASS
++    insert_param(aflcc, "-mllvm");
++    insert_param(aflcc, "--afl-clang-fast");
++#else
+     insert_object(aflcc, "SanitizerCoveragePCGUARD.so", "-fpass-plugin=%s", 0);
++#endif
+
+   }
+
+@@ -2484,7 +2529,9 @@ void add_lto_linker(aflcc_state_t *aflcc) {
+ /* Add params to launch SanitizerCoverageLTO.so when linking  */
+ void add_lto_passes(aflcc_state_t *aflcc) {
+
+-#if defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 15
++#ifdef AFL_STATIC_LLVM_PASS
++  insert_param(aflcc, "-Wl,-mllvm,--afl-clang-lto");
++#elif defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 15
+   // The NewPM implementation only works fully since LLVM 15.
+   insert_object(aflcc, "SanitizerCoverageLTO.so", "-Wl,--load-pass-plugin=%s",
+                 0);
+@@ -2496,9 +2543,7 @@ void add_lto_passes(aflcc_state_t *aflcc) {
+   insert_object(aflcc, "SanitizerCoverageLTO.so", "-Wl,-mllvm=-load=%s", 0);
+ #endif
+
+-#ifndef __APPLE__
+   insert_param(aflcc, "-Wl,--allow-multiple-definition");
+-#endif
+
+ }
+
+@@ -2685,9 +2730,17 @@ void add_gcc_plugin(aflcc_state_t *aflcc) {
+
+   if (aflcc->cmplog_mode) {
+
++    #ifdef AFL_STATIC_LLVM_PASS
++    insert_param(aflcc, "-mllvm");
++    insert_param(aflcc, "--afl-cmplog-switches");
++    insert_param(aflcc, "-mllvm");
++    insert_param(aflcc, "--afl-split-switches");
++#else
+     insert_object(aflcc, "afl-gcc-cmplog-pass.so", "-fplugin=%s", 0);
+     insert_object(aflcc, "afl-gcc-cmptrs-pass.so", "-fplugin=%s", 0);
+
++#endif
++
+   }
+
+   insert_object(aflcc, "afl-gcc-pass.so", "-fplugin=%s", 0);
+@@ -2934,28 +2987,7 @@ param_st parse_misc_params(aflcc_state_t *aflcc, u8 *cur_argv, u8 scan) {
+
+     }
+
+-  } else
+-
+-    /* args we want to remove that are gcc specific when we use clang */
+-
+-    if ((!strcmp(cur_argv,
+-
+-                 "-Wno-missing-template-arg-list-after-template-kw") ||
+-         !strcmp(cur_argv, "-Wno-dangling-assignment-gsl")) &&
+-
+-        (aflcc->compiler_mode != GCC && aflcc->compiler_mode != GCC_PLUGIN)) {
+-
+-      if (scan) {
+-
+-        final_ = PARAM_SCAN;
+-
+-      } else {
+-
+-        final_ = PARAM_DROP;
+-
+-      }
+-
+-    } else if (cur_argv[0] != '-') {
++  } else if (cur_argv[0] != '-') {
+
+       /* It's a weak, loose pattern, with very different purpose
+        than others. We handle it at last, cautiously and robustly. */
+@@ -3654,35 +3686,60 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
+
+     if (aflcc->lto_mode && aflcc->have_instr_env) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-instrumentlist");
++#else
+       load_llvm_pass(aflcc, "afl-llvm-lto-instrumentlist.so");
+
++#endif
+     }
+
+     if (getenv("AFL_LLVM_DICT2FILE")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-dict2file");
++#else
+       load_llvm_pass(aflcc, "afl-llvm-dict2file.so");
+
++#endif
+     }
+
+     // laf
+     if (getenv("LAF_SPLIT_SWITCHES") || getenv("AFL_LLVM_LAF_SPLIT_SWITCHES")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-split-switches");
++#else
+       load_llvm_pass(aflcc, "split-switches-pass.so");
+
++#endif
+     }
+
+     if (getenv("LAF_TRANSFORM_COMPARES") ||
+         getenv("AFL_LLVM_LAF_TRANSFORM_COMPARES")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-compare-transform");
++#else
+       load_llvm_pass(aflcc, "compare-transform-pass.so");
+
++#endif
+     }
+
+     if (getenv("LAF_SPLIT_COMPARES") || getenv("AFL_LLVM_LAF_SPLIT_COMPARES") ||
+         getenv("AFL_LLVM_LAF_SPLIT_FLOATS")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-split-compares");
++#else
+       load_llvm_pass(aflcc, "split-compares-pass.so");
+
++#endif
+     }
+
+     // /laf
+@@ -3691,10 +3748,17 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
+
+       insert_param(aflcc, "-fno-inline");
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-cmplog-switches");
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-split-switches");
++#else
+       load_llvm_pass(aflcc, "cmplog-switches-pass.so");
+       // reuse split switches from laf
+       load_llvm_pass(aflcc, "split-switches-pass.so");
+
++#endif
+     }
+
+     // #if LLVM_MAJOR >= 13
+@@ -3725,7 +3789,12 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
+
+       } else {
+
++#ifdef AFL_STATIC_LLVM_PASS
++        insert_param(aflcc, "-mllvm");
++        insert_param(aflcc, "--afl-coverage");
++#else
+         load_llvm_pass(aflcc, "afl-llvm-pass.so");
++#endif
+
+       }
+
+@@ -3733,9 +3802,17 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
+
+     if (aflcc->cmplog_mode) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-cmplog-instructions");
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-cmplog-routines");
++#else
+       load_llvm_pass(aflcc, "cmplog-instructions-pass.so");
+       load_llvm_pass(aflcc, "cmplog-routines-pass.so");
+
++#endif
++
+     }
+
+     if (getenv("AFL_LLVM_INJECTIONS_ALL") ||
+@@ -3743,14 +3820,24 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
+         getenv("AFL_LLVM_INJECTIONS_LDAP") ||
+         getenv("AFL_LLVM_INJECTIONS_XSS")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-injection");
++#else
+       load_llvm_pass(aflcc, "injection-pass.so");
++#endif
+
+     }
+
+     /* Load IJON instrumentation pass when AFL_LLVM_IJON is enabled */
+     if (getenv("AFL_LLVM_IJON")) {
+
++#ifdef AFL_STATIC_LLVM_PASS
++      insert_param(aflcc, "-mllvm");
++      insert_param(aflcc, "--afl-ijon");
++#else
+       load_llvm_pass(aflcc, "afl-llvm-ijon-pass.so");
++#endif
+
+     }
+
