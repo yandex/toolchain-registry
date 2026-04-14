@@ -126,7 +126,6 @@
   "ynd/clang-tidy/checks/using_namespace_in_header_check.h":"toolchains/ynd/clang-tidy/checks/using_namespace_in_header_check.h",
   "ynd/clang-tidy/checks/util_tstring_methods.cpp":"toolchains/ynd/clang-tidy/checks/util_tstring_methods.cpp",
   "ynd/clang-tidy/checks/util_tstring_methods.h":"toolchains/ynd/clang-tidy/checks/util_tstring_methods.h",
-  "ynd/clang-tidy/checks/ya.make":"toolchains/ynd/clang-tidy/checks/ya.make",
   "ynd/clang/18/bolted/ext-profile/ix.sh":"toolchains/ynd/clang/18/bolted/ext-profile/ix.sh",
   "ynd/clang/18/bolted/ix.sh":"toolchains/ynd/clang/18/bolted/ix.sh",
   "ynd/clang/18/bolted/train/ix.sh":"toolchains/ynd/clang/18/bolted/train/ix.sh",
