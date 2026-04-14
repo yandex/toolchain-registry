@@ -22,6 +22,11 @@ v{{self.version().strip()}}c.tar.gz
 
 {% block llvm_targets %}
 afl-cc
+afl-fuzz
+afl-showmap
+afl-tmin
+afl-analyze
+afl-gotcpu
 clang
 clang-resource-headers
 lld
@@ -73,9 +78,15 @@ ln -sf afl-cc afl-clang-lto++
 ln -sf afl-cc afl-clang-fast
 ln -sf afl-cc afl-clang-fast++
 
+sys_inc=""
+for d in $(echo "${SIP}" | tr ';' ' '); do
+    [ -n "${d}" ] && sys_inc="${sys_inc} -isystem ${d}"
+done
+
 ${out}/bin/clang \
     -O3 -fPIC -std=gnu17 \
     -Wno-unused-result -Wno-deprecated \
+    ${sys_inc} \
     -I${tmp}/aflplusplus/include \
     -I${tmp}/aflplusplus/instrumentation \
     -c ${tmp}/aflplusplus/instrumentation/afl-compiler-rt.o.c \
@@ -84,6 +95,7 @@ ${out}/bin/clang \
 ${out}/bin/clang \
     -O0 -flto=full -fPIC -std=gnu17 \
     -Wno-unused-result \
+    ${sys_inc} \
     -I${tmp}/aflplusplus/include \
     -I${tmp}/aflplusplus/instrumentation \
     -c ${tmp}/aflplusplus/instrumentation/afl-llvm-rt-lto.o.c \
@@ -91,6 +103,7 @@ ${out}/bin/clang \
 
 ${out}/bin/clang \
     -O3 -funroll-loops -g -fPIC -fno-lto -std=gnu17 \
+    ${sys_inc} \
     -I${tmp}/aflplusplus/include \
     -I${tmp}/aflplusplus/utils/aflpp_driver \
     -c ${tmp}/aflplusplus/utils/aflpp_driver/aflpp_driver.c \
@@ -108,40 +121,6 @@ for obj in ${out}/lib/afl/afl-compiler-rt.o ${tmp}/aflpp_driver.o; do
 done
 
 ${out}/bin/llvm-ar rc ${out}/lib/afl/libAFLDriver.a ${tmp}/aflpp_driver.o
-
-${out}/bin/clang \
-    -fuse-ld=lld -B${out}/bin \
-    -O3 -funroll-loops -std=gnu17 \
-    -Wall -Wno-pointer-sign -Wno-variadic-macros -Wno-deprecated \
-    -I${tmp}/aflplusplus/include \
-    -I${tmp}/aflplusplus/instrumentation \
-    '-DAFL_PATH="${out}/lib/afl"' \
-    '-DBIN_PATH="${out}/bin"' \
-    '-DDOC_PATH="${out}/share/doc/afl"' \
-    -o ${out}/bin/afl-fuzz \
-    ${tmp}/aflplusplus/src/afl-fuzz.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-bitmap.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-cmplog.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-extras.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-frameshift.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-ijon.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-init.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-mutators.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-one.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-python.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-queue.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-redqueen.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-run.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-sanfuzz.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-skipdet.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-state.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-stats.c \
-    ${tmp}/aflplusplus/src/afl-fuzz-statsd.c \
-    ${tmp}/aflplusplus/src/afl-common.c \
-    ${tmp}/aflplusplus/src/afl-sharedmem.c \
-    ${tmp}/aflplusplus/src/afl-forkserver.c \
-    ${tmp}/aflplusplus/src/afl-performance.c \
-    -lm -ldl -lrt
 
 {% endblock %}
 

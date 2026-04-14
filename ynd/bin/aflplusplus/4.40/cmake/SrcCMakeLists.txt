@@ -28,27 +28,40 @@ foreach(_src
   endif()
 endforeach()
 
+# Common compile options and includes for all AFL++ targets
+set(AFL_COMMON_COMPILE_OPTIONS
+  -O3 -funroll-loops -Wall -Wno-unused-function -Wno-deprecated
+  -Wno-pointer-sign -Wno-cast-qual -Wno-variadic-macros
+)
+
+set(AFL_COMMON_INCLUDES
+  ${AFL_SRC_DIR}/include
+  ${AFL_SRC_DIR}/instrumentation
+)
+
+set(AFL_COMMON_DEFINITIONS
+  AFL_PATH="${AFL_PATH}"
+  BIN_PATH="${AFL_BIN_PATH}"
+  DOC_PATH="${CMAKE_INSTALL_PREFIX}/share/doc/afl"
+  VERSION="${AFL_VERSION}"
+)
+
 add_executable(afl-cc
   ${AFL_SRC_DIR}/src/afl-cc.c
   ${AFL_SRC_DIR}/src/afl-common.c
 )
 
-target_include_directories(afl-cc PRIVATE
-  ${AFL_SRC_DIR}/include
-  ${AFL_SRC_DIR}/instrumentation
-)
+target_include_directories(afl-cc PRIVATE ${AFL_COMMON_INCLUDES})
 
 target_compile_definitions(afl-cc PRIVATE
   AFL_STATIC_LLVM_PASS=1
-  AFL_PATH="${AFL_PATH}"
-  BIN_PATH="${AFL_BIN_PATH}"
+  ${AFL_COMMON_DEFINITIONS}
   AFL_INCLUDE_PATH="${AFL_INCLUDE_PATH}"
   LLVM_BINDIR="${AFL_LLVM_BINDIR}"
   LLVM_LIBDIR="${AFL_LLVM_LIBDIR}"
   LLVM_VERSION="${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}"
   LLVM_MAJOR=${LLVM_VERSION_MAJOR}
   LLVM_MINOR=${LLVM_VERSION_MINOR}
-  VERSION="${AFL_VERSION}"
   CLANG_BIN="${AFL_CLANG_BIN}"
   CLANGPP_BIN="${AFL_CLANGPP_BIN}"
   USE_BINDIR=1
@@ -59,10 +72,7 @@ target_compile_definitions(afl-cc PRIVATE
   AFL_CLANG_FUSELD=""
 )
 
-target_compile_options(afl-cc PRIVATE
-  -O3 -funroll-loops -Wall -Wno-unused-function -Wno-deprecated -Wno-pointer-sign -Wno-cast-qual -Wno-variadic-macros
-)
-
+target_compile_options(afl-cc PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
 target_link_libraries(afl-cc PRIVATE m)
 
 install(TARGETS afl-cc
@@ -81,3 +91,115 @@ install(FILES
   DESTINATION lib/afl
   COMPONENT afl-cc
 )
+
+add_library(afl-common-objs OBJECT
+  ${AFL_SRC_DIR}/src/afl-common.c
+  ${AFL_SRC_DIR}/src/afl-sharedmem.c
+  ${AFL_SRC_DIR}/src/afl-forkserver.c
+  ${AFL_SRC_DIR}/src/afl-performance.c
+)
+
+target_include_directories(afl-common-objs PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-common-objs PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-common-objs PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+
+# Mutator/python objects needed by afl-fuzz, afl-showmap, afl-tmin
+add_library(afl-mutator-objs OBJECT
+  ${AFL_SRC_DIR}/src/afl-fuzz-mutators.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-python.c
+)
+
+target_include_directories(afl-mutator-objs PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-mutator-objs PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-mutator-objs PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+
+add_executable(afl-fuzz
+  ${AFL_SRC_DIR}/src/afl-fuzz.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-bitmap.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-cmplog.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-extras.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-frameshift.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-ijon.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-init.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-mutators.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-one.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-python.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-queue.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-redqueen.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-run.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-sanfuzz.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-skipdet.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-state.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-stats.c
+  ${AFL_SRC_DIR}/src/afl-fuzz-statsd.c
+  $<TARGET_OBJECTS:afl-common-objs>
+)
+
+target_include_directories(afl-fuzz PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-fuzz PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-fuzz PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+target_link_libraries(afl-fuzz PRIVATE m dl rt)
+
+add_executable(afl-showmap
+  ${AFL_SRC_DIR}/src/afl-showmap.c
+  $<TARGET_OBJECTS:afl-common-objs>
+  $<TARGET_OBJECTS:afl-mutator-objs>
+)
+
+target_include_directories(afl-showmap PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-showmap PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-showmap PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+target_link_libraries(afl-showmap PRIVATE m dl rt)
+
+add_executable(afl-tmin
+  ${AFL_SRC_DIR}/src/afl-tmin.c
+  $<TARGET_OBJECTS:afl-common-objs>
+  $<TARGET_OBJECTS:afl-mutator-objs>
+)
+
+target_include_directories(afl-tmin PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-tmin PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-tmin PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+target_link_libraries(afl-tmin PRIVATE m dl rt)
+
+add_executable(afl-analyze
+  ${AFL_SRC_DIR}/src/afl-analyze.c
+  $<TARGET_OBJECTS:afl-common-objs>
+)
+
+target_include_directories(afl-analyze PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-analyze PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-analyze PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+target_link_libraries(afl-analyze PRIVATE m dl rt)
+
+add_executable(afl-gotcpu
+  ${AFL_SRC_DIR}/src/afl-gotcpu.c
+  ${AFL_SRC_DIR}/src/afl-common.c
+)
+
+target_include_directories(afl-gotcpu PRIVATE ${AFL_COMMON_INCLUDES})
+target_compile_definitions(afl-gotcpu PRIVATE ${AFL_COMMON_DEFINITIONS})
+target_compile_options(afl-gotcpu PRIVATE ${AFL_COMMON_COMPILE_OPTIONS})
+target_link_libraries(afl-gotcpu PRIVATE m dl rt)
+
+foreach(_tool afl-fuzz afl-showmap afl-tmin afl-analyze afl-gotcpu)
+  install(TARGETS ${_tool}
+    RUNTIME DESTINATION bin
+    COMPONENT ${_tool}
+  )
+  add_custom_target(install-${_tool}
+    DEPENDS ${_tool}
+    COMMAND ${CMAKE_COMMAND} -DCMAKE_INSTALL_COMPONENT=${_tool}
+      -P ${CMAKE_BINARY_DIR}/cmake_install.cmake
+  )
+endforeach()
+
+foreach(_script afl-cmin afl-cmin.bash afl-plot afl-whatsup afl-addseeds
+                afl-persistent-config afl-system-config)
+  if(EXISTS "${AFL_SRC_DIR}/${_script}")
+    install(PROGRAMS ${AFL_SRC_DIR}/${_script}
+      DESTINATION bin
+      COMPONENT afl-fuzz
+    )
+  endif()
+endforeach()
