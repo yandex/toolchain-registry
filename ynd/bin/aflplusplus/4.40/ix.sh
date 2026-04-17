@@ -78,40 +78,9 @@ ln -sf afl-cc afl-clang-lto++
 ln -sf afl-cc afl-clang-fast
 ln -sf afl-cc afl-clang-fast++
 
-sys_inc=""
-for d in $(echo "${SIP}" | tr ';' ' '); do
-    [ -n "${d}" ] && sys_inc="${sys_inc} -isystem ${d}"
-done
-
-${out}/bin/clang \
-    -O3 -fPIC -std=gnu17 \
-    -Wno-unused-result -Wno-deprecated \
-    ${sys_inc} \
-    -I${tmp}/aflplusplus/include \
-    -I${tmp}/aflplusplus/instrumentation \
-    -c ${tmp}/aflplusplus/instrumentation/afl-compiler-rt.o.c \
-    -o ${out}/lib/afl/afl-compiler-rt.o
-
-${out}/bin/clang \
-    -O0 -flto=full -fPIC -std=gnu17 \
-    -Wno-unused-result \
-    ${sys_inc} \
-    -I${tmp}/aflplusplus/include \
-    -I${tmp}/aflplusplus/instrumentation \
-    -c ${tmp}/aflplusplus/instrumentation/afl-llvm-rt-lto.o.c \
-    -o ${out}/lib/afl/afl-llvm-rt-lto.o
-
-${out}/bin/clang \
-    -O3 -funroll-loops -g -fPIC -fno-lto -std=gnu17 \
-    ${sys_inc} \
-    -I${tmp}/aflplusplus/include \
-    -I${tmp}/aflplusplus/utils/aflpp_driver \
-    -c ${tmp}/aflplusplus/utils/aflpp_driver/aflpp_driver.c \
-    -o ${tmp}/aflpp_driver.o
-
 # glibc 2.38+: _GNU_SOURCE triggers _ISOC2X_SOURCE in features.h,
 # causing strtol to be redirected to __isoc23_strtol via __asm__.
-for obj in ${out}/lib/afl/afl-compiler-rt.o ${tmp}/aflpp_driver.o; do
+for obj in ${out}/lib/afl/afl-compiler-rt.o ${out}/lib/afl/aflpp_driver.o; do
     ${out}/bin/llvm-objcopy \
         --redefine-sym __isoc23_strtol=strtol \
         --redefine-sym __isoc23_strtoll=strtoll \
@@ -120,7 +89,8 @@ for obj in ${out}/lib/afl/afl-compiler-rt.o ${tmp}/aflpp_driver.o; do
         ${obj}
 done
 
-${out}/bin/llvm-ar rc ${out}/lib/afl/libAFLDriver.a ${tmp}/aflpp_driver.o
+${out}/bin/llvm-ar rc ${out}/lib/afl/libAFLDriver.a ${out}/lib/afl/aflpp_driver.o
+rm ${out}/lib/afl/aflpp_driver.o
 
 {% endblock %}
 

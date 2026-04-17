@@ -81,7 +81,7 @@ install(TARGETS afl-cc
 )
 
 add_custom_target(install-afl-cc
-  DEPENDS afl-cc
+  DEPENDS afl-cc afl-runtime
   COMMAND ${CMAKE_COMMAND} -DCMAKE_INSTALL_COMPONENT=afl-cc
     -P ${CMAKE_BINARY_DIR}/cmake_install.cmake
 )
@@ -203,3 +203,68 @@ foreach(_script afl-cmin afl-cmin.bash afl-plot afl-whatsup afl-addseeds
     )
   endif()
 endforeach()
+
+set(AFL_RT_SYS_INCLUDES "")
+foreach(_p ${CMAKE_SYSTEM_INCLUDE_PATH})
+  if(NOT "${_p}" STREQUAL "")
+    list(APPEND AFL_RT_SYS_INCLUDES "-isystem" "${_p}")
+  endif()
+endforeach()
+
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/afl-rt)
+
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/afl-rt/afl-compiler-rt.o
+  COMMAND $<TARGET_FILE:clang> -O3 -fPIC -std=gnu17
+    -Wno-unused-result -Wno-deprecated
+    ${AFL_RT_SYS_INCLUDES}
+    -I${AFL_SRC_DIR}/include
+    -I${AFL_SRC_DIR}/instrumentation
+    -c ${AFL_SRC_DIR}/instrumentation/afl-compiler-rt.o.c
+    -o ${CMAKE_BINARY_DIR}/afl-rt/afl-compiler-rt.o
+  DEPENDS clang clang-resource-headers
+    ${AFL_SRC_DIR}/instrumentation/afl-compiler-rt.o.c
+  COMMENT "Building afl-compiler-rt.o with target clang"
+)
+
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/afl-rt/afl-llvm-rt-lto.o
+  COMMAND $<TARGET_FILE:clang> -O0 -flto=full -fPIC -std=gnu17
+    -Wno-unused-result
+    ${AFL_RT_SYS_INCLUDES}
+    -I${AFL_SRC_DIR}/include
+    -I${AFL_SRC_DIR}/instrumentation
+    -c ${AFL_SRC_DIR}/instrumentation/afl-llvm-rt-lto.o.c
+    -o ${CMAKE_BINARY_DIR}/afl-rt/afl-llvm-rt-lto.o
+  DEPENDS clang clang-resource-headers
+    ${AFL_SRC_DIR}/instrumentation/afl-llvm-rt-lto.o.c
+  COMMENT "Building afl-llvm-rt-lto.o with target clang"
+)
+
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/afl-rt/aflpp_driver.o
+  COMMAND $<TARGET_FILE:clang> -O3 -funroll-loops -g -fPIC -fno-lto -std=gnu17
+    ${AFL_RT_SYS_INCLUDES}
+    -I${AFL_SRC_DIR}/include
+    -I${AFL_SRC_DIR}/utils/aflpp_driver
+    -c ${AFL_SRC_DIR}/utils/aflpp_driver/aflpp_driver.c
+    -o ${CMAKE_BINARY_DIR}/afl-rt/aflpp_driver.o
+  DEPENDS clang clang-resource-headers
+    ${AFL_SRC_DIR}/utils/aflpp_driver/aflpp_driver.c
+  COMMENT "Building aflpp_driver.o with target clang"
+)
+
+add_custom_target(afl-runtime
+  DEPENDS
+    ${CMAKE_BINARY_DIR}/afl-rt/afl-compiler-rt.o
+    ${CMAKE_BINARY_DIR}/afl-rt/afl-llvm-rt-lto.o
+    ${CMAKE_BINARY_DIR}/afl-rt/aflpp_driver.o
+)
+
+install(FILES
+  ${CMAKE_BINARY_DIR}/afl-rt/afl-compiler-rt.o
+  ${CMAKE_BINARY_DIR}/afl-rt/afl-llvm-rt-lto.o
+  ${CMAKE_BINARY_DIR}/afl-rt/aflpp_driver.o
+  DESTINATION lib/afl
+  COMPONENT afl-cc
+)
