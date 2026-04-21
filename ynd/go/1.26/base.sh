@@ -19,7 +19,7 @@ curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version==
 {% elif darwin and arm64 %}
     32af1522bf3e3ff3975864780a429cc0b41d190ec7bf90faa661d6d64566e7af
 {% elif mingw32 %}
-    094d05caaf6ba235e2bd570b625d064ceb65943866252722a8f3fdba232139c6
+    98eb3570bade15cb826b0909338df6cc6d2cf590bc39c471142002db3832b708
 {% endif %}
 {% endblock %}
 
