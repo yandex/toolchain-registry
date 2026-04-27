@@ -1,0 +1,12 @@
+--- a/clang-tools-extra/clang-tidy/readability/IdentifierNamingCheck.cpp
++++ b/clang-tools-extra/clang-tidy/readability/IdentifierNamingCheck.cpp
+@@ -1161,6 +1161,9 @@
+     if (Decl->isAnonymousStructOrUnion())
+       return SK_Invalid;
+
++    if (!Decl->getCanonicalDecl()->isThisDeclarationADefinition())
++      return SK_Invalid;
++
+     if (const auto *Definition = Decl->getDefinition()) {
+       if (const auto *CxxRecordDecl = dyn_cast<CXXRecordDecl>(Definition)) {
+         if (CxxRecordDecl->isAbstract() && NamingStyles[SK_AbstractClass])
