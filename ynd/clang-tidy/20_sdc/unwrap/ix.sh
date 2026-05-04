@@ -31,8 +31,34 @@ using_namespace_in_header_check.h
 util_tstring_methods.cpp
 util_tstring_methods.h
 possible_nullptr_check.cpp
+SdcDynamicMemoryAutomaticCheck.cpp
+SdcDynamicMemoryAutomaticCheck.h
+SdcGetenvPointerConstQualifiedCheck.cpp
+SdcGetenvPointerConstQualifiedCheck.h
+SdcNoAdvancedMemoryManagementCheck.cpp
+SdcNoAdvancedMemoryManagementCheck.h
+SdcNoAtoFunctionsCheck.cpp
+SdcNoAtoFunctionsCheck.h
 SdcNoLowercaseLSuffixCheck.cpp
 SdcNoLowercaseLSuffixCheck.h
+SdcNoMemFunctionsCheck.cpp
+SdcNoMemFunctionsCheck.h
+SdcNoOctalConstantsCheck.cpp
+SdcNoOctalConstantsCheck.h
+SdcNoSetlocaleGlobalCheck.cpp
+SdcNoSetlocaleGlobalCheck.h
+SdcNoStaticLocalVariablesCheck.cpp
+SdcNoStaticLocalVariablesCheck.h
+SdcNoStringFunctionsCheck.cpp
+SdcNoStringFunctionsCheck.h
+SdcNoSystemCheck.cpp
+SdcNoSystemCheck.h
+SdcReturnValueUsedCheck.cpp
+SdcReturnValueUsedCheck.h
+SdcSpecialMemberFunctionsCheck.cpp
+SdcSpecialMemberFunctionsCheck.h
+SdcStdMoveNonConstLvalueCheck.cpp
+SdcStdMoveNonConstLvalueCheck.h
 {% endblock %}
 
 {% block cmake_flags %}

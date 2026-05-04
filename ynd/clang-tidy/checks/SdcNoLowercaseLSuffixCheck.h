@@ -1,13 +1,14 @@
 #pragma once
+
 #include "bridge_header.h"
 
 namespace clang {
     namespace tidy {
         namespace sdc {
-            // lowercase form of `L` shall not be used as the first
+
+            // The lowercase form of L shall not be used as the first
             // character in a literal suffix.
-            // This rule does not apply to user-defined-literals
-            // as they start with `_`
+            // This rule does not apply to user-defined-literals.
             class SdcNoLowercaseLSuffixCheck: public ClangTidyCheck {
             public:
                 SdcNoLowercaseLSuffixCheck(StringRef Name, ClangTidyContext* Context);

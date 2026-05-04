@@ -10,7 +10,20 @@
 #include "using_namespace_in_header_check.h"
 #include "util_tstring_methods.h"
 
+#include "SdcDynamicMemoryAutomaticCheck.h"
+#include "SdcGetenvPointerConstQualifiedCheck.h"
+#include "SdcNoAdvancedMemoryManagementCheck.h"
+#include "SdcNoAtoFunctionsCheck.h"
 #include "SdcNoLowercaseLSuffixCheck.h"
+#include "SdcNoMemFunctionsCheck.h"
+#include "SdcNoOctalConstantsCheck.h"
+#include "SdcNoSetlocaleGlobalCheck.h"
+#include "SdcNoStaticLocalVariablesCheck.h"
+#include "SdcNoStringFunctionsCheck.h"
+#include "SdcNoSystemCheck.h"
+#include "SdcReturnValueUsedCheck.h"
+#include "SdcSpecialMemberFunctionsCheck.h"
+#include "SdcStdMoveNonConstLvalueCheck.h"
 
 using namespace clang::ast_matchers;
 
@@ -29,7 +42,20 @@ public:
         CheckFactories.registerCheck<UsingNamespaceInHeaderCheck>("arcadia-using-namespace-in-header");
         CheckFactories.registerCheck<UtilTStringUpperCaseMethodsCheck>("arcadia-util-tstring-methods");
 
+        CheckFactories.registerCheck<sdc::SdcDynamicMemoryAutomaticCheck>("sdc-dynamic-memory-automatic");
+        CheckFactories.registerCheck<sdc::SdcGetenvPointerConstQualifiedCheck>("sdc-getenv-pointer-const-qualified");
+        CheckFactories.registerCheck<sdc::SdcNoAdvancedMemoryManagementCheck>("sdc-no-advanced-memory-management");
+        CheckFactories.registerCheck<sdc::SdcNoAtoFunctionsCheck>("sdc-no-ato-functions");
         CheckFactories.registerCheck<sdc::SdcNoLowercaseLSuffixCheck>("sdc-no-lowercase-l-suffix");
+        CheckFactories.registerCheck<sdc::SdcNoMemFunctionsCheck>("sdc-no-mem-functions");
+        CheckFactories.registerCheck<sdc::SdcNoOctalConstantsCheck>("sdc-no-octal-constants");
+        CheckFactories.registerCheck<sdc::SdcNoSetlocaleGlobalCheck>("sdc-no-setlocale-global");
+        CheckFactories.registerCheck<sdc::SdcNoStaticLocalVariablesCheck>("sdc-no-static-local-variables");
+        CheckFactories.registerCheck<sdc::SdcNoStringFunctionsCheck>("sdc-no-string-functions");
+        CheckFactories.registerCheck<sdc::SdcNoSystemCheck>("sdc-no-system");
+        CheckFactories.registerCheck<sdc::SdcReturnValueUsedCheck>("sdc-return-value-used");
+        CheckFactories.registerCheck<sdc::SdcSpecialMemberFunctionsCheck>("sdc-special-member-functions");
+        CheckFactories.registerCheck<sdc::SdcStdMoveNonConstLvalueCheck>("sdc-std-move-non-const-lvalue");
     }
 };
 
