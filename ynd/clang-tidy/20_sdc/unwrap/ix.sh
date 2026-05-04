@@ -21,7 +21,6 @@ taxi_coroutine_unsafe_check.cpp
 taxi_coroutine_unsafe_check.h
 taxi_dangling_config_ref_check.cpp
 taxi_dangling_config_ref_check.h
-tidy_module_sdc.cpp
 uneeded_temporary_string_check.cpp
 uneeded_temporary_string_check.h
 usage_restriction_checks.cpp
@@ -31,6 +30,10 @@ using_namespace_in_header_check.h
 util_tstring_methods.cpp
 util_tstring_methods.h
 possible_nullptr_check.cpp
+{% endblock %}
+
+{% block sdc_check_srcs %}
+tidy_module_sdc.cpp
 SdcDynamicMemoryAutomaticCheck.cpp
 SdcDynamicMemoryAutomaticCheck.h
 SdcGetenvPointerConstQualifiedCheck.cpp
@@ -100,6 +103,12 @@ base64 -d << EOF > $YANDEX_TIDY_MODULE/{{check_src}}
 EOF
 {% endfor %}
 
+{% for check_src in self.sdc_check_srcs().strip().split() %}
+base64 -d << EOF > $YANDEX_TIDY_MODULE/{{check_src}}
+{{ix.load_file('//clang-tidy/20_sdc/checks/' + check_src) | b64e }}
+EOF
+{% endfor %}
+
 # Create new one more module
 cat << EOF > $YANDEX_TIDY_MODULE/CMakeLists.txt
 set(LLVM_LINK_COMPONENTS FrontendOpenMP Support)
@@ -108,6 +117,10 @@ set(LLVM_LINK_COMPONENTS FrontendOpenMP Support)
 add_clang_library(clangTidyYandexModule
 
 {% for check_src in self.check_srcs().strip().split() %}
+{{check_src}}
+{% endfor %}
+
+{% for check_src in self.sdc_check_srcs().strip().split() %}
 {{check_src}}
 {% endfor %}
 
