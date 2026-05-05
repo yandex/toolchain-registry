@@ -1,0 +1,537 @@
+--- a/include/llvm/ProfileData/Coverage/CoverageMapping.h
++++ b/include/llvm/ProfileData/Coverage/CoverageMapping.h
+@@ -465,15 +465,53 @@ struct MCDCRecord {
+ private:
+   CounterMappingRegion Region;
+   TestVectors TV;
++  TestVectors NotExecutedTV;
+   std::optional<TVPairMap> IndependencePairs;
+   BoolVector Folded;
+   CondIDMap PosToID;
+   LineColPairMap CondLoc;
+ 
++  std::string formatTestVectorRow(const TestVector &Vec, CondState Result,
++                                  unsigned DisplayRowNumber) const {
++    std::ostringstream OS;
++    const auto NumConditions = getNumConditions();
++    OS << "  " << DisplayRowNumber << " { ";
++    for (unsigned Condition = 0; Condition < NumConditions; Condition++) {
++      if (isCondFolded(Condition))
++        OS << "C";
++      else {
++        auto It = PosToID.find(Condition);
++        assert(It != PosToID.end() && "Ordinal without CondID mapping");
++        switch (Vec[It->second]) {
++        case MCDC_DontCare:
++          OS << "-";
++          break;
++        case MCDC_True:
++          OS << "T";
++          break;
++        case MCDC_False:
++          OS << "F";
++          break;
++        }
++      }
++      if (Condition != NumConditions - 1)
++        OS << ",  ";
++    }
++    OS << "  = ";
++    if (Result == MCDC_True)
++      OS << "T";
++    else
++      OS << "F";
++    OS << "      }\n";
++    return OS.str();
++  }
++
+ public:
+   MCDCRecord(const CounterMappingRegion &Region, TestVectors &&TV,
+-             BoolVector &&Folded, CondIDMap &&PosToID, LineColPairMap &&CondLoc)
+-      : Region(Region), TV(std::move(TV)), Folded(std::move(Folded)),
++             TestVectors &&NotExecutedTV, BoolVector &&Folded,
++             CondIDMap &&PosToID, LineColPairMap &&CondLoc)
++      : Region(Region), TV(std::move(TV)),
++        NotExecutedTV(std::move(NotExecutedTV)), Folded(std::move(Folded)),
+         PosToID(std::move(PosToID)), CondLoc(std::move(CondLoc)) {
+     findIndependencePairs();
+   }
+@@ -487,6 +525,8 @@ public:
+     return Region.getDecisionParams().NumConditions;
+   }
+   unsigned getNumTestVectors() const { return TV.size(); }
++  unsigned getNumNotExecutedTestVectors() const { return NotExecutedTV.size(); }
++
+   bool isCondFolded(unsigned Condition) const {
+     return Folded[false][Condition] || Folded[true][Condition];
+   }
+@@ -507,6 +547,15 @@ public:
+     return TV[TestVectorIndex].second;
+   }
+ 
++  CondState getNotExecutedTVCondition(unsigned NotExecutedIndex,
++                                    unsigned Condition) {
++    return NotExecutedTV[NotExecutedIndex].first[PosToID[Condition]];
++  }
++
++  CondState getNotExecutedTVResult(unsigned NotExecutedIndex) {
++    return NotExecutedTV[NotExecutedIndex].second;
++  }
++
+   /// Determine whether a given condition (indicated by Condition) is covered
+   /// by an Independence Pair. Because condition IDs are not associated based
+   /// on their position in the expression, accessing conditions in the
+@@ -556,7 +605,7 @@ public:
+ 
+   std::string getTestVectorHeaderString() const {
+     std::ostringstream OS;
+-    if (getNumTestVectors() == 0) {
++    if (getNumTestVectors() == 0 && getNumNotExecutedTestVectors() == 0) {
+       OS << "None.\n";
+       return OS.str();
+     }
+@@ -573,39 +622,16 @@ public:
+   std::string getTestVectorString(unsigned TestVectorIndex) {
+     assert(TestVectorIndex < getNumTestVectors() &&
+            "TestVector index out of bounds!");
+-    std::ostringstream OS;
+-    const auto NumConditions = getNumConditions();
+-    // Add individual condition values to the string.
+-    OS << "  " << TestVectorIndex + 1 << " { ";
+-    for (unsigned Condition = 0; Condition < NumConditions; Condition++) {
+-      if (isCondFolded(Condition))
+-        OS << "C";
+-      else {
+-        switch (getTVCondition(TestVectorIndex, Condition)) {
+-        case MCDCRecord::MCDC_DontCare:
+-          OS << "-";
+-          break;
+-        case MCDCRecord::MCDC_True:
+-          OS << "T";
+-          break;
+-        case MCDCRecord::MCDC_False:
+-          OS << "F";
+-          break;
+-        }
+-      }
+-      if (Condition != NumConditions - 1)
+-        OS << ",  ";
+-    }
++    const auto &[Vec, Res] = TV[TestVectorIndex];
++    return formatTestVectorRow(Vec, Res, TestVectorIndex + 1);
++  }
+ 
+-    // Add result value to the string.
+-    OS << "  = ";
+-    if (getTVResult(TestVectorIndex) == MCDC_True)
+-      OS << "T";
+-    else
+-      OS << "F";
+-    OS << "      }\n";
+-
+-    return OS.str();
++  std::string getNotExecutedTestVectorString(unsigned NotExecutedIndex) {
++    assert(NotExecutedIndex < getNumNotExecutedTestVectors() &&
++           "Not-executed test vector index out of bounds!");
++    const auto &[Vec, Res] = NotExecutedTV[NotExecutedIndex];
++    return formatTestVectorRow(Vec, Res,
++                               getNumTestVectors() + NotExecutedIndex + 1);
+   }
+ 
+   std::string getConditionCoverageString(unsigned Condition) {
+--- a/lib/ProfileData/Coverage/CoverageMapping.cpp
++++ b/lib/ProfileData/Coverage/CoverageMapping.cpp
+@@ -430,10 +430,16 @@ class MCDCRecordProcessor : NextIDsBuilder, mcdc::TVIdxBuilder {
+   /// ExecVectors is the alias of its 0th element.
+   std::array<MCDCRecord::TestVectors, 2> ExecVectorsByCond;
+ 
++  /// Never-executed test vectors (same layout as ExecVectorsByCond).
++  std::array<MCDCRecord::TestVectors, 2> NotExecVectorsByCond;
++
+   /// Actual executed Test Vectors for the boolean expression, based on
+   /// ExecutedTestVectorBitmap.
+   MCDCRecord::TestVectors &ExecVectors;
+ 
++  /// Never-executed test vectors (alias of NotExecVectorsByCond[false]).
++  MCDCRecord::TestVectors &NotExecVectors;
++
+ #ifndef NDEBUG
+   DenseSet<unsigned> TVIdxs;
+ #endif
+@@ -450,7 +456,7 @@ public:
+         Branches(Branches), NumConditions(DecisionParams.NumConditions),
+         Folded{{BitVector(NumConditions), BitVector(NumConditions)}},
+         IndependencePairs(NumConditions), ExecVectors(ExecVectorsByCond[false]),
+-        IsVersion11(IsVersion11) {}
++        NotExecVectors(NotExecVectorsByCond[false]), IsVersion11(IsVersion11) {}
+ 
+ private:
+   // Walk the binary decision diagram and try assigning both false and true to
+@@ -473,24 +479,29 @@ private:
+       assert(TVIdx < SavedNodes[ID].Width);
+       assert(TVIdxs.insert(NextTVIdx).second && "Duplicate TVIdx");
+ 
+-      if (!Bitmap[IsVersion11
+-                      ? DecisionParams.BitmapIdx * CHAR_BIT + TV.getIndex()
+-                      : DecisionParams.BitmapIdx - NumTestVectors + NextTVIdx])
+-        continue;
+-
+-      // Copy the completed test vector to the vector of testvectors.
+-      // The final value (T,F) is equal to the last non-dontcare state on the
+-      // path (in a short-circuiting system).
+-      ExecVectorsByCond[MCDCCond].push_back({TV, MCDCCond});
++      bool Executed =
++          Bitmap[IsVersion11 ? DecisionParams.BitmapIdx * CHAR_BIT +
++                                   TV.getIndex()
++                             : DecisionParams.BitmapIdx - NumTestVectors +
++                                   NextTVIdx];
++      if (Executed) {
++        // Copy the completed test vector to the vector of testvectors.
++        // The final value (T,F) is equal to the last non-dontcare state on the
++        // path (in a short-circuiting system).
++        ExecVectorsByCond[MCDCCond].push_back({TV, MCDCCond});
++      } else {
++        NotExecVectorsByCond[MCDCCond].push_back({TV, MCDCCond});
++      }
+     }
+ 
+     // Reset back to DontCare.
+     TV.set(ID, MCDCRecord::MCDC_DontCare);
+   }
+ 
+-  /// Walk the bits in the bitmap.  A bit set to '1' indicates that the test
++  /// Walk the bits in the bitmap. A bit set to '1' indicates that the test
+   /// vector at the corresponding index was executed during a test run.
+-  void findExecutedTestVectors() {
++  /// Vectors with '0' are collected separately for UI.
++  void findTestVectors() {
+     // Walk the binary decision diagram to enumerate all possible test vectors.
+     // We start at the root node (ID == 0) with all values being DontCare.
+     // `TVIdx` starts with 0 and is in the traversal.
+@@ -506,6 +517,10 @@ private:
+     auto &ExecVectorsT = ExecVectorsByCond[true];
+     ExecVectors.append(std::make_move_iterator(ExecVectorsT.begin()),
+                        std::make_move_iterator(ExecVectorsT.end()));
++
++    auto &NotExecVectorsT = NotExecVectorsByCond[true];
++    NotExecVectors.append(std::make_move_iterator(NotExecVectorsT.begin()),
++                          std::make_move_iterator(NotExecVectorsT.end()));
+   }
+ 
+ public:
+@@ -540,12 +555,14 @@ public:
+       Folded[true][I] = B->Count.isZero();
+     }
+ 
+-    // Using Profile Bitmap from runtime, mark the executed test vectors.
+-    findExecutedTestVectors();
++    // Using Profile Bitmap from runtime, collect executed and not-executed
++    // test vectors.
++    findTestVectors();
+ 
+-    // Record Test vectors, executed vectors, and independence pairs.
+-    return MCDCRecord(Region, std::move(ExecVectors), std::move(Folded),
+-                      std::move(PosToID), std::move(CondLoc));
++    // Record executed vectors, not-executed vectors, and independence pairs.
++    return MCDCRecord(Region, std::move(ExecVectors), std::move(NotExecVectors),
++                      std::move(Folded), std::move(PosToID),
++                      std::move(CondLoc));
+   }
+ };
+ 
+--- a/tools/llvm-cov/CodeCoverage.cpp
++++ b/tools/llvm-cov/CodeCoverage.cpp
+@@ -995,6 +995,11 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
+       cl::desc("Show the MCDC Coverage for each applicable boolean expression"),
+       cl::cat(ViewCategory));
+ 
++  cl::opt<bool> ShowMCDCNonExecutedVectors(
++      "show-mcdc-non-executed-vectors", cl::Optional,
++      cl::desc("Show MC/DC test vectors that were not executed"),
++      cl::cat(ViewCategory));
++
+   cl::opt<bool> ShowBestLineRegionsCounts(
+       "show-line-counts-or-regions", cl::Optional,
+       cl::desc("Show the execution counts for each line, or the execution "
+@@ -1101,6 +1106,7 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
+   ViewOpts.ShowBranchCounts =
+       ShowBranches == CoverageViewOptions::BranchOutputType::Count;
+   ViewOpts.ShowMCDC = ShowMCDC;
++  ViewOpts.ShowMCDCNonExecutedVectors = ShowMCDCNonExecutedVectors;
+   ViewOpts.ShowBranchPercents =
+       ShowBranches == CoverageViewOptions::BranchOutputType::Percent;
+   ViewOpts.ShowFunctionInstantiations = ShowInstantiations;
+@@ -1284,6 +1290,12 @@ int CodeCoverageTool::doExport(int argc, const char **argv,
+                               cl::desc("Don't export branch data (LCOV)"),
+                               cl::cat(ExportCategory));
+ 
++  cl::opt<bool> ShowMCDCNonExecutedVectors(
++      "show-mcdc-non-executed-vectors", cl::Optional,
++      cl::desc("Include MC/DC test vectors that were not executed in the "
++               "export"),
++      cl::cat(ExportCategory));
++
+   auto Err = commandLineParser(argc, argv);
+   if (Err)
+     return Err;
+@@ -1291,6 +1303,7 @@ int CodeCoverageTool::doExport(int argc, const char **argv,
+   ViewOpts.SkipExpansions = SkipExpansions;
+   ViewOpts.SkipFunctions = SkipFunctions;
+   ViewOpts.SkipBranches = SkipBranches;
++  ViewOpts.ShowMCDCNonExecutedVectors = ShowMCDCNonExecutedVectors;
+ 
+   if (ViewOpts.Format != CoverageViewOptions::OutputFormat::Text &&
+       ViewOpts.Format != CoverageViewOptions::OutputFormat::Lcov) {
+--- a/tools/llvm-cov/CoverageExporterJson.cpp
++++ b/tools/llvm-cov/CoverageExporterJson.cpp
+@@ -22,7 +22,7 @@
+ //           -- Branch: dict => Describes a branch of the file with counters
+ //         -- MCDC Records: array => List of MCDC records in the file
+ //           -- MCDC Values: array => List of T/F covered condition values and
+-//           list of executed test vectors
++//           list of test vectors with execution status
+ //         -- Segments: array => List of Segments contained in the file
+ //           -- Segment: dict => Describes a segment of the file with a counter
+ //         -- Expansions: array => List of expansion records
+@@ -120,11 +120,13 @@ json::Value renderCondState(const coverage::MCDCRecord::CondState CondState) {
+   }
+ }
+ 
+-json::Array gatherTestVectors(coverage::MCDCRecord &Record) {
++json::Array gatherTestVectors(coverage::MCDCRecord &Record,
++                              const CoverageViewOptions &Options) {
+   json::Array TestVectors;
+   unsigned NumConditions = Record.getNumConditions();
++  const bool ShowNonExecutedVectors = Options.ShowMCDCNonExecutedVectors;
++
+   for (unsigned tv = 0; tv < Record.getNumTestVectors(); tv++) {
+-
+     json::Array TVConditions;
+     for (unsigned c = 0; c < NumConditions; c++)
+       TVConditions.push_back(renderCondState(Record.getTVCondition(tv, c)));
+@@ -134,15 +136,30 @@ json::Array gatherTestVectors(coverage::MCDCRecord &Record) {
+                       {"result", renderCondState(Record.getTVResult(tv))},
+                       {"conditions", std::move(TVConditions)}}));
+   }
++  if (ShowNonExecutedVectors) {
++    for (unsigned tv = 0; tv < Record.getNumNotExecutedTestVectors(); tv++) {
++      json::Array TVConditions;
++      for (unsigned c = 0; c < NumConditions; c++)
++        TVConditions.push_back(
++            renderCondState(Record.getNotExecutedTVCondition(tv, c)));
++
++      TestVectors.push_back(
++          json::Object({{"executed", json::Value(false)},
++                        {"result", renderCondState(Record.getNotExecutedTVResult(tv))},
++                        {"conditions", std::move(TVConditions)}}));
++    }
++  }
+   return TestVectors;
+ }
+ 
+-json::Array renderMCDCRecord(const coverage::MCDCRecord &Record) {
++json::Array renderMCDCRecord(const coverage::MCDCRecord &Record,
++                            const CoverageViewOptions &Options) {
+   const llvm::coverage::CounterMappingRegion &CMR = Record.getDecisionRegion();
+   return json::Array(
+       {CMR.LineStart, CMR.ColumnStart, CMR.LineEnd,
+        CMR.ColumnEnd, CMR.ExpandedFileID, int64_t(CMR.Kind),
+-       gatherConditions(Record), gatherTestVectors(const_cast<coverage::MCDCRecord &>(Record))});
++       gatherConditions(Record),
++       gatherTestVectors(const_cast<coverage::MCDCRecord &>(Record), Options)});
+ }
+ 
+ json::Array renderRegions(ArrayRef<coverage::CountedRegion> Regions) {
+@@ -160,10 +177,11 @@ json::Array renderBranchRegions(ArrayRef<coverage::CountedRegion> Regions) {
+   return RegionArray;
+ }
+ 
+-json::Array renderMCDCRecords(ArrayRef<coverage::MCDCRecord> Records) {
++json::Array renderMCDCRecords(ArrayRef<coverage::MCDCRecord> Records,
++                             const CoverageViewOptions &Options) {
+   json::Array RecordArray;
+   for (auto &Record : Records)
+-    RecordArray.push_back(renderMCDCRecord(Record));
++    RecordArray.push_back(renderMCDCRecord(Record, Options));
+   return RecordArray;
+ }
+ 
+@@ -265,10 +283,11 @@ json::Array renderFileBranches(const coverage::CoverageData &FileCoverage) {
+   return BranchArray;
+ }
+ 
+-json::Array renderFileMCDC(const coverage::CoverageData &FileCoverage) {
++json::Array renderFileMCDC(const coverage::CoverageData &FileCoverage,
++                           const CoverageViewOptions &Options) {
+   json::Array MCDCRecordArray;
+   for (const auto &Record : FileCoverage.getMCDCRecords())
+-    MCDCRecordArray.push_back(renderMCDCRecord(Record));
++    MCDCRecordArray.push_back(renderMCDCRecord(Record, Options));
+   return MCDCRecordArray;
+ }
+ 
+@@ -282,7 +301,7 @@ json::Object renderFile(const coverage::CoverageMapping &Coverage,
+     auto FileCoverage = Coverage.getCoverageForFile(Filename);
+     File["segments"] = renderFileSegments(FileCoverage);
+     File["branches"] = renderFileBranches(FileCoverage);
+-    File["mcdc_records"] = renderFileMCDC(FileCoverage);
++    File["mcdc_records"] = renderFileMCDC(FileCoverage, Options);
+     if (!Options.SkipExpansions) {
+       File["expansions"] = renderFileExpansions(Coverage, FileCoverage);
+     }
+@@ -322,7 +341,8 @@ json::Array renderFiles(const coverage::CoverageMapping &Coverage,
+ }
+ 
+ json::Array renderFunctions(
+-    const iterator_range<coverage::FunctionRecordIterator> &Functions) {
++    const iterator_range<coverage::FunctionRecordIterator> &Functions,
++    const CoverageViewOptions &Options) {
+   json::Array FunctionArray;
+   for (const auto &F : Functions)
+     FunctionArray.push_back(
+@@ -330,7 +350,7 @@ json::Array renderFunctions(
+                       {"count", clamp_uint64_to_int64(F.ExecutionCount)},
+                       {"regions", renderRegions(F.CountedRegions)},
+                       {"branches", renderBranchRegions(F.CountedBranchRegions)},
+-                      {"mcdc_records", renderMCDCRecords(F.MCDCRecords)},
++                      {"mcdc_records", renderMCDCRecords(F.MCDCRecords, Options)},
+                       {"filenames", json::Array(F.Filenames)}}));
+   return FunctionArray;
+ }
+@@ -365,7 +385,8 @@ void CoverageExporterJson::renderRoot(ArrayRef<std::string> SourceFiles) {
+       {{"files", std::move(Files)}, {"totals", renderSummary(Totals)}});
+   // Skip functions-level information  if necessary.
+   if (!Options.ExportSummaryOnly && !Options.SkipFunctions)
+-    Export["functions"] = renderFunctions(Coverage.getCoveredFunctions());
++    Export["functions"] =
++        renderFunctions(Coverage.getCoveredFunctions(), Options);
+ 
+   auto ExportArray = json::Array({std::move(Export)});
+ 
+--- a/tools/llvm-cov/CoverageViewOptions.h
++++ b/tools/llvm-cov/CoverageViewOptions.h
+@@ -31,6 +31,7 @@ struct CoverageViewOptions {
+   bool ShowLineStats;
+   bool ShowRegionMarkers;
+   bool ShowMCDC;
++  bool ShowMCDCNonExecutedVectors = false;
+   bool ShowBranchCounts;
+   bool ShowBranchPercents;
+   bool ShowExpandedRegions;
+--- a/tools/llvm-cov/SourceCoverageViewHTML.cpp
++++ b/tools/llvm-cov/SourceCoverageViewHTML.cpp
+@@ -1152,6 +1152,8 @@ void SourceCoverageViewHTML::renderBranchView(raw_ostream &OS, BranchView &BRV,
+ 
+ void SourceCoverageViewHTML::renderMCDCView(raw_ostream &OS, MCDCView &MRV,
+                                             unsigned ViewDepth) {
++  const bool ShowNonExecutedVectors = getOptions().ShowMCDCNonExecutedVectors;
++
+   for (auto &Record : MRV.Records) {
+     OS << BeginExpansionDiv;
+     OS << BeginPre;
+@@ -1179,10 +1181,32 @@ void SourceCoverageViewHTML::renderMCDCView(raw_ostream &OS, MCDCView &MRV,
+       OS << "     " << Record.getConditionHeaderString(i);
+     }
+     OS << "\n";
+-    OS << "  Executed MC/DC Test Vectors:\n\n     ";
+-    OS << Record.getTestVectorHeaderString();
+-    for (unsigned i = 0; i < Record.getNumTestVectors(); i++)
+-      OS << Record.getTestVectorString(i);
++    OS << "  MC/DC Test Vectors\n\n";
++
++    const unsigned NumExecuted = Record.getNumTestVectors();
++    const unsigned NumNotExecuted = Record.getNumNotExecutedTestVectors();
++    const std::string HeaderStr = Record.getTestVectorHeaderString();
++
++    OS << " Executed:\n\n ";
++    if (NumExecuted == 0) {
++      OS << "None.\n";
++    } else {
++      OS << HeaderStr;
++      for (unsigned k = 0; k < NumExecuted; k++)
++        OS << Record.getTestVectorString(k);
++    }
++
++    if (ShowNonExecutedVectors) {
++      OS << "\n Not executed:\n\n ";
++      if (NumNotExecuted == 0) {
++        OS << "None.\n";
++      } else {
++        OS << HeaderStr;
++        for (unsigned k = 0; k < NumNotExecuted; k++)
++          OS << Record.getNotExecutedTestVectorString(k);
++      }
++    }
++
+     OS << "\n";
+     for (unsigned i = 0; i < Record.getNumConditions(); i++)
+       OS << Record.getConditionCoverageString(i);
+--- a/tools/llvm-cov/SourceCoverageViewText.cpp
++++ b/tools/llvm-cov/SourceCoverageViewText.cpp
+@@ -337,6 +337,8 @@ void SourceCoverageViewText::renderBranchView(raw_ostream &OS, BranchView &BRV,
+ 
+ void SourceCoverageViewText::renderMCDCView(raw_ostream &OS, MCDCView &MRV,
+                                             unsigned ViewDepth) {
++  const bool ShowNonExecutedVectors = getOptions().ShowMCDCNonExecutedVectors;
++
+   for (auto &Record : MRV.Records) {
+     renderLinePrefix(OS, ViewDepth);
+     OS << "---> MC/DC Decision Region (";
+@@ -359,16 +361,52 @@ void SourceCoverageViewText::renderMCDCView(raw_ostream &OS, MCDCView &MRV,
+     renderLinePrefix(OS, ViewDepth);
+     OS << "\n";
+     renderLinePrefix(OS, ViewDepth);
+-    OS << "  Executed MC/DC Test Vectors:\n";
++    OS << "  MC/DC Test Vectors:\n";
+     renderLinePrefix(OS, ViewDepth);
+     OS << "\n";
++
++    const unsigned NumExecuted = Record.getNumTestVectors();
++    const unsigned NumNotExecuted = Record.getNumNotExecutedTestVectors();
++    const std::string HeaderStr = Record.getTestVectorHeaderString();
++
+     renderLinePrefix(OS, ViewDepth);
+-    OS << "     ";
+-    OS << Record.getTestVectorHeaderString();
+-    for (unsigned i = 0; i < Record.getNumTestVectors(); i++) {
++    OS << "  Executed:\n";
++    renderLinePrefix(OS, ViewDepth);
++    OS << "\n";
++    if (NumExecuted == 0) {
++      renderLinePrefix(OS, ViewDepth);
++      OS << "  None.\n";
++    } else {
++      renderLinePrefix(OS, ViewDepth);
++      OS << "     ";
++      OS << HeaderStr;
++      for (unsigned k = 0; k < NumExecuted; k++) {
++        renderLinePrefix(OS, ViewDepth);
++        OS << Record.getTestVectorString(k);
++      }
++    }
++
++    if (ShowNonExecutedVectors) {
++      renderLinePrefix(OS, ViewDepth);
++      OS << "\n";
++      renderLinePrefix(OS, ViewDepth);
++      OS << "  Not executed:\n";
+       renderLinePrefix(OS, ViewDepth);
+-      OS << Record.getTestVectorString(i);
++      OS << "\n";
++      if (NumNotExecuted == 0) {
++        renderLinePrefix(OS, ViewDepth);
++        OS << "  None.\n";
++      } else {
++        renderLinePrefix(OS, ViewDepth);
++        OS << "     ";
++        OS << HeaderStr;
++        for (unsigned k = 0; k < NumNotExecuted; k++) {
++          renderLinePrefix(OS, ViewDepth);
++          OS << Record.getNotExecutedTestVectorString(k);
++        }
++      }
+     }
++
+     renderLinePrefix(OS, ViewDepth);
+     OS << "\n";
+     for (unsigned i = 0; i < Record.getNumConditions(); i++) {

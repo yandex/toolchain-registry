@@ -42,6 +42,8 @@ D21113-case-insesitive-include-paths.patch
 
 {% block llvm_patches %}
 01-PR159119-backport-mcdc-executed-test-vectors.patch
+02-PR-187517-backport-mcdc-non-executed-test-vectors.patch
+03-PR-192457-backport-llvm-cov-json-streaming.patch
 vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 backport-objcopy-macho.patch

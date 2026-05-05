@@ -204,6 +204,8 @@
   "ynd/clang/20/patches/clang/llvm-21-mmacosx-version-min.patch":"toolchains/ynd/clang/20/patches/clang/llvm-21-mmacosx-version-min.patch",
   "ynd/clang/20/patches/clang/yt-specific-options.patch":"toolchains/ynd/clang/20/patches/clang/yt-specific-options.patch",
   "ynd/clang/20/patches/llvm/01-PR159119-backport-mcdc-executed-test-vectors.patch":"toolchains/ynd/clang/20/patches/llvm/01-PR159119-backport-mcdc-executed-test-vectors.patch",
+  "ynd/clang/20/patches/llvm/02-PR-187517-backport-mcdc-non-executed-test-vectors.patch":"toolchains/ynd/clang/20/patches/llvm/02-PR-187517-backport-mcdc-non-executed-test-vectors.patch",
+  "ynd/clang/20/patches/llvm/03-PR-192457-backport-llvm-cov-json-streaming.patch":"toolchains/ynd/clang/20/patches/llvm/03-PR-192457-backport-llvm-cov-json-streaming.patch",
   "ynd/clang/20/patches/llvm/backport-objcopy-macho.patch":"toolchains/ynd/clang/20/patches/llvm/backport-objcopy-macho.patch",
   "ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/20/patches/llvm/dont-remove-dbg-info.patch",
   "ynd/clang/20/patches/llvm/fix-objcopy-elf.patch":"toolchains/ynd/clang/20/patches/llvm/fix-objcopy-elf.patch",
