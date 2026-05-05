@@ -46,6 +46,7 @@ namespace clang {
                 llvm::StringRef getFunctionNameFromInitializer(const clang::Expr* Init);
                 llvm::StringRef getFunctionNameFromCall(const clang::CallExpr* Call);
                 clang::FixItHint getParameterLocationNote(const clang::ParmVarDecl* Param, int ParamIndex);
+                const clang::CallExpr* getSensitiveOrigin(const clang::Expr* E);
 
                 // Data-flow analysis for lconv struct pointer fields
                 bool isLconvPointerField(const clang::FieldDecl* Field);

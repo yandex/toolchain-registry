@@ -21,32 +21,28 @@ namespace clang {
                 : ClangTidyCheck(Name, Context)
             {
             }
-
-            void SdcGetenvPointerConstQualifiedCheck::registerMatchers(
-                MatchFinder* Finder) {
-                // Match calls to the sensitive functions
+            void SdcGetenvPointerConstQualifiedCheck::registerMatchers(MatchFinder* Finder) {
                 Finder->addMatcher(
-                    callExpr(callee(functionDecl(
-                                 hasAnyName(
-                                     "getenv",
-                                     "localeconv",
-                                     "setlocale",
-                                     "strerror"))))
+                    callExpr(callee(functionDecl(hasAnyName(
+                                 "getenv", "localeconv", "setlocale", "strerror"))))
                         .bind("sensitive_call"),
                     this);
 
-                // Match variable declarations that use these function results
+                // 2. Match variable declarations that contain these function calls anywhere
+                // (This elegantly handles implicit casts, explicit casts, and temporaries)
                 Finder->addMatcher(
-                    declStmt(hasDescendant(
-                                 varDecl(hasInitializer(callExpr(callee(functionDecl(hasAnyName(
-                                     "getenv",
-                                     "localeconv",
-                                     "setlocale",
-                                     "strerror"))))))))
-                        .bind("decl_with_call"),
+                    declStmt(
+                        hasDescendant(
+                            callExpr(
+                                callee(functionDecl(hasAnyName(
+                                    "getenv", "localeconv", "setlocale", "strerror"
+                                )))
+                            )
+                        )
+                    ).bind("decl_with_call"),
                     this);
 
-                // Match member access expressions (for lconv struct fields)
+                // 3. Match member access expressions (for lconv struct fields)
                 Finder->addMatcher(
                     memberExpr().bind("member_access"),
                     this);
@@ -94,24 +90,75 @@ namespace clang {
                     }
                 }
             }
-
             void SdcGetenvPointerConstQualifiedCheck::checkVariableTypeAndUsage(
                 const clang::VarDecl* VarDecl, const MatchFinder::MatchResult& Result) {
-                // Check if the variable type is properly const-qualified
-                clang::QualType VarType = VarDecl->getType();
 
-                // For pointer types, the pointee should be const
-                if (VarType->isPointerType()) {
-                    clang::QualType PointeeType = VarType->getPointeeType();
+                const clang::CallExpr* SensitiveCall = getSensitiveOrigin(VarDecl->getInit());
+                if (!SensitiveCall) return;
+
+                clang::QualType TypeToCheck = VarDecl->getType();
+
+                if (TypeToCheck->isReferenceType()) {
+                    TypeToCheck = TypeToCheck->getPointeeType();
+                }
+
+                // FIX: Unwrap arrays! If it's char* arr[], we want to check char*
+                if (TypeToCheck->isArrayType()) {
+                    TypeToCheck = VarDecl->getASTContext().getBaseElementType(TypeToCheck);
+                }
+
+                if (TypeToCheck->isPointerType()) {
+                    clang::QualType PointeeType = TypeToCheck->getPointeeType();
                     if (!PointeeType.isConstQualified()) {
-                        // Variable declared without const qualification - this is a violation
                         diag(VarDecl->getLocation(),
-                             "pointer returned by '%0' must be treated as pointer to const-qualified type")
-                            << getFunctionNameFromInitializer(VarDecl->getInit());
+                             "pointer returned by '%0' must be treated as pointer to const-qualified type. "
+                             "Note: arrays, auto&&, and explicit mutable casts bypass constness.")
+                            << getFunctionNameFromCall(SensitiveCall);
+                    }
+                }
+            }
+
+            const clang::CallExpr* SdcGetenvPointerConstQualifiedCheck::getSensitiveOrigin(
+                const clang::Expr* E) {
+                if (!E) return nullptr;
+
+                E = E->IgnoreParenCasts();
+
+                while (true) {
+                    if (const auto* EWC = llvm::dyn_cast<clang::ExprWithCleanups>(E)) {
+                        E = EWC->getSubExpr()->IgnoreParenCasts();
+                    } else if (const auto* MTE = llvm::dyn_cast<clang::MaterializeTemporaryExpr>(E)) {
+                        E = MTE->getSubExpr()->IgnoreParenCasts();
+                    } else if (const auto* BTE = llvm::dyn_cast<clang::CXXBindTemporaryExpr>(E)) {
+                        E = BTE->getSubExpr()->IgnoreParenCasts();
+                    } else if (const auto* CondOp = llvm::dyn_cast<clang::ConditionalOperator>(E)) {
+                        // FIX: It's a ternary operator. Check both branches!
+                        if (const auto* TrueBranch = getSensitiveOrigin(CondOp->getTrueExpr()))
+                            return TrueBranch;
+                        if (const auto* FalseBranch = getSensitiveOrigin(CondOp->getFalseExpr()))
+                            return FalseBranch;
+                        return nullptr;
+                     } else if (const auto* InitList = llvm::dyn_cast<clang::InitListExpr>(E)) {
+                        for (unsigned I = 0; I < InitList->getNumInits(); ++I) {
+                            if (const auto* Origin = getSensitiveOrigin(InitList->getInit(I)))
+                                return Origin;
+                        }
+                        return nullptr;
+                    } else {
+                        break;
                     }
                 }
 
-                // For now, we'll rely on the modification checking through call expressions
+                if (const auto* Call = llvm::dyn_cast<clang::CallExpr>(E)) {
+                    if (const clang::FunctionDecl* Func = Call->getDirectCallee()) {
+                        llvm::StringRef Name = Func->getName();
+                        if (Name == "getenv" || Name == "localeconv" ||
+                            Name == "setlocale" || Name == "strerror") {
+                            return Call;
+                        }
+                    }
+                }
+                return nullptr;
             }
 
             void SdcGetenvPointerConstQualifiedCheck::checkForModificationUsage(
@@ -153,8 +200,16 @@ namespace clang {
             void SdcGetenvPointerConstQualifiedCheck::checkFunctionParameterUsage(
                 const clang::CallExpr* SensitiveCall, const clang::Stmt* Parent,
                 const MatchFinder::MatchResult& Result) {
-                // Check if the sensitive call result is used as a parameter in another function call
-                if (const auto* OuterCall = llvm::dyn_cast<clang::CallExpr>(Parent)) {
+
+                const clang::Stmt* CurrentParent = Parent;
+
+                // Walk up the tree if the parent is a Ternary Operator (?:)
+                while (CurrentParent && llvm::isa<clang::ConditionalOperator>(CurrentParent)) {
+                    CurrentParent = getParentIgnoreParensAndCasts(CurrentParent, Result.Context);
+                }
+
+                // Now safely check if the resolved parent is a function call
+                if (const auto* OuterCall = llvm::dyn_cast_or_null<clang::CallExpr>(CurrentParent)) {
                     checkCallParameterConstQualification(SensitiveCall, OuterCall, Result);
                 }
             }
@@ -162,52 +217,71 @@ namespace clang {
             void SdcGetenvPointerConstQualifiedCheck::checkCallParameterConstQualification(
                 const clang::CallExpr* SensitiveCall, const clang::CallExpr* OuterCall,
                 const MatchFinder::MatchResult& Result) {
-                // Find which parameter position the sensitive call is in
+
                 int ParamIndex = -1;
-                for (unsigned I = 0; I < OuterCall->getNumArgs(); ++I) {
-                    if (OuterCall->getArg(I)->IgnoreParenImpCasts() == SensitiveCall) {
-                        ParamIndex = I;
+                unsigned ArgOffset = llvm::isa<clang::CXXOperatorCallExpr>(OuterCall) ? 1 : 0;
+
+                for (unsigned I = ArgOffset; I < OuterCall->getNumArgs(); ++I) {
+                    const clang::Expr* Arg = OuterCall->getArg(I);
+                    if (!Arg) continue;
+
+                    Arg = Arg->IgnoreParenImpCasts();
+
+                    // Safely strip temporaries. If Arg ever becomes null, the loop gracefully exits.
+                    while (Arg) {
+                        if (const auto* EWC = clang::dyn_cast<clang::ExprWithCleanups>(Arg)) {
+                            Arg = EWC->getSubExpr()->IgnoreParenImpCasts();
+                        } else if (const auto* MTE = clang::dyn_cast<clang::MaterializeTemporaryExpr>(Arg)) {
+                            Arg = MTE->getSubExpr()->IgnoreParenImpCasts();
+                        } else if (const auto* BTE = clang::dyn_cast<clang::CXXBindTemporaryExpr>(Arg)) {
+                            Arg = BTE->getSubExpr()->IgnoreParenImpCasts();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Safely check the subtree now that we guarantee Arg is not null!
+                    if (Arg && (Arg == SensitiveCall || hasSensitiveStmtInSubtree(Arg, SensitiveCall))) {
+                        ParamIndex = I - ArgOffset;
                         break;
                     }
                 }
 
-                if (ParamIndex == -1) {
-                    return;
-                }
+                if (ParamIndex == -1) return;
 
-                // Get the called function declaration
+                // For lambdas, OuterCall->getDirectCallee() can be null. We must cast to CXXOperatorCallExpr
                 const clang::FunctionDecl* FuncDecl = OuterCall->getDirectCallee();
                 if (!FuncDecl) {
-                    // Can't determine parameter types for indirect calls
-                    return;
+                    if (const auto* OpCall = llvm::dyn_cast<clang::CXXOperatorCallExpr>(OuterCall)) {
+                        FuncDecl = OpCall->getDirectCallee();
+                    }
                 }
 
-                // Check if the corresponding parameter is const-qualified
+                if (!FuncDecl) return;
+
                 if (ParamIndex < (int)FuncDecl->getNumParams()) {
                     const clang::ParmVarDecl* Param = FuncDecl->getParamDecl(ParamIndex);
                     clang::QualType ParamType = Param->getType();
 
-                    // For pointer types, check if the pointee is const
-                    if (ParamType->isPointerType()) {
-                        clang::QualType PointeeType = ParamType->getPointeeType();
+                    clang::QualType TypeToCheck = ParamType;
+
+                    // Unwrap reference (handles auto&& / T&&)
+                    if (TypeToCheck->isReferenceType()) {
+                        TypeToCheck = TypeToCheck->getPointeeType();
+                    }
+
+                    // Check the pointee's constness
+                    if (TypeToCheck->isPointerType()) {
+                        clang::QualType PointeeType = TypeToCheck->getPointeeType();
+
                         if (!PointeeType.isConstQualified()) {
-                            // Parameter is not const-qualified - violation
                             diag(SensitiveCall->getBeginLoc(),
-                                 "pointer returned by '%0' must be passed as pointer to const-qualified type")
-                                << getFunctionNameFromCall(SensitiveCall)
-                                << getParameterLocationNote(Param, ParamIndex);
-                        }
-                    } else if (ParamType->isReferenceType()) {
-                        // For reference types, check if the referenced type is const
-                        clang::QualType ReferencedType = ParamType->getPointeeType();
-                        if (!ReferencedType.isConstQualified()) {
-                            diag(SensitiveCall->getBeginLoc(),
-                                 "pointer returned by '%0' must be passed as reference to const-qualified type")
+                                 "pointer returned by '%0' must be passed to a context expecting a pointer to a const-qualified type. "
+                                 "Warning: Passing to forwarding references (auto&&) allows mutable access.")
                                 << getFunctionNameFromCall(SensitiveCall)
                                 << getParameterLocationNote(Param, ParamIndex);
                         }
                     }
-                    // For non-pointer/non-reference types, rule doesn't apply
                 }
             }
 
@@ -275,7 +349,6 @@ namespace clang {
                          "pointer arithmetic on result of sensitive function");
                 }
             }
-
             const clang::Stmt* SdcGetenvPointerConstQualifiedCheck::getParentIgnoreParensAndCasts(
                 const clang::Stmt* S, ASTContext* Context) {
                 if (!S) {
@@ -289,8 +362,14 @@ namespace clang {
 
                 const clang::Stmt* Parent = Parents.begin()->get<clang::Stmt>();
 
-                // Skip parens and casts when looking for the actual parent
-                while (Parent && (llvm::isa<clang::ParenExpr>(Parent) || llvm::isa<clang::CastExpr>(Parent))) {
+                // FIX: Skip parens, casts, AND temporary materializations
+                while (Parent && (
+                    llvm::isa<clang::ParenExpr>(Parent) ||
+                    llvm::isa<clang::CastExpr>(Parent) ||
+                    llvm::isa<clang::MaterializeTemporaryExpr>(Parent) ||
+                    llvm::isa<clang::CXXBindTemporaryExpr>(Parent) ||
+                    llvm::isa<clang::ExprWithCleanups>(Parent))) {
+
                     Parents = Context->getParents(*Parent);
                     if (Parents.empty()) {
                         break;
@@ -303,6 +382,11 @@ namespace clang {
 
             bool SdcGetenvPointerConstQualifiedCheck::hasSensitiveStmtInSubtree(
                 const clang::Stmt* Root, const clang::Stmt* Target) {
+
+                if (!Root || !Target) {
+                    return false;
+                }
+
                 if (Root == Target) {
                     return true;
                 }
@@ -458,7 +542,6 @@ namespace clang {
                 const clang::Expr* Base = MemberExpr->getBase();
                 return isFromLocaleconvCall(Base, Result);
             }
-
             void SdcGetenvPointerConstQualifiedCheck::checkLconvMemberModification(
                 const clang::MemberExpr* MemberExpr, const MatchFinder::MatchResult& Result) {
                 // Only proceed if this member access is from a localeconv() result
@@ -467,6 +550,8 @@ namespace clang {
                 }
 
                 // Get the parent to see how this member is being used
+                // NOTE: Because we updated getParentIgnoreParensAndCasts earlier,
+                // this will now successfully "see through" temporaries!
                 const clang::Stmt* Parent = getParentIgnoreParensAndCasts(MemberExpr, Result.Context);
                 if (!Parent) {
                     return;
@@ -475,7 +560,7 @@ namespace clang {
                 const auto* Field = llvm::dyn_cast<clang::FieldDecl>(MemberExpr->getMemberDecl());
                 llvm::StringRef FieldName = Field ? Field->getName() : "unknown field";
 
-                // Check for direct assignment to the member (pointer field itself)
+                // 1. Check for direct assignment to the member (unchanged)
                 if (const auto* BinaryOp = llvm::dyn_cast_or_null<clang::BinaryOperator>(Parent)) {
                     if (BinaryOp->isAssignmentOp() &&
                         BinaryOp->getLHS()->IgnoreParenImpCasts() == MemberExpr) {
@@ -486,10 +571,9 @@ namespace clang {
                     }
                 }
 
-                // Check for dereference and modification of the data pointed to by the member
+                // 2. Check for dereference and modification (unchanged)
                 if (const auto* ArraySubscript = llvm::dyn_cast_or_null<clang::ArraySubscriptExpr>(Parent)) {
                     if (ArraySubscript->getBase()->IgnoreParenImpCasts() == MemberExpr) {
-                        // Check if the array element is being modified
                         const clang::Stmt* GrandParent = getParentIgnoreParensAndCasts(ArraySubscript, Result.Context);
                         if (GrandParent) {
                             if (const auto* Assignment = llvm::dyn_cast<clang::BinaryOperator>(GrandParent)) {
@@ -505,29 +589,59 @@ namespace clang {
                     }
                 }
 
-                // Check for function parameter usage
+                // 3. FIX: Check for function parameter usage (Updated to handle lambdas and auto&&)
                 if (const auto* CallExpr = llvm::dyn_cast_or_null<clang::CallExpr>(Parent)) {
-                    // Find which parameter position this member expression is in
                     int ParamIndex = -1;
-                    for (unsigned I = 0; I < CallExpr->getNumArgs(); ++I) {
-                        if (CallExpr->getArg(I)->IgnoreParenImpCasts() == MemberExpr) {
-                            ParamIndex = I;
+
+                    // Handle lambda 'this' argument offset
+                    unsigned ArgOffset = llvm::isa<clang::CXXOperatorCallExpr>(CallExpr) ? 1 : 0;
+
+                    for (unsigned I = ArgOffset; I < CallExpr->getNumArgs(); ++I) {
+                        const clang::Expr* Arg = CallExpr->getArg(I)->IgnoreParenImpCasts();
+
+                        // Strip Temporaries
+                        if (const auto* EWC = clang::dyn_cast<clang::ExprWithCleanups>(Arg)) {
+                            Arg = EWC->getSubExpr()->IgnoreParenImpCasts();
+                        }
+                        if (const auto* MTE = clang::dyn_cast<clang::MaterializeTemporaryExpr>(Arg)) {
+                            Arg = MTE->getSubExpr()->IgnoreParenImpCasts();
+                        }
+                        if (const auto* BTE = clang::dyn_cast<clang::CXXBindTemporaryExpr>(Arg)) {
+                            Arg = BTE->getSubExpr()->IgnoreParenImpCasts();
+                        }
+
+                        if (Arg == MemberExpr) {
+                            ParamIndex = I - ArgOffset; // Correct the index
                             break;
                         }
                     }
 
                     if (ParamIndex != -1) {
+                        // Resolve lambda direct callee
                         const clang::FunctionDecl* FuncDecl = CallExpr->getDirectCallee();
+                        if (!FuncDecl) {
+                            if (const auto* OpCall = llvm::dyn_cast<clang::CXXOperatorCallExpr>(CallExpr)) {
+                                FuncDecl = OpCall->getDirectCallee();
+                            }
+                        }
+
                         if (FuncDecl && ParamIndex < (int)FuncDecl->getNumParams()) {
                             const clang::ParmVarDecl* Param = FuncDecl->getParamDecl(ParamIndex);
                             clang::QualType ParamType = Param->getType();
+                            clang::QualType TypeToCheck = ParamType;
+
+                            // Unwrap references (handles auto&& / T&&)
+                            if (TypeToCheck->isReferenceType()) {
+                                TypeToCheck = TypeToCheck->getPointeeType();
+                            }
 
                             // Check if the parameter expects a non-const pointer
-                            if (ParamType->isPointerType()) {
-                                clang::QualType PointeeType = ParamType->getPointeeType();
+                            if (TypeToCheck->isPointerType()) {
+                                clang::QualType PointeeType = TypeToCheck->getPointeeType();
                                 if (!PointeeType.isConstQualified()) {
                                     diag(MemberExpr->getMemberLoc(),
-                                         "lconv pointer field '%0' from localeconv() passed to function expecting non-const pointer")
+                                         "lconv pointer field '%0' from localeconv() passed to function expecting non-const pointer. "
+                                         "Warning: Passing to forwarding references (auto&&) allows mutable access.")
                                         << FieldName;
                                 }
                             }
@@ -535,7 +649,6 @@ namespace clang {
                     }
                 }
             }
-
         } // namespace sdc
     } // namespace tidy
 } // namespace clang
