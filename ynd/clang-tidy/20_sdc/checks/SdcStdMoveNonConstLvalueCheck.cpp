@@ -16,57 +16,60 @@ namespace clang {
             }
 
             void SdcStdMoveNonConstLvalueCheck::registerMatchers(MatchFinder* Finder) {
-                // Match calls to std::move
                 Finder->addMatcher(
                     callExpr(
                         callee(functionDecl(hasName("::std::move"))),
-                        unless(isExpansionInSystemHeader()))
-                        .bind("move_call"),
+                        unless(isExpansionInSystemHeader()),
+                        hasAncestor(functionDecl().bind("enclosing_function"))
+                    ).bind("move_call"),
                     this);
             }
 
-            void SdcStdMoveNonConstLvalueCheck::check(
-                const MatchFinder::MatchResult& Result) {
+            void SdcStdMoveNonConstLvalueCheck::check(const MatchFinder::MatchResult& Result) {
                 const auto* MoveCall = Result.Nodes.getNodeAs<CallExpr>("move_call");
+                const auto* EnclosingFunc = Result.Nodes.getNodeAs<FunctionDecl>("enclosing_function");
 
-                if (!MoveCall || MoveCall->getNumArgs() != 1) {
-                    return;
-                }
+                if (!MoveCall || MoveCall->getNumArgs() != 1) return;
 
                 const Expr* Arg = MoveCall->getArg(0)->IgnoreParenImpCasts();
-                if (!Arg) {
+                if (!Arg) return;
+
+                if (Arg->isTypeDependent() || Arg->isValueDependent()) {
                     return;
                 }
 
-                // Get the value category and type of the argument
                 ExprValueKind ValueKind = Arg->getValueKind();
                 QualType ArgType = Arg->getType();
 
-                // Check if the argument is an rvalue (prvalue or xvalue)
-                // If it's a prvalue (temporary), std::move is redundant
                 if (ValueKind == VK_PRValue) {
                     diag(MoveCall->getBeginLoc(),
-                         "redundant std::move of temporary object; "
-                         "the argument to std::move shall be a non-const lvalue");
+                         "redundant std::move of temporary object of type %0; "
+                         "the argument to std::move shall be a non-const lvalue")
+                        << ArgType; // Passes the type to %0
                     return;
                 }
 
-                // Now check if it's an lvalue (which is what we want)
                 if (ValueKind == VK_LValue) {
-                    // Check if the lvalue is const-qualified
                     if (ArgType.isConstQualified()) {
                         diag(MoveCall->getBeginLoc(),
-                             "std::move called on const-qualified lvalue; "
-                             "the argument to std::move shall be a non-const lvalue");
+                             "std::move called on const-qualified lvalue of type %0; "
+                             "the argument to std::move shall be a non-const lvalue")
+                            << ArgType;
+
+                        if (EnclosingFunc) {
+                            clang::TemplateSpecializationKind TSK = EnclosingFunc->getTemplateSpecializationKind();
+                            if (TSK == clang::TSK_ImplicitInstantiation || TSK == clang::TSK_ExplicitInstantiationDefinition) {
+
+                                clang::SourceLocation InstLoc = EnclosingFunc->getPointOfInstantiation();
+                                if (InstLoc.isValid()) {
+                                    diag(InstLoc, "in instantiation of template %0 requested here", DiagnosticIDs::Note)
+                                        << EnclosingFunc;
+                                }
+                            }
+                        }
                         return;
                     }
-
-                    // If we get here, it's a non-const lvalue, which is compliant
-                    return;
                 }
-
-                // If it's an xvalue (result of another move or cast), it's technically okay
-                // but we could add additional checks here if needed
             }
 
         } // namespace sdc
