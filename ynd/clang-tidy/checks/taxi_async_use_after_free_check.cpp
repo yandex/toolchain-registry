@@ -17,11 +17,12 @@ void TaxiAsyncUseAfterFreeCheck::registerMatchers(MatchFinder* Finder) {
     auto hasAsyncName = hasAnyName(
         "Async",
         "AsyncNoSpan",
-        "SharedAsyncNoSpan",
         "CriticalAsyncNoSpan",
-        "SharedCriticalAsyncNoSpan",
         "CriticalAsync",
-        "SharedCriticalAsync"
+        "SharedCriticalAsync",
+        "AsyncNoTracing",
+        "CriticalAsyncNoTracing",
+        "AsyncHideSpan"
     );
 
     Finder->addMatcher(
