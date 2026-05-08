@@ -33,6 +33,7 @@ ynd/lib/xml2
 
 {% block clang_patches %}
 clang-format-patches.patch
+clang-format-pr182791.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
 {% endblock %}

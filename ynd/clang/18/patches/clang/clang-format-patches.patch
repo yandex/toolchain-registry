@@ -1,5 +1,14 @@
 --- a/include/clang/Format/Format.h
 +++ b/include/clang/Format/Format.h
+@@ -56,7 +56,7 @@ struct FormatStyle {
+   // If the BasedOn: was InheritParentConfig and this style needs the file from
+   // the parent directories. It is not part of the actual style for formatting.
+   // Thus the // instead of ///.
+-  bool InheritsParentConfig;
++  std::string InheritConfig;
+
+   /// The extra indent or outdent of access modifiers, e.g. ``public:``.
+   /// \version 3.3
 @@ -4720,6 +4720,9 @@ struct FormatStyle {
    /// \version 3.7
    UseTabStyle UseTab;
@@ -122,7 +131,15 @@
    if (DisallowLineBreaksOnThisLine)
 --- a/lib/Format/Format.cpp
 +++ b/lib/Format/Format.cpp
-@@ -1114,6 +1114,7 @@ template <> struct MappingTraits<FormatStyle> {
+@@ -39,6 +39,7 @@
+ #include "llvm/ADT/STLExtras.h"
+ #include "llvm/ADT/Sequence.h"
+ #include "llvm/ADT/StringRef.h"
++#include "llvm/ADT/StringSet.h"
+ #include "llvm/Support/Allocator.h"
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/Path.h"
+@@ -1114,6 +1115,7 @@ template <> struct MappingTraits<FormatStyle> {
      IO.mapOptional("TypeNames", Style.TypeNames);
      IO.mapOptional("TypenameMacros", Style.TypenameMacros);
      IO.mapOptional("UseTab", Style.UseTab);
@@ -130,6 +147,14 @@
      IO.mapOptional("VerilogBreakBetweenInstancePorts",
                     Style.VerilogBreakBetweenInstancePorts);
      IO.mapOptional("WhitespaceSensitiveMacros",
+@@ -1401,7 +1403,6 @@ static void expandPresetsSpacesInParens(FormatStyle &Expanded) {
+
+ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
+   FormatStyle LLVMStyle;
+-  LLVMStyle.InheritsParentConfig = false;
+   LLVMStyle.Language = Language;
+   LLVMStyle.AccessModifierOffset = -2;
+   LLVMStyle.AlignEscapedNewlines = FormatStyle::ENAS_Right;
 @@ -1570,6 +1571,7 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
    LLVMStyle.StatementMacros.push_back("QT_REQUIRE_VERSION");
    LLVMStyle.TabWidth = 8;
@@ -138,6 +163,160 @@
    LLVMStyle.VerilogBreakBetweenInstancePorts = true;
    LLVMStyle.WhitespaceSensitiveMacros.push_back("BOOST_PP_STRINGIZE");
    LLVMStyle.WhitespaceSensitiveMacros.push_back("CF_SWIFT_NAME");
+@@ -1924,6 +1926,8 @@ FormatStyle getNoStyle() {
+
+ bool getPredefinedStyle(StringRef Name, FormatStyle::LanguageKind Language,
+                         FormatStyle *Style) {
++  constexpr StringRef Prefix("inheritparentconfig=");
++
+   if (Name.equals_insensitive("llvm"))
+     *Style = getLLVMStyle(Language);
+   else if (Name.equals_insensitive("chromium"))
+@@ -1942,8 +1946,10 @@ bool getPredefinedStyle(StringRef Name, FormatStyle::LanguageKind Language,
+     *Style = getClangFormatStyle();
+   else if (Name.equals_insensitive("none"))
+     *Style = getNoStyle();
+-  else if (Name.equals_insensitive("inheritparentconfig"))
+-    Style->InheritsParentConfig = true;
++  else if (Name.equals_insensitive(Prefix.drop_back()))
++    Style->InheritConfig = "..";
++  else if (Name.size() > Prefix.size() && Name.starts_with_insensitive(Prefix))
++    Style->InheritConfig = Name.substr(Prefix.size());
+   else
+     return false;
+
+@@ -3952,7 +3958,7 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+       return make_string_error("Error parsing -style: " + ec.message());
+     }
+
+-    if (!Style.InheritsParentConfig)
++    if (Style.InheritConfig.empty())
+       return Style;
+
+     ChildFormatTextToApply.emplace_back(
+@@ -3964,7 +3970,7 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+   assert(FS);
+
+   // User provided clang-format file using -style=file:path/to/format/file.
+-  if (!Style.InheritsParentConfig &&
++  if (Style.InheritConfig.empty() &&
+       StyleName.starts_with_insensitive("file:")) {
+     auto ConfigFile = StyleName.substr(5);
+     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> Text =
+@@ -3977,7 +3983,7 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+     LLVM_DEBUG(llvm::dbgs()
+                << "Using configuration file " << ConfigFile << "\n");
+
+-    if (!Style.InheritsParentConfig)
++    if (Style.InheritConfig.empty())
+       return Style;
+
+     // Search for parent configs starting from the parent directory of
+@@ -3989,19 +3995,29 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+   // If the style inherits the parent configuration it is a command line
+   // configuration, which wants to inherit, so we have to skip the check of the
+   // StyleName.
+-  if (!Style.InheritsParentConfig && !StyleName.equals_insensitive("file")) {
++  if (Style.InheritConfig.empty() && !StyleName.equals_insensitive("file")) {
+     if (!getPredefinedStyle(StyleName, Style.Language, &Style))
+       return make_string_error("Invalid value for -style");
+-    if (!Style.InheritsParentConfig)
++    if (Style.InheritConfig.empty())
+       return Style;
+   }
+
+-  SmallString<128> Path(FileName);
++  using namespace llvm::sys::path;
++  using String = SmallString<128>;
++
++  String Path(FileName);
+   if (std::error_code EC = FS->makeAbsolute(Path))
+     return make_string_error(EC.message());
+
++  auto Normalize = [](String &Path) {
++    Path = convert_to_slash(Path);
++    remove_dots(Path, /*remove_dot_dot=*/true, Style::posix);
++  };
++
++  Normalize(Path);
++
+   // Reset possible inheritance
+-  Style.InheritsParentConfig = false;
++  Style.InheritConfig.clear();
+
+   auto dropDiagnosticHandler = [](const llvm::SMDiagnostic &, void *) {};
+
+@@ -4020,19 +4036,24 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+   FilesToLookFor.push_back(".clang-format");
+   FilesToLookFor.push_back("_clang-format");
+
+-  SmallString<128> UnsuitableConfigFiles;
++  llvm::StringSet<> Directories; // Inherited directories.
++  bool Redirected = false;
++  String Dir, UnsuitableConfigFiles;
+   for (StringRef Directory = Path; !Directory.empty();
+-       Directory = llvm::sys::path::parent_path(Directory)) {
++       Directory = Redirected ? Dir.str() : parent_path(Directory)) {
+     auto Status = FS->status(Directory);
+     if (!Status ||
+         Status->getType() != llvm::sys::fs::file_type::directory_file) {
+-      continue;
++      if (!Redirected)
++        continue;
++      return make_string_error("Failed to inherit configuration directory " +
++                               Directory);
+     }
+
+     for (const auto &F : FilesToLookFor) {
+-      SmallString<128> ConfigFile(Directory);
++      String ConfigFile(Directory);
+
+-      llvm::sys::path::append(ConfigFile, F);
++      append(ConfigFile, F);
+       LLVM_DEBUG(llvm::dbgs() << "Trying " << ConfigFile << "...\n");
+
+       Status = FS->status(ConfigFile);
+@@ -4057,7 +4078,7 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+       LLVM_DEBUG(llvm::dbgs()
+                  << "Using configuration file " << ConfigFile << "\n");
+
+-      if (!Style.InheritsParentConfig) {
++      if (Style.InheritConfig.empty()) {
+         if (!ChildFormatTextToApply.empty()) {
+           LLVM_DEBUG(llvm::dbgs() << "Applying child configurations\n");
+           applyChildFormatTexts(&Style);
+@@ -4065,10 +4086,30 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
+         return Style;
+       }
+
++      if (!Directories.insert(Directory).second) {
++        return make_string_error(
++            "Loop detected when inheriting configuration file in " + Directory);
++      }
++
+       LLVM_DEBUG(llvm::dbgs() << "Inherits parent configuration\n");
+
++      if (Style.InheritConfig == "..") {
++        Redirected = false;
++      } else {
++        Redirected = true;
++        String ExpandedDir;
++        llvm::sys::fs::expand_tilde(Style.InheritConfig, ExpandedDir);
++        Normalize(ExpandedDir);
++        if (is_absolute(ExpandedDir, Style::posix)) {
++          Dir = ExpandedDir;
++        } else {
++          Dir = Directory.str();
++          append(Dir, Style::posix, ExpandedDir);
++        }
++      }
++
+       // Reset inheritance of style
+-      Style.InheritsParentConfig = false;
++      Style.InheritConfig.clear();
+
+       ChildFormatTextToApply.emplace_back(std::move(*Text));
+
 --- a/lib/Format/TokenAnnotator.cpp
 +++ b/lib/Format/TokenAnnotator.cpp
 @@ -1975,6 +1975,26 @@ private:
