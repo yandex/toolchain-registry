@@ -129,6 +129,8 @@
   "ynd/clang-tidy/20_sdc/checks/SdcNoStringFunctionsCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoStringFunctionsCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcNoSystemCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoSystemCheck.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcNoSystemCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoSystemCheck.h",
+  "ynd/clang-tidy/20_sdc/checks/SdcProhibitedFunctionsCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcProhibitedFunctionsCheck.cpp",
+  "ynd/clang-tidy/20_sdc/checks/SdcProhibitedFunctionsCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcProhibitedFunctionsCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcReturnValueUsedCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcReturnValueUsedCheck.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcReturnValueUsedCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcReturnValueUsedCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcSpecialMemberFunctionsCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcSpecialMemberFunctionsCheck.cpp",

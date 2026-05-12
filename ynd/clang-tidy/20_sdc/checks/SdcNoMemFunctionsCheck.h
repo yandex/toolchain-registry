@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bridge_header.h"
+#include "SdcProhibitedFunctionsCheck.h"
 
 namespace clang {
     namespace tidy {
@@ -8,15 +8,13 @@ namespace clang {
 
             // The C++ Standard Library functions memcpy, memmove and
             // memcmp shall not be used
-            class SdcNoMemFunctionsCheck: public ClangTidyCheck {
+            class SdcNoMemFunctionsCheck: public SdcProhibitedFunctionsCheck {
             public:
                 SdcNoMemFunctionsCheck(StringRef Name, ClangTidyContext* Context);
-                void registerMatchers(ast_matchers::MatchFinder* Finder) override;
-                void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
-            private:
-                void reportViolation(const CallExpr* Call, StringRef FunctionName,
-                                     const ast_matchers::MatchFinder::MatchResult& Result);
+            protected:
+                ArrayRef<StringRef> getProhibitedFunctions() const override;
+                std::string getDiagnosticMessage(StringRef FunctionName) const override;
             };
 
         } // namespace sdc

@@ -22,6 +22,7 @@ namespace clang {
             {
             }
             void SdcGetenvPointerConstQualifiedCheck::registerMatchers(MatchFinder* Finder) {
+                // Match calls to the sensitive functions
                 Finder->addMatcher(
                     callExpr(callee(functionDecl(hasAnyName(
                                  "getenv", "localeconv", "setlocale", "strerror"))))
@@ -46,10 +47,56 @@ namespace clang {
                 Finder->addMatcher(
                     memberExpr().bind("member_access"),
                     this);
+
+                // 4. Ban taking the address of these functions
+                Finder->addMatcher(
+                    declRefExpr(
+                        to(functionDecl(hasAnyName(
+                            "getenv", "localeconv", "setlocale", "strerror")))
+                    ).bind("sensitive_func_ref"),
+                    this);
+
+                Finder->addMatcher(
+                    unresolvedLookupExpr(
+                        hasAnyDeclaration(namedDecl(hasAnyName(
+                            "getenv", "localeconv", "setlocale", "strerror")))
+                    ).bind("unresolved_sensitive_func_ref"),
+                    this);
             }
 
             void SdcGetenvPointerConstQualifiedCheck::check(
                 const MatchFinder::MatchResult& Result) {
+
+                // Check if the address of a sensitive function is being taken
+                auto checkAddressTaken = [&](const clang::Expr* RefExpr, llvm::StringRef FuncName) {
+                    const clang::Stmt* Parent = getParentIgnoreParensAndCasts(RefExpr, Result.Context);
+                    if (const auto* Call = llvm::dyn_cast_or_null<clang::CallExpr>(Parent)) {
+                        if (Call->getCallee()->IgnoreParenImpCasts() == RefExpr) {
+                            return; // It's a direct call, allowed (and handled by sensitive_call matcher)
+                        }
+                    }
+                    diag(RefExpr->getBeginLoc(), "taking the address of '%0' is prohibited") << FuncName;
+                };
+
+                if (const auto* DRE = Result.Nodes.getNodeAs<clang::DeclRefExpr>("sensitive_func_ref")) {
+                    checkAddressTaken(DRE, DRE->getDecl()->getName());
+                }
+
+                if (const auto* ULE = Result.Nodes.getNodeAs<clang::UnresolvedLookupExpr>("unresolved_sensitive_func_ref")) {
+                    llvm::StringRef FuncName;
+                    for (const clang::NamedDecl* ND : ULE->decls()) {
+                        llvm::StringRef Name = ND->getName();
+                        if (Name == "getenv" || Name == "localeconv" ||
+                            Name == "setlocale" || Name == "strerror") {
+                            FuncName = Name;
+                            break;
+                        }
+                    }
+                    if (!FuncName.empty()) {
+                        checkAddressTaken(ULE, FuncName);
+                    }
+                }
+
                 // Check for direct calls to sensitive functions
                 if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("sensitive_call")) {
                     checkFunctionCall(Call, Result);

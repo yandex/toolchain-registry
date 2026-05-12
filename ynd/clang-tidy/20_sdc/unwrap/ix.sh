@@ -33,7 +33,6 @@ possible_nullptr_check.cpp
 {% endblock %}
 
 {% block sdc_check_srcs %}
-tidy_module_sdc.cpp
 SdcDynamicMemoryAutomaticCheck.cpp
 SdcDynamicMemoryAutomaticCheck.h
 SdcGetenvPointerConstQualifiedCheck.cpp
@@ -56,12 +55,15 @@ SdcNoStringFunctionsCheck.cpp
 SdcNoStringFunctionsCheck.h
 SdcNoSystemCheck.cpp
 SdcNoSystemCheck.h
+SdcProhibitedFunctionsCheck.cpp
+SdcProhibitedFunctionsCheck.h
 SdcReturnValueUsedCheck.cpp
 SdcReturnValueUsedCheck.h
 SdcSpecialMemberFunctionsCheck.cpp
 SdcSpecialMemberFunctionsCheck.h
 SdcStdMoveNonConstLvalueCheck.cpp
 SdcStdMoveNonConstLvalueCheck.h
+tidy_module_sdc.cpp
 {% endblock %}
 
 {% block cmake_flags %}

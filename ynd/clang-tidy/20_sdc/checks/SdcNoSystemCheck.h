@@ -1,20 +1,19 @@
 #pragma once
 
-#include "bridge_header.h"
+#include "SdcProhibitedFunctionsCheck.h"
 
 namespace clang {
     namespace tidy {
         namespace sdc {
 
             // library function `system` from <cstdlib> shall not be used
-            class SdcNoSystemCheck: public ClangTidyCheck {
+            class SdcNoSystemCheck: public SdcProhibitedFunctionsCheck {
             public:
                 SdcNoSystemCheck(StringRef Name, ClangTidyContext* Context);
-                void registerMatchers(ast_matchers::MatchFinder* Finder) override;
-                void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
-            private:
-                void reportViolation(const CallExpr* Call, const ast_matchers::MatchFinder::MatchResult& Result);
+            protected:
+                ArrayRef<StringRef> getProhibitedFunctions() const override;
+                std::string getDiagnosticMessage(StringRef FunctionName) const override;
             };
 
         } // namespace sdc

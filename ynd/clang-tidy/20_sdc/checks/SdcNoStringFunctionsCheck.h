@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bridge_header.h"
+#include "SdcProhibitedFunctionsCheck.h"
 
 namespace clang {
     namespace tidy {
@@ -18,15 +18,13 @@ namespace clang {
             // - From <cwchar>: fgetwc, fputwc, wcstod, wcstof, wcstol, wcstold,
             //   wcstoll, wcstoul, wcstoull
             // - From <cinttypes>: strtoimax, strtoumax, wcstoimax, wcstoumax
-            class SdcNoStringFunctionsCheck: public ClangTidyCheck {
+            class SdcNoStringFunctionsCheck: public SdcProhibitedFunctionsCheck {
             public:
                 SdcNoStringFunctionsCheck(StringRef Name, ClangTidyContext* Context);
-                void registerMatchers(ast_matchers::MatchFinder* Finder) override;
-                void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
-            private:
-                void reportViolation(const CallExpr* Call, StringRef FunctionName,
-                                     const ast_matchers::MatchFinder::MatchResult& Result);
+            protected:
+                ArrayRef<StringRef> getProhibitedFunctions() const override;
+                std::string getDiagnosticMessage(StringRef FunctionName) const override;
             };
 
         } // namespace sdc
