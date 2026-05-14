@@ -36,6 +36,7 @@ clang-format-patches.patch
 clang-format-pr182791.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
+clang-statistics-used-bytes.patch
 {% endblock %}
 
 {% block common_patches %}

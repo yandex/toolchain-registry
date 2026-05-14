@@ -1,0 +1,46 @@
+diff --git a/lib/Basic/SourceManager.cpp b/lib/Basic/SourceManager.cpp
+
+--- a/lib/Basic/SourceManager.cpp
++++ b/lib/Basic/SourceManager.cpp
+@@ -55,6 +55,16 @@ using llvm::MemoryBuffer;
+ STATISTIC(MaxUsedSLocBytes, "Maximum number of bytes used by source locations "
+                             "(both loaded and local).");
+
++// Like FileManager's directory/file counters: keep this as a TrackingStatistic
++// so release builds still record values when the frontend calls
++// llvm::EnableStatistics() (e.g. -save-stats). Plain STATISTIC is a no-op when
++// LLVM_ENABLE_STATS is off.
++ALWAYS_ENABLED_STATISTIC(
++    NumFileBytesInTranslationUnit,
++    "Approximate total bytes of source file content in the current translation "
++    "unit (ContentCache::getSize() for each new FileID; the same file included "
++    "in multiple places is counted for each #include).");
++
+ //===----------------------------------------------------------------------===//
+ // SourceManager Helper Classes
+ //===----------------------------------------------------------------------===//
+@@ -339,6 +349,8 @@ void SourceManager::clearIDTables() {
+   LastLineNoContentCache = nullptr;
+   LastFileIDLookup = FileID();
+
++  NumFileBytesInTranslationUnit = 0;
++
+   IncludedLocMap.clear();
+   if (LineTable)
+     LineTable->clear();
+@@ -614,6 +626,7 @@ FileID SourceManager::createFileIDImpl(ContentCache &File, StringRef Filename,
+     LoadedSLocEntryTable[Index] = SLocEntry::get(
+         LoadedOffset, FileInfo::get(IncludePos, File, FileCharacter, Filename));
+     SLocEntryLoaded[Index] = SLocEntryOffsetLoaded[Index] = true;
++    NumFileBytesInTranslationUnit += File.getSize();
+     return FileID::get(LoadedID);
+   }
+   unsigned FileSize = File.getSize();
+@@ -637,6 +650,7 @@ FileID SourceManager::createFileIDImpl(ContentCache &File, StringRef Filename,
+     noteSLocAddressSpaceUsage(Diag);
+     return FileID();
+   }
++  NumFileBytesInTranslationUnit += FileSize;
+   LocalSLocEntryTable.push_back(
+       SLocEntry::get(NextLocalOffset,
+                      FileInfo::get(IncludePos, File, FileCharacter, Filename)));
