@@ -21,7 +21,7 @@ namespace clang {
             }
 
             std::string SdcNoSystemCheck::getDiagnosticMessage(StringRef FunctionName) const {
-                return "library function 'system' from <cstdlib> or its boost alternative shall not be used"
+                return "library function 'system' from <cstdlib> or its boost alternative shall not be used";
             }
 
         } // namespace sdc
