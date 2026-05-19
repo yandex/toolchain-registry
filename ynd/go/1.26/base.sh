@@ -1,25 +1,25 @@
 {% extends '//die/std/ix.sh' %}
 
 {% block go_version %}
-1.26.2
+1.26.3
 {% endblock %}
 
 {% set build_tool %}{% block build_tool %}{% endblock %}{% endset %}
 
 {#
-curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version=="go1.26.2") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | "", .filename, .sha256'
+curl 'https://go.dev/dl/?mode=json&include=all' | jq -r '.[] | select(.version=="go1.26.3") | .files[] | select((.kind=="archive") and (.arch|IN("amd64","arm64")) and (.os|IN("linux", "windows", "darwin"))) | "", .filename, .sha256'
 #}
 {% block archive_hash %}
 {% if linux and x86_64 or build_tool %}
-    990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282
+    2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556
 {% elif linux and aarch64 %}
-    c958a1fe1b361391db163a485e21f5f228142d6f8b584f6bef89b26f66dc5b23
+    9d89a3ea57d141c2b22d70083f2c8459ba3890f2d9e818e7e933b75614936565
 {% elif darwin and x86_64 %}
-    bc3f1500d9968c36d705442d90ba91addf9271665033748b82532682e90a7966
+    278d580b32e299fe4a9c990fcf2d02acfe538c7e551a6ee18f9c7164573d2c63
 {% elif darwin and arm64 %}
-    32af1522bf3e3ff3975864780a429cc0b41d190ec7bf90faa661d6d64566e7af
+    875cf54a15311eee2c99b9dd67c68c4a49351d489ab622bf2cfd28c8f2078d3c
 {% elif mingw32 %}
-    98eb3570bade15cb826b0909338df6cc6d2cf590bc39c471142002db3832b708
+    20d2ceafb4ed41b96b879010927b28bc92a5be57a7c1801ce365a9ca51d3224a
 {% endif %}
 {% endblock %}
 
