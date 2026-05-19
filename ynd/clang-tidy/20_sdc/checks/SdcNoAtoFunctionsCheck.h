@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bridge_header.h"
+#include "SdcProhibitedFunctionsCheck.h"
 
 namespace clang {
     namespace tidy {
