@@ -9,7 +9,7 @@
  #include <utility>
  
  /// The semantic version combined as a string.
-@@ -81,108 +81,148 @@
+@@ -81,108 +81,149 @@
    return std::min(u, static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
  }
  
@@ -104,6 +104,7 @@
 -  json::Array TestVectors;
 +void gatherTestVectors(json::OStream &JOS, coverage::MCDCRecord &Record,
 +                       const CoverageViewOptions &Options) {
++
    unsigned NumConditions = Record.getNumConditions();
    const bool ShowNonExecutedVectors = Options.ShowMCDCNonExecutedVectors;
  
@@ -141,27 +142,27 @@
 +        JOS.attributeBegin("result");
 +        renderCondState(JOS, Record.getTVResult(tv));
 +        JOS.attributeEnd();
-+
-+        if (ShowNonExecutedVectors) {
-+          for (unsigned tv = 0; tv < Record.getNumNotExecutedTestVectors(); tv++) {
-+            JOS.object([&] {
-+              JOS.attributeArray("conditions", [&] {
-+                for (unsigned c = 0; c < NumConditions; c++)
-+                  renderCondState(JOS, Record.getNotExecutedTVCondition(tv, c));
-+              });
-+
-+              JOS.attribute("executed", false);
-+
-+              JOS.attributeBegin("result");
-+              renderCondState(JOS, Record.getNotExecutedTVResult(tv));
-+              JOS.attributeEnd();
-+            });
-+          }
-+        }
 +      });
      }
 -  }
 -  return TestVectors;
++
++    if (ShowNonExecutedVectors) {
++      for (unsigned tv = 0; tv < Record.getNumNotExecutedTestVectors(); tv++) {
++        JOS.object([&] {
++          JOS.attributeArray("conditions", [&] {
++            for (unsigned c = 0; c < NumConditions; c++)
++              renderCondState(JOS, Record.getNotExecutedTVCondition(tv, c));
++          });
++
++          JOS.attribute("executed", false);
++
++          JOS.attributeBegin("result");
++          renderCondState(JOS, Record.getNotExecutedTVResult(tv));
++          JOS.attributeEnd();
++        });
++      }
++    }
 +  });
  }
  
@@ -238,7 +239,7 @@
  }
  
  std::vector<llvm::coverage::CountedRegion>
-@@ -207,110 +247,102 @@
+@@ -207,110 +248,102 @@
    return Branches;
  }
  
@@ -435,7 +436,7 @@
                          ArrayRef<std::string> SourceFiles,
                          ArrayRef<FileCoverageSummary> FileReports,
                          const CoverageViewOptions &Options) {
-@@ -321,38 +353,66 @@
+@@ -321,38 +354,66 @@
      S = heavyweight_hardware_concurrency(SourceFiles.size());
      S.Limit = true;
    }
@@ -522,7 +523,7 @@
  }
  
  } // end anonymous namespace
-@@ -370,27 +430,27 @@
+@@ -370,27 +431,27 @@
    FileCoverageSummary Totals = FileCoverageSummary("Totals");
    auto FileReports = CoverageReport::prepareFileReports(Coverage, Totals,
                                                          SourceFiles, Options);
