@@ -10,6 +10,24 @@ namespace clang {
 namespace tidy {
 namespace sdc {
 
+namespace {
+// Strip a single leading "::" so callers can compare qualified names without
+// having to remember which side has it. getQualifiedNameAsString() returns
+// e.g. "std::strerror" (no prefix); prohibited list entries use "::std::strerror".
+StringRef stripGlobalPrefix(StringRef Name) {
+    return Name.starts_with("::") ? Name.drop_front(2) : Name;
+}
+
+bool isProhibitedQualifiedName(ArrayRef<StringRef> Prohibited, StringRef QualName) {
+    StringRef Normalized = stripGlobalPrefix(QualName);
+    for (StringRef P : Prohibited) {
+        if (stripGlobalPrefix(P) == Normalized)
+            return true;
+    }
+    return false;
+}
+} // namespace
+
 SdcProhibitedFunctionsCheck::SdcProhibitedFunctionsCheck(
     StringRef Name, ClangTidyContext* Context)
     : ClangTidyCheck(Name, Context)
@@ -43,28 +61,24 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
     StringRef FunctionName;
     SourceLocation Loc;
     std::string ExtractedName;
+    ArrayRef<StringRef> Functions = getProhibitedFunctions();
 
+    // Defensive filter: the Yandex-patched clang-tidy implements hasName()
+    // by unqualified name only and ignores the leading "::" anchor, so the
+    // matcher overmatches against any function called e.g. `strerror` in any
+    // namespace or class scope. Re-verify the resolved declaration's full
+    // qualified name against the prohibited list explicitly.
     if (const auto* DRE = Result.Nodes.getNodeAs<DeclRefExpr>("funcUse")) {
         const NamedDecl* ND = DRE->getDecl();
+        if (!isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString()))
+            return;
         ExtractedName = ND->getNameAsString();
         FunctionName = ExtractedName;
         Loc = DRE->getBeginLoc();
     } else if (const auto* ULE = Result.Nodes.getNodeAs<UnresolvedLookupExpr>("unresolvedFuncUse")) {
         Loc = ULE->getBeginLoc();
-        ArrayRef<StringRef> Functions = getProhibitedFunctions();
         for (const NamedDecl* ND : ULE->decls()) {
-            std::string QualName = ND->getQualifiedNameAsString();
-            std::string QualNameWithColons = "::" + QualName;
-
-            // Check if this declaration's name is in our prohibited list
-            bool Found = false;
-            for (StringRef Prohibited : Functions) {
-                if (QualName == Prohibited || QualNameWithColons == Prohibited || ND->getName() == Prohibited) {
-                    Found = true;
-                    break;
-                }
-            }
-            if (Found) {
+            if (isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString())) {
                 ExtractedName = ND->getNameAsString();
                 FunctionName = ExtractedName;
                 break;
