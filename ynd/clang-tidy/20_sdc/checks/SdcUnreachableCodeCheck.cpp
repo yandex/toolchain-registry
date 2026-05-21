@@ -24,15 +24,26 @@ namespace sdc {
 
 namespace {
 
-// Collects every Stmt* that lives inside the *discarded* branch of an
-// `if constexpr` whose condition is a known constant. This check
-// exempts those statements from the unreachable-code rule.
-class DiscardedBranchCollector
-    : public RecursiveASTVisitor<DiscardedBranchCollector> {
+// Collects every Stmt* that the rule considers exempt from the
+// "unreachable" treatment even when clang's CFG marks it unreachable.
+// Two categories are folded together because both produce the same
+// "skip this CFG block" decision downstream:
+//
+//   * Statements inside the *discarded* branch of an `if constexpr`
+//     whose condition is a known constant — the rule's closing
+//     sentence explicitly excludes them.
+//   * Operand sub-expressions of `&&`, `||`, and `?:` —
+//     all operands of a reachable such operator are
+//     themselves considered reachable. This matters most for template
+//     instantiations where the short-circuited side is "dead" only in
+//     some instantiations (e.g. `if constexpr` is the canonical form,
+//     but `kFlag && f()` shows up too); clang's stock
+class ExemptStmtCollector
+    : public RecursiveASTVisitor<ExemptStmtCollector> {
 public:
-    explicit DiscardedBranchCollector(ASTContext& Ctx) : Ctx_(Ctx) {}
+    explicit ExemptStmtCollector(ASTContext& Ctx) : Ctx_(Ctx) {}
 
-    llvm::DenseSet<const Stmt*> Discarded;
+    llvm::DenseSet<const Stmt*> Exempt;
 
     bool VisitIfStmt(IfStmt* If) {
         if (!If->isConstexpr()) {
@@ -46,10 +57,30 @@ public:
         if (!Cond->EvaluateAsBooleanCondition(Value, Ctx_)) {
             return true;
         }
-        const Stmt* Discarded_ = Value ? If->getElse() : If->getThen();
-        if (Discarded_) {
-            collectAll(Discarded_);
+        const Stmt* Discarded = Value ? If->getElse() : If->getThen();
+        if (Discarded) {
+            collectAll(Discarded);
         }
+        return true;
+    }
+
+    bool VisitBinaryOperator(BinaryOperator* B) {
+        if (B->getOpcode() == BO_LAnd || B->getOpcode() == BO_LOr) {
+            collectAll(B->getRHS());
+        }
+        return true;
+    }
+
+    bool VisitConditionalOperator(ConditionalOperator* C) {
+        collectAll(C->getTrueExpr());
+        collectAll(C->getFalseExpr());
+        return true;
+    }
+
+    bool VisitBinaryConditionalOperator(BinaryConditionalOperator* C) {
+        // GNU `a ?: b` — the true-expr aliases the condition (always
+        // evaluated); only the false-expr can be short-circuited away.
+        collectAll(C->getFalseExpr());
         return true;
     }
 
@@ -58,7 +89,7 @@ private:
         if (!S) {
             return;
         }
-        Discarded.insert(S);
+        Exempt.insert(S);
         for (const Stmt* Child : S->children()) {
             collectAll(Child);
         }
@@ -201,7 +232,7 @@ void SdcUnreachableCodeCheck::check(const MatchFinder::MatchResult& Result) {
         return;
     }
 
-    DiscardedBranchCollector Collector(*Result.Context);
+    ExemptStmtCollector Collector(*Result.Context);
     Collector.TraverseStmt(const_cast<Stmt*>(FD->getBody()));
 
     UnreachableCatchFinder CatchFinder;
@@ -231,7 +262,7 @@ void SdcUnreachableCodeCheck::check(const MatchFinder::MatchResult& Result) {
         if (!S) {
             continue;
         }
-        if (Collector.Discarded.count(S)) {
+        if (Collector.Exempt.count(S)) {
             continue;
         }
         SourceLocation L = S->getBeginLoc();
