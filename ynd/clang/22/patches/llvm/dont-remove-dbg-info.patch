@@ -1,0 +1,11 @@
+--- a/tools/dsymutil/Reproducer.cpp
++++ b/tools/dsymutil/Reproducer.cpp
+@@ -46,8 +46,6 @@
+ ReproducerGenerate::~ReproducerGenerate() {
+   if (GenerateOnExit && !Generated)
+     generate();
+-  else if (!Generated && !Root.empty())
+-    sys::fs::remove_directories(Root, /* IgnoreErrors */ true);
+ }
+
+ void ReproducerGenerate::generate() {

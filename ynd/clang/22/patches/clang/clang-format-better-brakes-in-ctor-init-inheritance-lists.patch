@@ -1,0 +1,128 @@
+--- a/include/clang/Format/Format.h
++++ b/include/clang/Format/Format.h
+@@ -1425,6 +1425,9 @@ struct FormatStyle {
+     /// \endcode
+     ///
+     bool SplitEmptyNamespace;
++
++    bool AfterConstructorInitializers;
++    bool AfterInheritanceList;
+   };
+ 
+   /// Control of individual brace wrapping cases.
+@@ -3378,6 +3381,8 @@ struct FormatStyle {
+   /// \version 14
+   PackConstructorInitializersStyle PackConstructorInitializers;
+ 
++  bool AlwaysBreakBeforeMultipleInheritanceList;
++
+   /// The penalty for breaking around an assignment operator.
+   /// \version 5
+   unsigned PenaltyBreakAssignment;
+
+--- a/lib/Format/Format.cpp
++++ b/lib/Format/Format.cpp
+@@ -214,6 +214,8 @@ template <> struct MappingTraits<FormatStyle::BraceWrappingFlags> {
+     IO.mapOptional("SplitEmptyFunction", Wrapping.SplitEmptyFunction);
+     IO.mapOptional("SplitEmptyRecord", Wrapping.SplitEmptyRecord);
+     IO.mapOptional("SplitEmptyNamespace", Wrapping.SplitEmptyNamespace);
++    IO.mapOptional("AfterConstructorInitializers", Wrapping.AfterConstructorInitializers);
++    IO.mapOptional("AfterInheritanceList", Wrapping.AfterInheritanceList);
+   }
+ };
+ 
+@@ -1030,6 +1032,7 @@ template <> struct MappingTraits<FormatStyle> {
+                    Style.ObjCSpaceBeforeProtocolList);
+     IO.mapOptional("PackConstructorInitializers",
+                    Style.PackConstructorInitializers);
++    IO.mapOptional("AlwaysBreakBeforeMultipleInheritanceList", Style.AlwaysBreakBeforeMultipleInheritanceList);
+     IO.mapOptional("PenaltyBreakAssignment", Style.PenaltyBreakAssignment);
+     IO.mapOptional("PenaltyBreakBeforeFirstCallParameter",
+                    Style.PenaltyBreakBeforeFirstCallParameter);
+@@ -1287,7 +1290,9 @@ static void expandPresetsBraceWrapping(FormatStyle &Expanded) {
+                             /*IndentBraces=*/false,
+                             /*SplitEmptyFunction=*/true,
+                             /*SplitEmptyRecord=*/true,
+-                            /*SplitEmptyNamespace=*/true};
++                            /*SplitEmptyNamespace=*/true,
++                            /*AfterConstructorInitializers=*/false,
++                            /*AfterInheritanceList=*/false};
+   switch (Expanded.BreakBeforeBraces) {
+   case FormatStyle::BS_Linux:
+     Expanded.BraceWrapping.AfterClass = true;
+@@ -1357,7 +1362,9 @@ static void expandPresetsBraceWrapping(FormatStyle &Expanded) {
+         /*IndentBraces=*/true,
+         /*SplitEmptyFunction=*/true,
+         /*SplitEmptyRecord=*/true,
+-        /*SplitEmptyNamespace=*/true};
++        /*SplitEmptyNamespace=*/true,
++        /*AfterConstructorInitializers=*/false,
++        /*AfterInheritanceList=*/false};
+     break;
+   case FormatStyle::BS_WebKit:
+     Expanded.BraceWrapping.AfterFunction = true;
+@@ -1458,7 +1465,9 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
+                              /*IndentBraces=*/false,
+                              /*SplitEmptyFunction=*/true,
+                              /*SplitEmptyRecord=*/true,
+-                             /*SplitEmptyNamespace=*/true};
++                             /*SplitEmptyNamespace=*/true,
++                             /*AfterConstructorInitializers=*/false,
++                             /*AfterInheritanceList=*/false};
+   LLVMStyle.BreakAdjacentStringLiterals = true;
+   LLVMStyle.BreakAfterAttributes = FormatStyle::ABS_Leave;
+   LLVMStyle.BreakAfterJavaFieldAnnotations = false;
+
+--- a/lib/Format/TokenAnnotator.cpp
++++ b/lib/Format/TokenAnnotator.cpp
+@@ -3468,6 +3468,9 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) const {
+   FormatToken *ClosingParen = nullptr;
+   FormatToken *AfterLastAttribute = nullptr;
+ 
++  bool SeenMultipleInheritanceList = false;
++  bool SeenConstructorInitializers = false;
++
+   for (auto *Tok = Current; Tok; Tok = Tok->Next) {
+     if (Tok->is(TT_StartOfName))
+       SeenName = true;
+@@ -3590,6 +3593,18 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) const {
+       Current->SpacesRequiredBefore = 1;
+     }
+ 
++    if (Current->is(TT_CtorInitializerColon)) {
++      SeenConstructorInitializers = true;
++    }
++    if (Current->is(TT_InheritanceColon)) {
++      for (const auto *Tok = First; Tok && !Tok->is(TT_ClassLBrace); Tok = Tok->Next) {
++        if (Tok->is(TT_InheritanceComma)) {
++          SeenMultipleInheritanceList = true;
++          break;
++        }
++      }
++    }
++
+     const auto &Children = Prev->Children;
+     if (!Children.empty() && Children.back()->Last->is(TT_LineComment)) {
+       Current->MustBreakBefore = true;
+@@ -3602,6 +3617,21 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) const {
+       }
+     }
+ 
++    if (Style.BraceWrapping.AfterConstructorInitializers &&
++        SeenConstructorInitializers && Current->is(TT_FunctionLBrace)) {
++      Current->MustBreakBefore = true;
++    }
++    if (Style.BraceWrapping.AfterInheritanceList &&
++        SeenMultipleInheritanceList && Current->is(TT_ClassLBrace)) {
++      Current->MustBreakBefore = true;
++    }
++
++    if (Style.AlwaysBreakBeforeMultipleInheritanceList &&
++        SeenMultipleInheritanceList &&
++        Current->is(TT_InheritanceColon)) {
++      Current->MustBreakBefore = true;
++    }
++
+     Current->CanBreakBefore =
+         Current->MustBreakBefore || canBreakBefore(Line, *Current);
+     unsigned ChildSize = 0;

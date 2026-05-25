@@ -1,0 +1,17 @@
+# Possible fix for https://github.com/llvm/llvm-project/issues/168060
+--- a/lib/ObjCopy/ELF/ELFObject.cpp
++++ b/lib/ObjCopy/ELF/ELFObject.cpp
+@@ -2168,7 +2168,12 @@ Error Object::updateSectionData(SecPtr &Sec, ArrayRef<uint8_t> Data) {
+                              Data.size(), Sec->Name.c_str(), Sec->Size);
+
+   if (!Sec->ParentSegment) {
++    auto Replaced = Sec.get();
+     Sec = std::make_unique<OwnedDataSection>(*Sec, Data);
++    DenseMap<SectionBase *, SectionBase *> replacements{{Replaced, Sec.get()}};
++    if (auto err = replaceSections(replacements)) {
++        return err;
++    }
+   } else {
+     // The segment writer will be in charge of updating these contents.
+     Sec->Size = Data.size();
+

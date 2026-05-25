@@ -1,0 +1,155 @@
+diff --git a/include/clang/AST/CXXInheritance.h b/include/clang/AST/CXXInheritance.h
+index bbef01843e0b..4b5492124eff 100644
+--- a/include/clang/AST/CXXInheritance.h
++++ b/include/clang/AST/CXXInheritance.h
+@@ -28,6 +28,8 @@
+ #include <memory>
+ #include <utility>
+
++#include "clang/AST/ASTContext.h"
++
+ namespace clang {
+
+ class ASTContext;
+@@ -132,7 +134,8 @@ class CXXBasePaths {
+   struct IsVirtBaseAndNumberNonVirtBases {
+     LLVM_PREFERRED_TYPE(bool)
+     unsigned IsVirtBase : 1;
+-    unsigned NumberOfNonVirtBases : 31;
++    unsigned HackedRecord : 1;
++    unsigned NumberOfNonVirtBases : 30;
+   };
+   llvm::SmallDenseMap<QualType, IsVirtBaseAndNumberNonVirtBases, 8>
+       ClassSubobjects;
+@@ -163,6 +166,28 @@ class CXXBasePaths {
+   /// is also recorded.
+   bool DetectVirtual;
+
++
++
++  std::vector<clang::CXXBaseSpecifier *> _candidates;
++  void addCandidate(ASTContext &Context, const CXXRecordDecl* candi) {
++    clang::QualType baseType = candi->getTypeForDecl()->getCanonicalTypeInternal();
++    clang::SourceLocation loc = candi->getLocation();
++    clang::SourceRange R = candi->getSourceRange();
++
++    clang::TypeSourceInfo *typeSourceInfo = Context.getTrivialTypeSourceInfo(baseType);
++
++    auto ptr = new clang::CXXBaseSpecifier(
++        R,
++        false,/* isVirtual */
++        true,
++        clang::AS_public,
++        typeSourceInfo,
++        loc
++    );
++
++    _candidates.push_back(ptr);
++  }
++
+   bool lookupInBases(ASTContext &Context, const CXXRecordDecl *Record,
+                      CXXRecordDecl::BaseMatchesCallback BaseMatches,
+                      bool LookupInDependent = false);
+diff --git a/lib/AST/CXXInheritance.cpp b/lib/AST/CXXInheritance.cpp
+index 25de2a20a7f3..bd6e622707b5 100644
+--- a/lib/AST/CXXInheritance.cpp
++++ b/lib/AST/CXXInheritance.cpp
+@@ -39,7 +39,7 @@ using namespace clang;
+ bool CXXBasePaths::isAmbiguous(CanQualType BaseType) {
+   BaseType = BaseType.getUnqualifiedType();
+   IsVirtBaseAndNumberNonVirtBases Subobjects = ClassSubobjects[BaseType];
+-  return Subobjects.NumberOfNonVirtBases + (Subobjects.IsVirtBase ? 1 : 0) > 1;
++  return (Subobjects.NumberOfNonVirtBases + (Subobjects.IsVirtBase ? 1 : 0)) * (1-Subobjects.HackedRecord) > 1;
+ }
+
+ /// clear - Clear out all prior path information.
+@@ -70,12 +70,65 @@ bool CXXRecordDecl::isDerivedFrom(const CXXRecordDecl *Base) const {
+   return isDerivedFrom(Base, Paths);
+ }
+
++static bool isTString(const CXXRecordDecl *decl) {
++    if (decl->getName() != "TBasicString") return false;
++
++    auto* me = cast_or_null<const ClassTemplateSpecializationDecl>(decl);
++    if (!me) return false;
++
++    auto& templArgs = me->getTemplateInstantiationArgs();
++    if (templArgs.size() != 2) return false;
++
++    if (templArgs[0].getKind() != clang::TemplateArgument::ArgKind::Type) return false;
++
++    return true; /* need check that first template arg is char */
++}
++
++static bool isXString(const CXXRecordDecl *decl) {
++    return decl->getName() == "XString";
++}
++
++// Function to compare template specialization types
++bool AreCXXRecordDeclTemplatesEqual(const CXXRecordDecl *lhsDecl, const CXXRecordDecl *rhsDecl) {
++    if (!lhsDecl || !rhsDecl) return lhsDecl == rhsDecl;
++    auto* lhsTemplate = cast_or_null<const ClassTemplateSpecializationDecl>(lhsDecl);
++    auto* rhsTemplate = cast_or_null<const ClassTemplateSpecializationDecl>(rhsDecl);
++    if (!lhsTemplate || !rhsTemplate) return lhsTemplate == rhsTemplate;
++
++    auto fromTy = QualType(lhsDecl->getTypeForDecl(), 0).getAsString();
++    auto toTy = QualType(rhsDecl->getTypeForDecl(), 0).getAsString();
++
++    auto isSpace = [](int ch) { return ch == ' '; };
++    llvm::erase_if(fromTy, isSpace);
++    llvm::erase_if(toTy, isSpace);
++
++    auto rm = [](std::string& str, const std::string& toRemove) {
++        size_t pos = 0;
++        while ((pos = str.find(toRemove, pos)) != std::string::npos) {
++            str.erase(pos, toRemove.length());
++        }
++    };
++    std::string reps[] = {
++        "structTBasicString<char>", "structXString",
++        "classTBasicString<char>", "classXString"
++    };
++    for (const std::string& rep : reps) {
++        rm(fromTy, rep);
++        rm(toTy, rep);
++    }
++
++    return fromTy == toTy;
++}
+ bool CXXRecordDecl::isDerivedFrom(const CXXRecordDecl *Base,
+                                   CXXBasePaths &Paths) const {
+   if (getCanonicalDecl() == Base->getCanonicalDecl())
+     return false;
+
+-  Paths.setOrigin(const_cast<CXXRecordDecl*>(this));
++  bool r = isTString(this) && isXString(Base);
++  if (r || AreCXXRecordDeclTemplatesEqual(this, Base)) {
++    const CXXRecordDecl* xstring = Base->getCanonicalDecl();
++    Paths.addCandidate(getASTContext(), xstring);
++  }
+
+   const CXXRecordDecl *BaseDecl = Base->getCanonicalDecl();
+   return lookupInBases(
+@@ -165,7 +218,13 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
+   AccessSpecifier AccessToHere = ScratchPath.Access;
+   bool IsFirstStep = ScratchPath.empty();
+
+-  for (const auto &BaseSpec : Record->bases()) {
++  std::vector<const CXXBaseSpecifier*> _bases;
++  for (const auto &BaseSpec : Record->bases()) _bases.push_back(&BaseSpec);
++  if(!_candidates.empty()) _bases.push_back(_candidates.front());
++
++  for (const auto &BaseSpec_ptr : _bases) {
++    bool HackedBase = _candidates.size() > 0 && _candidates.front() == BaseSpec_ptr; // our candidate
++    const auto &BaseSpec = *BaseSpec_ptr;
+     // Find the record of the base class subobjects for this type.
+     QualType BaseType =
+         Context.getCanonicalType(BaseSpec.getType()).getUnqualifiedType();
+@@ -182,6 +241,7 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
+     // Determine whether we need to visit this base class at all,
+     // updating the count of subobjects appropriately.
+     IsVirtBaseAndNumberNonVirtBases &Subobjects = ClassSubobjects[BaseType];
++    Subobjects.HackedRecord = (int)HackedBase;
+     bool VisitBase = true;
+     bool SetVirtual = false;
+     if (BaseSpec.isVirtual()) {
