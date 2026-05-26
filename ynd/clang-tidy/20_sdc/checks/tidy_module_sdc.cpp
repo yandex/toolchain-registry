@@ -19,6 +19,11 @@
 #include "SdcIntegerLiteralSuffixUnsignedCheck.h"
 #include "SdcNoAdvancedMemoryManagementCheck.h"
 #include "SdcNoAtoFunctionsCheck.h"
+#include "SdcNoCharacterFunctionsCheck.h"
+#include "SdcNoCsetjmpFacilitiesCheck.h"
+#include "SdcNoCsignalFacilitiesCheck.h"
+#include "SdcNoCstdargFacilitiesCheck.h"
+#include "SdcNoIoFunctionsCheck.h"
 #include "SdcNoLowercaseLSuffixCheck.h"
 #include "SdcNoMemFunctionsCheck.h"
 #include "SdcNoOctalConstantsCheck.h"
@@ -59,6 +64,11 @@ public:
         CheckFactories.registerCheck<sdc::SdcIntegerLiteralSuffixUnsignedCheck>("sdc-integer-literal-suffix-unsigned");
         CheckFactories.registerCheck<sdc::SdcNoAdvancedMemoryManagementCheck>("sdc-no-advanced-memory-management");
         CheckFactories.registerCheck<sdc::SdcNoAtoFunctionsCheck>("sdc-no-ato-functions");
+        CheckFactories.registerCheck<sdc::SdcNoCharacterFunctionsCheck>("sdc-no-character-functions");
+        CheckFactories.registerCheck<sdc::SdcNoCsetjmpFacilitiesCheck>("sdc-no-csetjmp-facilities");
+        CheckFactories.registerCheck<sdc::SdcNoCsignalFacilitiesCheck>("sdc-no-csignal-facilities");
+        CheckFactories.registerCheck<sdc::SdcNoCstdargFacilitiesCheck>("sdc-no-cstdarg-facilities");
+        CheckFactories.registerCheck<sdc::SdcNoIoFunctionsCheck>("sdc-no-io-functions");
         CheckFactories.registerCheck<sdc::SdcNoLowercaseLSuffixCheck>("sdc-no-lowercase-l-suffix");
         CheckFactories.registerCheck<sdc::SdcNoMemFunctionsCheck>("sdc-no-mem-functions");
         CheckFactories.registerCheck<sdc::SdcNoOctalConstantsCheck>("sdc-no-octal-constants");
