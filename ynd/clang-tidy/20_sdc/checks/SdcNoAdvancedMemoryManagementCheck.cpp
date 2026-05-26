@@ -9,13 +9,46 @@ namespace clang {
     namespace tidy {
         namespace sdc {
 
+            // Rules 1 & 2 for the <memory> function list. The base class
+            // matches both calls and address-of references against these names.
+            static const StringRef ProhibitedAdvancedMemoryFunctions[] = {
+                "::std::launder",
+                "::std::uninitialized_default_construct",
+                "::std::uninitialized_value_construct",
+                "::std::uninitialized_copy",
+                "::std::uninitialized_move",
+                "::std::uninitialized_fill",
+                "::std::uninitialized_default_construct_n",
+                "::std::uninitialized_value_construct_n",
+                "::std::uninitialized_copy_n",
+                "::std::uninitialized_move_n",
+                "::std::uninitialized_fill_n",
+                "::std::destroy",
+                "::std::destroy_at",
+                "::std::destroy_n",
+            };
+
             SdcNoAdvancedMemoryManagementCheck::SdcNoAdvancedMemoryManagementCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcProhibitedFunctionsCheck(Name, Context)
             {
             }
 
+            ArrayRef<StringRef>
+            SdcNoAdvancedMemoryManagementCheck::getProhibitedFunctions() const {
+                return ProhibitedAdvancedMemoryFunctions;
+            }
+
+            std::string
+            SdcNoAdvancedMemoryManagementCheck::getDiagnosticMessage(StringRef FunctionName) const {
+                return "function 'std::" + FunctionName.str() + "' is not allowed; "
+                       "advanced memory management shall not be used";
+            }
+
             void SdcNoAdvancedMemoryManagementCheck::registerMatchers(MatchFinder* Finder) {
+                // Rules 1 & 2 for the <memory> function list: delegate to base.
+                SdcProhibitedFunctionsCheck::registerMatchers(Finder);
+
                 // Match explicit destructor calls
                 Finder->addMatcher(
                     cxxMemberCallExpr(
@@ -33,18 +66,15 @@ namespace clang {
                               hasName("operator delete"), hasName("operator delete[]")))
                         .bind("user_operator_new_delete"),
                     this);
-
-                // Match calls to banned memory functions
-                Finder->addMatcher(
-                    callExpr(
-                        callee(functionDecl()),
-                        unless(isExpansionInSystemHeader()))
-                        .bind("function_call"),
-                    this);
             }
 
             void SdcNoAdvancedMemoryManagementCheck::check(
                 const MatchFinder::MatchResult& Result) {
+                // Rules 1 & 2 for the <memory> function list: the base class
+                // returns immediately when its bindings aren't present, so this
+                // is safe to call for every match.
+                SdcProhibitedFunctionsCheck::check(Result);
+
                 // Check for explicit destructor calls
                 if (const auto* DestructorCall = Result.Nodes.getNodeAs<CXXMemberCallExpr>("explicit_destructor")) {
                     // Check if this is an explicit destructor call
@@ -113,61 +143,6 @@ namespace clang {
                     }
                 }
 
-                // Check for calls to banned memory functions
-                if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("function_call")) {
-                    const auto* Callee = Call->getDirectCallee();
-                    if (Callee && isBannedMemoryFunction(Callee)) {
-                        diag(Call->getBeginLoc(),
-                             "function '%0' is not allowed; "
-                             "advanced memory management shall not be used")
-                            << Callee->getName();
-                        return;
-                    }
-                }
-            }
-
-            bool SdcNoAdvancedMemoryManagementCheck::isBannedMemoryFunction(
-                const FunctionDecl* FD) {
-                if (!FD) {
-                    return false;
-                }
-
-                // Skip if it's not a simple function name (e.g., operators, destructors)
-                if (!FD->getDeclName().isIdentifier()) {
-                    return false;
-                }
-
-                StringRef Name = FD->getName();
-
-                // Check for banned functions from <memory>
-                static const char* BannedFunctions[] = {
-                    "launder",
-                    "uninitialized_default_construct",
-                    "uninitialized_value_construct",
-                    "uninitialized_copy",
-                    "uninitialized_move",
-                    "uninitialized_fill",
-                    "uninitialized_default_construct_n",
-                    "uninitialized_value_construct_n",
-                    "uninitialized_copy_n",
-                    "uninitialized_move_n",
-                    "uninitialized_fill_n",
-                    "destroy",
-                    "destroy_at",
-                    "destroy_n"};
-
-                for (const auto* BannedName : BannedFunctions) {
-                    if (Name == BannedName) {
-                        // Verify it's in the std namespace
-                        if (const auto* NS = dyn_cast_or_null<NamespaceDecl>(FD->getDeclContext())) {
-                            if (NS->getName() == "std") {
-                                return true;
-                            }
-                        }
-                    }
-                }
-
-                return false;
             }
 
             bool SdcNoAdvancedMemoryManagementCheck::isUserDeclaredOperatorNewDelete(
@@ -201,6 +176,15 @@ namespace clang {
 
                 // Skip builtin functions
                 if (FD->getBuiltinID() != 0) {
+                    return false;
+                }
+
+                // Skip `= delete`d declarations. The user is explicitly forbidding
+                // the operator, which aligns with the rule rather than violating it
+                // (e.g. `void* operator new[](size_t) = delete;` to ban heap allocation
+                // of a class). Note: clang reports `isThisDeclarationADefinition()` as
+                // true for deleted functions, so this must come before that check.
+                if (FD->isDeleted()) {
                     return false;
                 }
 

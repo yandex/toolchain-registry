@@ -36,8 +36,8 @@ bool isReservedNamespaceName(StringRef Name) {
 }
 
 // Walks up the lexical-context chain, traversing only through
-// NamespaceDecls. Returns the first reserved-named namespace reached, or
-// nullptr if the walk hits a non-namespace context first.
+// NamespaceDecls. Returns the first *top-level* reserved-named namespace
+// reached, or nullptr if the walk hits a non-namespace context first.
 //
 // The "namespace-only" restriction encodes the intent of rule:
 // it forbids adding identifiers *at namespace scope* in std/posix/stdN.
@@ -45,6 +45,16 @@ bool isReservedNamespaceName(StringRef Name) {
 // parameters of an entity in std live in non-namespace scope; they're
 // part of the enclosing entity (which is itself flagged if it shouldn't
 // be there), not separate additions to the reserved namespace.
+//
+// "Top-level" matters because the rule targets the standard's `::std`,
+// `::posix`, `::stdN` — not arbitrary user namespaces that happen to
+// share the name. `namespace my_custom::std { void f(); }` declares `f`
+// in `my_custom::std`, which is a user namespace; flagging it would be
+// over-formal. Only a NamespaceDecl whose parent is the translation
+// unit (i.e. opened at global scope) is the reserved one. If we find a
+// reserved-named NS that is itself nested, we keep walking — an outer
+// reserved namespace can still apply (e.g. `std::foo::std::g` is in the
+// outer ::std and should warn).
 const NamespaceDecl* enclosingReservedNamespace(const Decl* D) {
     for (const DeclContext* DC = D->getDeclContext(); DC;
          DC = DC->getParent()) {
@@ -55,7 +65,8 @@ const NamespaceDecl* enclosingReservedNamespace(const Decl* D) {
         if (NS->isAnonymousNamespace()) {
             continue;
         }
-        if (isReservedNamespaceName(NS->getName())) {
+        if (isReservedNamespaceName(NS->getName()) &&
+            NS->getDeclContext()->isTranslationUnit()) {
             return NS;
         }
     }
@@ -109,14 +120,20 @@ void SdcReservedNamespaceDefinitionCheck::check(
         // introduce a named identifier into the enclosing namespace.
         return;
     }
-    // NamespaceDecls just *open* the namespace; opening `namespace std {}`
-    // alone introduces nothing. We only flag what's introduced *inside*.
-    // Filter the namespace-open itself by skipping NamespaceDecl whose
-    // own name is reserved (the body's members get matched separately).
-    if (const auto* NS = llvm::dyn_cast<NamespaceDecl>(ND)) {
-        if (NS->getIdentifier() && isReservedNamespaceName(NS->getName())) {
-            return;
-        }
+    // NamespaceDecls just *open* a namespace; they don't introduce a
+    // meaningful identifier addition to a reserved namespace on their own.
+    // Anything inside is matched per-declaration. Skipping all of them
+    // means:
+    //   - re-opening `std::chrono` (or any std sub-namespace) to host a
+    //     template specialization is allowed; the specialization itself
+    //     is exempt by the rule's own note, and the namespace name
+    //     `chrono` already exists in std whenever <chrono> is included.
+    //   - `namespace std::user_thing { void f(); }` still flags `f`.
+    //   - distinguishing "re-opening an existing std sub-namespace" from
+    //     "opening a fresh one" requires brittle cross-TU prior-decl
+    //     checks; skipping all NamespaceDecls sidesteps that.
+    if (llvm::isa<NamespaceDecl>(ND)) {
+        return;
     }
     if (isTemplateSpecialization(ND)) {
         return;

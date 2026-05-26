@@ -9,13 +9,36 @@ namespace clang {
     namespace tidy {
         namespace sdc {
 
+            // Rule 2 of the rule: malloc family. Handled by the base class
+            // matchers, which catch both calls and address-of references.
+            static const StringRef ProhibitedMallocFamily[] = {
+                "::malloc", "::calloc", "::realloc", "::aligned_alloc", "::free",
+                "::std::malloc", "::std::calloc", "::std::realloc",
+                "::std::aligned_alloc", "::std::free",
+            };
+
             SdcDynamicMemoryAutomaticCheck::SdcDynamicMemoryAutomaticCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcProhibitedFunctionsCheck(Name, Context)
             {
             }
 
+            ArrayRef<StringRef>
+            SdcDynamicMemoryAutomaticCheck::getProhibitedFunctions() const {
+                return ProhibitedMallocFamily;
+            }
+
+            std::string
+            SdcDynamicMemoryAutomaticCheck::getDiagnosticMessage(StringRef FunctionName) const {
+                return "function '" + FunctionName.str() + "' is not allowed; "
+                       "dynamic memory shall be managed automatically";
+            }
+
             void SdcDynamicMemoryAutomaticCheck::registerMatchers(MatchFinder* Finder) {
+                // Rule 2 (malloc/calloc/realloc/aligned_alloc/free): delegate to
+                // the base class, which matches both calls and address-of uses.
+                SdcProhibitedFunctionsCheck::registerMatchers(Finder);
+
                 // Match new expressions (we'll filter placement new in check())
                 Finder->addMatcher(
                     cxxNewExpr(
@@ -28,15 +51,6 @@ namespace clang {
                     cxxDeleteExpr(
                         unless(isExpansionInSystemHeader()))
                         .bind("delete_expr"),
-                    this);
-
-                // Match calls to malloc, calloc, realloc, aligned_alloc, free
-                Finder->addMatcher(
-                    callExpr(
-                        callee(functionDecl(hasAnyName("::malloc", "::calloc", "::realloc",
-                                                       "::aligned_alloc", "::free"))),
-                        unless(isExpansionInSystemHeader()))
-                        .bind("malloc_family"),
                     this);
 
                 // Match calls to allocate/deallocate methods in std namespace
@@ -82,6 +96,11 @@ namespace clang {
 
             void SdcDynamicMemoryAutomaticCheck::check(
                 const MatchFinder::MatchResult& Result) {
+                // Rule 2: hand off the malloc-family bindings to the base. It
+                // returns immediately when those bindings aren't present, so
+                // this is safe to call for every match.
+                SdcProhibitedFunctionsCheck::check(Result);
+
                 // Check for new expressions (but allow placement new)
                 if (const auto* NewExpr = Result.Nodes.getNodeAs<CXXNewExpr>("new_expr")) {
                     // Placement new has placement arguments
@@ -118,18 +137,6 @@ namespace clang {
                     diag(DeleteExpr->getBeginLoc(),
                          "delete is not allowed; "
                          "dynamic memory shall be managed automatically");
-                    return;
-                }
-
-                // Check for malloc family functions
-                if (const auto* MallocCall = Result.Nodes.getNodeAs<CallExpr>("malloc_family")) {
-                    const auto* Callee = MallocCall->getDirectCallee();
-                    if (Callee) {
-                        diag(MallocCall->getBeginLoc(),
-                             "function '%0' is not allowed; "
-                             "dynamic memory shall be managed automatically")
-                            << Callee->getName();
-                    }
                     return;
                 }
 

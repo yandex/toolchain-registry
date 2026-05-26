@@ -84,6 +84,18 @@ public:
         return true;
     }
 
+    bool VisitCXXForRangeStmt(CXXForRangeStmt* S) {
+        // Exempt implicit iterator operations that the CFG builder sometimes
+        // erroneously marks unreachable (especially with EHEdges enabled for
+        // complex views), or which are genuinely unreachable if the loop
+        // unconditionally exits. These are compiler-generated.
+        if (S->getBeginStmt()) collectAll(S->getBeginStmt());
+        if (S->getEndStmt()) collectAll(S->getEndStmt());
+        if (S->getCond()) collectAll(S->getCond());
+        if (S->getInc()) collectAll(S->getInc());
+        return true;
+    }
+
 private:
     void collectAll(const Stmt* S) {
         if (!S) {

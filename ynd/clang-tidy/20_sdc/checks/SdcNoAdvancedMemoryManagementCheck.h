@@ -1,6 +1,9 @@
 #pragma once
 
-#include "bridge_header.h"
+#include "SdcProhibitedFunctionsCheck.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
+#include <string>
 
 namespace clang {
     namespace tidy {
@@ -14,14 +17,20 @@ namespace clang {
             // 2. The address of an advanced memory management function is taken
             // 3. A destructor is called explicitly
             // 4. Any operator new or operator delete is user-declared
-            class SdcNoAdvancedMemoryManagementCheck: public ClangTidyCheck {
+            class SdcNoAdvancedMemoryManagementCheck: public SdcProhibitedFunctionsCheck {
             public:
                 SdcNoAdvancedMemoryManagementCheck(StringRef Name, ClangTidyContext* Context);
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;
                 void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
+            protected:
+                // Rules 1 & 2 for the <memory> function list: std::launder,
+                // uninitialized_*, destroy*. The base class matches both calls
+                // and address-of references in one pass.
+                ArrayRef<StringRef> getProhibitedFunctions() const override;
+                std::string getDiagnosticMessage(StringRef FunctionName) const override;
+
             private:
-                bool isBannedMemoryFunction(const FunctionDecl* FD);
                 bool isUserDeclaredOperatorNewDelete(const FunctionDecl* FD);
             };
 
