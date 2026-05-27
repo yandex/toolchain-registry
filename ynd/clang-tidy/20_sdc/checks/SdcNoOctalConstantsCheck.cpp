@@ -22,7 +22,7 @@ namespace clang {
                 // Match integer literals ONLY
                 // Character literals with octal escapes are NOT covered by this rule
                 Finder->addMatcher(
-                    integerLiteral().bind("integer_literal"),
+                    integerLiteral(unless(isExpansionInSystemHeader())).bind("integer_literal"),
                     this);
             }
 
@@ -37,10 +37,14 @@ namespace clang {
 
             void SdcNoOctalConstantsCheck::checkIntegerLiteral(
                 const IntegerLiteral* Literal, const MatchFinder::MatchResult& Result) {
+                const SourceManager& SM = *Result.SourceManager;
+                CharSourceRange Range = CharSourceRange::getTokenRange(
+                    SM.getSpellingLoc(Literal->getBeginLoc()),
+                    SM.getSpellingLoc(Literal->getEndLoc()));
+
                 // Get the source text for the literal
                 llvm::StringRef SourceText = Lexer::getSourceText(
-                    CharSourceRange::getTokenRange(Literal->getSourceRange()),
-                    *Result.SourceManager, Result.Context->getLangOpts());
+                    Range, SM, Result.Context->getLangOpts());
 
                 if (SourceText.empty()) {
                     return;

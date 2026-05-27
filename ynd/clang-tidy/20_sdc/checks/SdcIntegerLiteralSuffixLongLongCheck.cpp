@@ -18,7 +18,10 @@ SdcIntegerLiteralSuffixLongLongCheck::SdcIntegerLiteralSuffixLongLongCheck(
 
 void SdcIntegerLiteralSuffixLongLongCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
-        integerLiteral(unless(isExpansionInSystemHeader())).bind("lit"),
+        integerLiteral(
+            unless(isExpansionInSystemHeader()),
+            unless(hasAncestor(userDefinedLiteral()))
+        ).bind("lit"),
         this);
 }
 

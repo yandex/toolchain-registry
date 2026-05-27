@@ -16,8 +16,10 @@ ParsedIntegerLiteralSuffix parseIntegerLiteralSuffix(
     const LangOptions& LO) {
     ParsedIntegerLiteralSuffix Out;
 
-    llvm::StringRef SourceText = Lexer::getSourceText(
-        CharSourceRange::getTokenRange(Literal->getSourceRange()), SM, LO);
+    CharSourceRange Range = CharSourceRange::getTokenRange(
+        SM.getSpellingLoc(Literal->getBeginLoc()),
+        SM.getSpellingLoc(Literal->getEndLoc()));
+    llvm::StringRef SourceText = Lexer::getSourceText(Range, SM, LO);
     if (SourceText.empty()) {
         return Out;
     }
@@ -52,14 +54,16 @@ ParsedIntegerLiteralSuffix parseIntegerLiteralSuffix(
         Out.base = ParsedIntegerLiteralSuffix::Base::Decimal;
     }
 
-    // Skip the digit body. Using the hex-digit superset is safe across all
-    // bases because no integer-literal suffix character (u/U/l/L/_) falls in
-    // [a-fA-F].
+    // Skip the digit body.
     while (pos < T.size()) {
         char c = T[pos];
-        if ((c >= '0' && c <= '9') ||
-            (c >= 'a' && c <= 'f') ||
-            (c >= 'A' && c <= 'F')) {
+        bool isDigit = false;
+        if (Out.base == ParsedIntegerLiteralSuffix::Base::Hex) {
+            isDigit = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        } else {
+            isDigit = (c >= '0' && c <= '9');
+        }
+        if (isDigit) {
             ++pos;
         } else {
             break;
@@ -83,6 +87,9 @@ ParsedIntegerLiteralSuffix parseIntegerLiteralSuffix(
             Out.hasU = true;
         } else if (c == 'l' || c == 'L') {
             ++Out.lCount;
+        } else if (c == 'z' || c == 'Z' || c == 'w' || c == 'W' || c == 'b' || c == 'B') {
+            // C++23 size suffixes (z/Z) and C23 _BitInt suffixes (wb/WB/wB/Wb).
+            // Recognized as valid suffix characters.
         } else {
             // Unknown character in suffix - bail rather than misclassify.
             return Out;

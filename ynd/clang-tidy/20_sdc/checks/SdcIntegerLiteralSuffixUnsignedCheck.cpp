@@ -17,10 +17,13 @@ SdcIntegerLiteralSuffixUnsignedCheck::SdcIntegerLiteralSuffixUnsignedCheck(
     : ClangTidyCheck(Name, Context) {}
 
 void SdcIntegerLiteralSuffixUnsignedCheck::registerMatchers(MatchFinder* Finder) {
-    // UserDefinedLiteral is a different AST node, so integerLiteral() already
-    // excludes UDLs.
+    // UserDefinedLiteral is a different AST node, but integerLiteral() matches
+    // its inner synthesized IntegerLiteral. We must explicitly exclude it.
     Finder->addMatcher(
-        integerLiteral(unless(isExpansionInSystemHeader())).bind("lit"),
+        integerLiteral(
+            unless(isExpansionInSystemHeader()),
+            unless(hasAncestor(userDefinedLiteral()))
+        ).bind("lit"),
         this);
 }
 

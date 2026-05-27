@@ -22,19 +22,19 @@ namespace clang {
                 MatchFinder* Finder) {
                 // Match all literal types that can have suffixes
                 Finder->addMatcher(
-                    integerLiteral().bind("integer_literal"),
+                    integerLiteral(unless(isExpansionInSystemHeader())).bind("integer_literal"),
                     this);
 
                 Finder->addMatcher(
-                    floatLiteral().bind("float_literal"),
+                    floatLiteral(unless(isExpansionInSystemHeader())).bind("float_literal"),
                     this);
 
                 Finder->addMatcher(
-                    stringLiteral().bind("string_literal"),
+                    stringLiteral(unless(isExpansionInSystemHeader())).bind("string_literal"),
                     this);
 
                 Finder->addMatcher(
-                    characterLiteral().bind("character_literal"),
+                    characterLiteral(unless(isExpansionInSystemHeader())).bind("character_literal"),
                     this);
             }
 
@@ -63,10 +63,13 @@ namespace clang {
 
             void SdcNoLowercaseLSuffixCheck::checkIntegerLiteral(
                 const IntegerLiteral* Literal, const MatchFinder::MatchResult& Result) {
+                const SourceManager& SM = *Result.SourceManager;
+                CharSourceRange Range = CharSourceRange::getTokenRange(
+                    SM.getSpellingLoc(Literal->getBeginLoc()),
+                    SM.getSpellingLoc(Literal->getEndLoc()));
                 // Get the source text for the literal including any suffix
                 llvm::StringRef SourceText = Lexer::getSourceText(
-                    CharSourceRange::getTokenRange(Literal->getSourceRange()),
-                    *Result.SourceManager, Result.Context->getLangOpts());
+                    Range, SM, Result.Context->getLangOpts());
 
                 if (SourceText.empty()) {
                     return;
@@ -126,10 +129,13 @@ namespace clang {
 
             void SdcNoLowercaseLSuffixCheck::checkFloatingLiteral(
                 const FloatingLiteral* Literal, const MatchFinder::MatchResult& Result) {
+                const SourceManager& SM = *Result.SourceManager;
+                CharSourceRange Range = CharSourceRange::getTokenRange(
+                    SM.getSpellingLoc(Literal->getBeginLoc()),
+                    SM.getSpellingLoc(Literal->getEndLoc()));
                 // Get the source text for the literal including any suffix
                 llvm::StringRef SourceText = Lexer::getSourceText(
-                    CharSourceRange::getTokenRange(Literal->getSourceRange()),
-                    *Result.SourceManager, Result.Context->getLangOpts());
+                    Range, SM, Result.Context->getLangOpts());
 
                 if (SourceText.empty()) {
                     return;
@@ -215,9 +221,12 @@ namespace clang {
                 // User-defined string literals would start with '_' and are exempt
                 // For now, we'll check but this is unlikely to trigger
 
+                const SourceManager& SM = *Result.SourceManager;
+                CharSourceRange Range = CharSourceRange::getTokenRange(
+                    SM.getSpellingLoc(Literal->getBeginLoc()),
+                    SM.getSpellingLoc(Literal->getEndLoc()));
                 llvm::StringRef SourceText = Lexer::getSourceText(
-                    CharSourceRange::getTokenRange(Literal->getSourceRange()),
-                    *Result.SourceManager, Result.Context->getLangOpts());
+                    Range, SM, Result.Context->getLangOpts());
 
                 if (SourceText.empty()) {
                     return;
@@ -233,9 +242,12 @@ namespace clang {
                 // Character literals typically don't have numeric suffixes in standard C++
                 // User-defined character literals would start with '_' and are exempt
 
+                const SourceManager& SM = *Result.SourceManager;
+                CharSourceRange Range = CharSourceRange::getTokenRange(
+                    SM.getSpellingLoc(Literal->getBeginLoc()),
+                    SM.getSpellingLoc(Literal->getEndLoc()));
                 llvm::StringRef SourceText = Lexer::getSourceText(
-                    CharSourceRange::getTokenRange(Literal->getSourceRange()),
-                    *Result.SourceManager, Result.Context->getLangOpts());
+                    Range, SM, Result.Context->getLangOpts());
 
                 if (SourceText.empty()) {
                     return;

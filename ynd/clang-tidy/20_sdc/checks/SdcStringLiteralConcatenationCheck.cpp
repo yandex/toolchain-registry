@@ -71,6 +71,7 @@ void SdcStringLiteralConcatenationCheck::check(
         if (Loc.isInvalid()) {
             return std::string();
         }
+        Loc = SM.getSpellingLoc(Loc);
         SmallString<32> Buf;
         bool Invalid = false;
         StringRef Spelling = Lexer::getSpelling(Loc, Buf, SM, LO, &Invalid);
