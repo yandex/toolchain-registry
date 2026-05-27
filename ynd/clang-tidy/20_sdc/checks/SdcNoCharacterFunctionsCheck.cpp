@@ -1,4 +1,6 @@
 #include "SdcNoCharacterFunctionsCheck.h"
+#include "clang/AST/Decl.h"
+#include "clang/AST/Type.h"
 
 namespace clang {
 namespace tidy {
@@ -59,6 +61,25 @@ std::string
 SdcNoCharacterFunctionsCheck::getDiagnosticMessage(StringRef FunctionName) const {
     return ("character handling function '" + FunctionName +
             "' from <cctype>/<cwctype> shall not be used").str();
+}
+
+bool SdcNoCharacterFunctionsCheck::isAllowedDecl(const FunctionDecl* FD) const {
+    if (FD->getNumParams() != 2)
+        return false;
+    QualType SecondParam = FD->getParamDecl(1)->getType();
+    const auto* RefTy = SecondParam->getAs<ReferenceType>();
+    if (!RefTy)
+        return false;
+    QualType Pointee = RefTy->getPointeeType();
+    if (!Pointee.isConstQualified())
+        return false;
+    const auto* RecordTy = Pointee->getAs<RecordType>();
+    if (!RecordTy)
+        return false;
+    const RecordDecl* RD = RecordTy->getDecl();
+    return RD->getName() == "locale" &&
+           RD->getDeclContext()->isNamespace() &&
+           cast<NamespaceDecl>(RD->getDeclContext())->getName() == "std";
 }
 
 } // namespace sdc

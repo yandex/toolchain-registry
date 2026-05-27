@@ -25,6 +25,11 @@ protected:
     // Subclasses must override this to return the custom diagnostic message.
     // The function name is provided so subclasses can tailor the message.
     virtual std::string getDiagnosticMessage(StringRef FunctionName) const = 0;
+
+    // Subclasses may override this to allow specific overloads of a prohibited
+    // function (e.g. the 2-argument locale variant). Return true to suppress
+    // the diagnostic for this declaration.
+    virtual bool isAllowedDecl(const FunctionDecl* FD) const { return false; }
 };
 
 } // namespace sdc

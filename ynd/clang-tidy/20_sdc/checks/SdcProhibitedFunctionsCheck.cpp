@@ -72,6 +72,9 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
         const NamedDecl* ND = DRE->getDecl();
         if (!isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString()))
             return;
+        if (const auto* FD = dyn_cast<FunctionDecl>(ND))
+            if (isAllowedDecl(FD))
+                return;
         ExtractedName = ND->getNameAsString();
         FunctionName = ExtractedName;
         Loc = DRE->getBeginLoc();
@@ -79,6 +82,9 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
         Loc = ULE->getBeginLoc();
         for (const NamedDecl* ND : ULE->decls()) {
             if (isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString())) {
+                if (const auto* FD = dyn_cast<FunctionDecl>(ND))
+                    if (isAllowedDecl(FD))
+                        continue;
                 ExtractedName = ND->getNameAsString();
                 FunctionName = ExtractedName;
                 break;

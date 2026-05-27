@@ -16,6 +16,7 @@ public:
 protected:
     ArrayRef<StringRef> getProhibitedFunctions() const override;
     std::string getDiagnosticMessage(StringRef FunctionName) const override;
+    bool isAllowedDecl(const FunctionDecl* FD) const override;
 };
 
 } // namespace sdc
