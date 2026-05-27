@@ -37,6 +37,9 @@
 #include "SdcStdMoveNonConstLvalueCheck.h"
 #include "SdcStringLiteralConcatenationCheck.h"
 #include "SdcUnreachableCodeCheck.h"
+#include "SdcNoOffsetofCheck.h"
+#include "SdcBannedMainCheck.h"
+#include "SdcNoReinterpretCastCheck.h"
 
 using namespace clang::ast_matchers;
 
@@ -56,6 +59,7 @@ public:
         CheckFactories.registerCheck<UtilTStringUpperCaseMethodsCheck>("arcadia-util-tstring-methods");
 
         CheckFactories.registerCheck<sdc::SdcBannedIdentifierNameCheck>("sdc-banned-identifier-name");
+        CheckFactories.registerCheck<sdc::SdcBannedMainCheck>("sdc-banned-main");
         CheckFactories.registerCheck<sdc::SdcDynamicMemoryAutomaticCheck>("sdc-dynamic-memory-automatic");
         CheckFactories.registerCheck<sdc::SdcEscapeSequenceCheck>("sdc-escape-sequence");
         CheckFactories.registerCheck<sdc::SdcGetenvPointerConstQualifiedCheck>("sdc-getenv-pointer-const-qualified");
@@ -72,6 +76,8 @@ public:
         CheckFactories.registerCheck<sdc::SdcNoLowercaseLSuffixCheck>("sdc-no-lowercase-l-suffix");
         CheckFactories.registerCheck<sdc::SdcNoMemFunctionsCheck>("sdc-no-mem-functions");
         CheckFactories.registerCheck<sdc::SdcNoOctalConstantsCheck>("sdc-no-octal-constants");
+        CheckFactories.registerCheck<sdc::SdcNoOffsetofCheck>("sdc-no-offsetof");
+        CheckFactories.registerCheck<sdc::SdcNoReinterpretCastCheck>("sdc-no-reinterpret-cast");
         CheckFactories.registerCheck<sdc::SdcNoSetlocaleGlobalCheck>("sdc-no-setlocale-global");
         CheckFactories.registerCheck<sdc::SdcNoStaticLocalVariablesCheck>("sdc-no-static-local-variables");
         CheckFactories.registerCheck<sdc::SdcNoStringFunctionsCheck>("sdc-no-string-functions");

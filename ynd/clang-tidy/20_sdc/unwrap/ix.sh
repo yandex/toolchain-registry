@@ -33,8 +33,12 @@ possible_nullptr_check.cpp
 {% endblock %}
 
 {% block sdc_check_srcs %}
+SdcBannedHeaderFacilitiesCheck.cpp
+SdcBannedHeaderFacilitiesCheck.h
 SdcBannedIdentifierNameCheck.cpp
 SdcBannedIdentifierNameCheck.h
+SdcBannedMainCheck.cpp
+SdcBannedMainCheck.h
 SdcDynamicMemoryAutomaticCheck.cpp
 SdcDynamicMemoryAutomaticCheck.h
 SdcEscapeSequenceCheck.cpp
@@ -47,8 +51,6 @@ SdcIntegerLiteralSuffix.cpp
 SdcIntegerLiteralSuffix.h
 SdcIntegerLiteralSuffixLongLongCheck.cpp
 SdcIntegerLiteralSuffixLongLongCheck.h
-SdcBannedHeaderFacilitiesCheck.cpp
-SdcBannedHeaderFacilitiesCheck.h
 SdcIntegerLiteralSuffixUnsignedCheck.cpp
 SdcIntegerLiteralSuffixUnsignedCheck.h
 SdcNoAdvancedMemoryManagementCheck.cpp
@@ -71,6 +73,10 @@ SdcNoMemFunctionsCheck.cpp
 SdcNoMemFunctionsCheck.h
 SdcNoOctalConstantsCheck.cpp
 SdcNoOctalConstantsCheck.h
+SdcNoOffsetofCheck.cpp
+SdcNoOffsetofCheck.h
+SdcNoReinterpretCastCheck.cpp
+SdcNoReinterpretCastCheck.h
 SdcNoSetlocaleGlobalCheck.cpp
 SdcNoSetlocaleGlobalCheck.h
 SdcNoStaticLocalVariablesCheck.cpp

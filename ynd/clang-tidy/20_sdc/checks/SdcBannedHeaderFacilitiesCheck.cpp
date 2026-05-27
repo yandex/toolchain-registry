@@ -108,6 +108,13 @@ void SdcBannedHeaderFacilitiesCheck::registerPPCallbacks(
 void SdcBannedHeaderFacilitiesCheck::registerMatchers(MatchFinder* Finder) {
     ArrayRef<StringRef> Functions = getProhibitedFunctions();
     ArrayRef<StringRef> Types = getProhibitedTypes();
+    ArrayRef<StringRef> Macros = getProhibitedMacros();
+
+    if (!Macros.empty() && Functions.empty() && Types.empty()) {
+        // If we only have macros, we must register at least one matcher so that
+        // MatchFinder calls our onEndOfTranslationUnit hook.
+        Finder->addMatcher(translationUnitDecl().bind("dummy"), this);
+    }
 
     if (!Functions.empty()) {
         // Direct references (calls, address-of, etc.).
