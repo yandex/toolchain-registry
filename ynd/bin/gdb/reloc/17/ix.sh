@@ -14,12 +14,30 @@ bld/python/12
 
 {% block bld_libs %}
 lib/python/3/12
+{% if linux %}
+ynd/lib/elfutils
+lib/curl
+{% endif %}
 {{super()}}
 {% endblock %}
 
 {% block configure_flags %}
 {{super()}}
 --with-python=${NATIVE_PYTHON}
+{% if linux %}
+--with-debuginfod
+{% endif %}
+{% endblock %}
+
+{% block step_build %}
+{% if linux %}
+make configure-gnulib
+# configure falsely detects getprogname on musl; force gnulib to use its own impl
+# which correctly falls back to program_invocation_short_name
+sed -e 's|#define HAVE_GETPROGNAME 1|/* #undef HAVE_GETPROGNAME */|' \
+    -i gnulib/config.h
+{% endif %}
+{{super()}}
 {% endblock %}
 
 {% block install %}
