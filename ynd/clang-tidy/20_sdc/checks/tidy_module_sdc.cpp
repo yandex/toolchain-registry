@@ -40,6 +40,17 @@
 #include "SdcNoOffsetofCheck.h"
 #include "SdcBannedMainCheck.h"
 #include "SdcNoReinterpretCastCheck.h"
+#include "SdcBlockScopeFunctionDeclarationCheck.h"
+#include "SdcBlockScopeRedundantParenthesesCheck.h"
+#include "SdcNoVariableShadowingCheck.h"
+#include "SdcNoInheritedFunctionConcealingCheck.h"
+#include "SdcNoDependentBaseUnqualifiedLookupCheck.h"
+#include "SdcNoCStyleFunctionalCastsCheck.h"
+#include "SdcNoCvQualificationRemovalCastCheck.h"
+#include "SdcNoFunctionPointerCastsCheck.h"
+#include "SdcNoIntEnumVoidPtrToPointerCastCheck.h"
+#include "SdcNoObjectPointerToIntegralCastCheck.h"
+
 
 using namespace clang::ast_matchers;
 
@@ -88,6 +99,16 @@ public:
         CheckFactories.registerCheck<sdc::SdcStdMoveNonConstLvalueCheck>("sdc-std-move-non-const-lvalue");
         CheckFactories.registerCheck<sdc::SdcStringLiteralConcatenationCheck>("sdc-string-literal-concatenation");
         CheckFactories.registerCheck<sdc::SdcUnreachableCodeCheck>("sdc-unreachable-code");
+        CheckFactories.registerCheck<sdc::SdcBlockScopeFunctionDeclarationCheck>("sdc-block-scope-function-declaration");
+        CheckFactories.registerCheck<sdc::SdcBlockScopeRedundantParenthesesCheck>("sdc-block-scope-redundant-parentheses");
+        CheckFactories.registerCheck<sdc::SdcNoVariableShadowingCheck>("sdc-no-variable-shadowing");
+        CheckFactories.registerCheck<sdc::SdcNoInheritedFunctionConcealingCheck>("sdc-no-inherited-function-concealing");
+        CheckFactories.registerCheck<sdc::SdcNoDependentBaseUnqualifiedLookupCheck>("sdc-no-dependent-base-unqualified-lookup");
+        CheckFactories.registerCheck<sdc::SdcNoCStyleFunctionalCastsCheck>("sdc-no-cstyle-functional-casts");
+        CheckFactories.registerCheck<sdc::SdcNoCvQualificationRemovalCastCheck>("sdc-no-cv-qualification-removal-cast");
+        CheckFactories.registerCheck<sdc::SdcNoFunctionPointerCastsCheck>("sdc-no-function-pointer-casts");
+        CheckFactories.registerCheck<sdc::SdcNoIntEnumVoidPtrToPointerCastCheck>("sdc-no-int-enum-voidptr-to-pointer-cast");
+        CheckFactories.registerCheck<sdc::SdcNoObjectPointerToIntegralCastCheck>("sdc-no-object-pointer-to-integral-cast");
     }
 };
 

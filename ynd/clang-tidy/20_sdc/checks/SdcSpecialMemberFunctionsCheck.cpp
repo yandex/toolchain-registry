@@ -506,11 +506,21 @@ namespace clang {
                     return;
                 }
 
-                if (!isDestructorNonEmpty(Info.DtorDecl)) {
+                const FunctionDecl* Definition = nullptr;
+                if (!Info.DtorDecl->hasBody(Definition) || !Definition) {
+                    return;
+                }
+
+                const auto* DtorDefinition = dyn_cast<CXXDestructorDecl>(Definition);
+                if (!DtorDefinition || !DtorDefinition->doesThisDeclarationHaveABody()) {
+                    return;
+                }
+
+                if (!isDestructorNonEmpty(DtorDefinition)) {
                     diag(Info.ClassDecl->getLocation(),
                          "class has customized destructor with empty body; "
                          "customized destructor must contain at least one non-null statement");
-                    diag(Info.DtorDecl->getLocation(),
+                    diag(DtorDefinition->getLocation(),
                          "destructor defined here",
                          DiagnosticIDs::Note);
                 }
