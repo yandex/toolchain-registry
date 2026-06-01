@@ -85,6 +85,19 @@ namespace clang {
                                          .getUnqualifiedType();
                     if (Orig == Final) return;
 
+                    // Enumeration operands are exempt. An unscoped enum
+                    // undergoes mandatory integral promotion whose target
+                    // (int vs unsigned int) is chosen by which type can
+                    // represent all enumerator values -- NOT by the enum's
+                    // underlying type. So an enum with an unsigned underlying
+                    // type but small non-negative values promotes to int,
+                    // which looks like an unsigned->signed change but is
+                    // value-preserving and applies identically to both sides
+                    // of a same-type comparison (e.g. `status != HTTP_OK`).
+                    // Enumerations are a distinct essential-type category with
+                    // their own rules; this check constrains integer operands.
+                    if (Orig->isEnumeralType()) return;
+
                     Cat O = categorize(Orig);
                     Cat F = categorize(Final);
                     if (O == Cat::Other || F == Cat::Other) return;

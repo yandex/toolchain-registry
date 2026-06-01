@@ -53,6 +53,16 @@ public:
         if (!Cond) {
             return true;
         }
+        // A nested generic lambda inside a concrete (instantiated) function is
+        // only partially instantiated: its `if constexpr` conditions can still
+        // be value-dependent on the lambda's own template parameters. Calling
+        // EvaluateAsBooleanCondition on a value-dependent expression crashes
+        // the constant evaluator (it asserts !isValueDependent() and otherwise
+        // dereferences unresolved nodes). Such patterns are re-matched per
+        // instantiation, so defer to those.
+        if (Cond->isValueDependent() || Cond->isInstantiationDependent()) {
+            return true;
+        }
         bool Value = false;
         if (!Cond->EvaluateAsBooleanCondition(Value, Ctx_)) {
             return true;

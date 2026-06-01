@@ -26,6 +26,23 @@ namespace clang {
                 // address is being taken (directly via `&x`, via array decay
                 // of `x`, or via a call to std::addressof). Returns nullptr if
                 // the RHS does not match any of these forms.
+                // Resolve a DeclRefExpr to the VarDecl whose storage the
+                // address designates. Crucially, taking the address of a
+                // *reference* variable yields the address of its referent, not
+                // of the reference's own slot; the referent's storage duration
+                // is not determinable from this point (it may be a container
+                // element, a returned reference, a heap object, etc.), so such
+                // cases are not stack-address escapes we can prove. Return
+                // nullptr for reference-typed variables.
+                const VarDecl* addressedVarFromDeclRef(const Expr* Sub) {
+                    const auto* DRE = dyn_cast_or_null<DeclRefExpr>(Sub);
+                    if (!DRE) return nullptr;
+                    const auto* VD = dyn_cast<VarDecl>(DRE->getDecl());
+                    if (!VD) return nullptr;
+                    if (VD->getType()->isReferenceType()) return nullptr;
+                    return VD;
+                }
+
                 const VarDecl* findAddressedVar(const Expr* RHS) {
                     const Expr* E = RHS ? RHS->IgnoreParens() : nullptr;
                     if (!E) return nullptr;
@@ -34,9 +51,7 @@ namespace clang {
                     if (const auto* UO = dyn_cast<UnaryOperator>(E)) {
                         if (UO->getOpcode() == UO_AddrOf) {
                             const Expr* Sub = peelCasts(UO->getSubExpr());
-                            if (const auto* DRE = dyn_cast_or_null<DeclRefExpr>(Sub)) {
-                                return dyn_cast<VarDecl>(DRE->getDecl());
-                            }
+                            return addressedVarFromDeclRef(Sub);
                         }
                         return nullptr;
                     }
@@ -77,12 +92,7 @@ namespace clang {
                                     if (CE->getNumArgs() >= 1) {
                                         const Expr* Arg =
                                             peelCasts(CE->getArg(0));
-                                        if (const auto* DRE =
-                                                dyn_cast_or_null<DeclRefExpr>(
-                                                    Arg)) {
-                                            return dyn_cast<VarDecl>(
-                                                DRE->getDecl());
-                                        }
+                                        return addressedVarFromDeclRef(Arg);
                                     }
                                 }
                             }

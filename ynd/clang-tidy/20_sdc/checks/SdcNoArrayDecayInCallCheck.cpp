@@ -34,6 +34,30 @@ namespace clang {
                     return isCharacterType(T->getPointeeType());
                 }
 
+                // True if E is a string literal, or a selection between
+                // string-literal-like operands (e.g.
+                // `cond ? "yes" : "no"`). Every reachable leaf is a string
+                // literal, so the decayed array is still guaranteed to carry a
+                // terminating sentinel - the same justification as the bare
+                // string-literal exemption.
+                bool isStringLiteralLike(const Expr* E) {
+                    if (!E) return false;
+                    E = E->IgnoreParenImpCasts();
+                    if (isa<StringLiteral>(E)) return true;
+                    if (const auto* CO = dyn_cast<ConditionalOperator>(E)) {
+                        return isStringLiteralLike(CO->getTrueExpr()) &&
+                               isStringLiteralLike(CO->getFalseExpr());
+                    }
+                    if (const auto* BCO =
+                            dyn_cast<BinaryConditionalOperator>(E)) {
+                        // GNU `a ?: b`: the common (true) value reuses the
+                        // condition; check both the common and the false arm.
+                        return isStringLiteralLike(BCO->getCommon()) &&
+                               isStringLiteralLike(BCO->getFalseExpr());
+                    }
+                    return false;
+                }
+
                 // Inspect a single argument expression for array-to-pointer
                 // decay. Emits a diagnostic on the offending decay, except
                 // when the source is a string literal and the target is a
@@ -55,10 +79,31 @@ namespace clang {
                         }
                         E = ICE->getSubExpr()->IgnoreParens();
                     }
-                    if (!Decay) return;
+                    if (!Decay) {
+                        // When the arms of a `?:` have different array types,
+                        // each operand decays independently *inside* the
+                        // conditional and the result is already a pointer, so
+                        // there is no decay at the top to find. Recurse into
+                        // the arms to catch (and exempt) those per-branch
+                        // decays. (Same-type arms instead keep an array-typed
+                        // result that decays at the top, handled above.)
+                        // `E` is the leaf reached after peeling any
+                        // non-decay cast adjustments (e.g. a NoOp char* ->
+                        // const char* applied on top of the conditional).
+                        if (const auto* CO =
+                                dyn_cast<ConditionalOperator>(E)) {
+                            inspectArg(CO->getTrueExpr(), ParamTy, Check);
+                            inspectArg(CO->getFalseExpr(), ParamTy, Check);
+                        } else if (const auto* BCO =
+                                       dyn_cast<BinaryConditionalOperator>(E)) {
+                            inspectArg(BCO->getTrueExpr(), ParamTy, Check);
+                            inspectArg(BCO->getFalseExpr(), ParamTy, Check);
+                        }
+                        return;
+                    }
                     const Expr* Sub = Decay->getSubExpr()->IgnoreParens();
                     QualType FinalPtr = Top->getType();
-                    if (isa<StringLiteral>(Sub) &&
+                    if (isStringLiteralLike(Sub) &&
                         isPointerToCharacter(FinalPtr)) {
                         return;
                     }

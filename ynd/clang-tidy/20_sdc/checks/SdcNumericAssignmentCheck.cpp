@@ -235,9 +235,16 @@ namespace clang {
                                             const char* ContextLabel,
                                             bool AllowNonIdWiden = false) {
                     if (!Src) return;
-                    QualType SrcT = Src->IgnoreImpCasts()
-                                        ->getType()
-                                        .getCanonicalType()
+                    // In an uninstantiated template, initializers/operands can
+                    // be dependent placeholders (e.g. ParenListExpr for
+                    // `T a2(args)`) whose type is unresolved/null. Dereferencing
+                    // such a type crashes; defer to the instantiation, which is
+                    // re-matched with concrete types.
+                    if (Src->isTypeDependent() || Src->isValueDependent()) return;
+                    if (Dst.isNull() || Dst->isDependentType()) return;
+                    QualType RawSrcTy = Src->IgnoreImpCasts()->getType();
+                    if (RawSrcTy.isNull()) return;
+                    QualType SrcT = RawSrcTy.getCanonicalType()
                                         .getUnqualifiedType();
                     QualType DstT =
                         Dst.getCanonicalType().getUnqualifiedType();
@@ -289,10 +296,14 @@ namespace clang {
                                   const Expr* Arg, QualType ParamTy,
                                   bool Variadic, ASTContext& Ctx,
                                   ClangTidyCheck& Check) {
-                    QualType SrcT = Arg->IgnoreImpCasts()
-                                        ->getType()
-                                        .getCanonicalType()
-                                        .getUnqualifiedType();
+                    if (!Arg) return;
+                    // Skip dependent operands in uninstantiated templates (see
+                    // checkGeneralAssignment); their types are unresolved.
+                    if (Arg->isTypeDependent() || Arg->isValueDependent()) return;
+                    QualType RawArgTy = Arg->IgnoreImpCasts()->getType();
+                    if (RawArgTy.isNull()) return;
+                    QualType SrcT =
+                        RawArgTy.getCanonicalType().getUnqualifiedType();
                     if (Variadic) {
                         // For ellipsis, the rule requires the source type to
                         // equal the *promoted* type of the argument, i.e. the

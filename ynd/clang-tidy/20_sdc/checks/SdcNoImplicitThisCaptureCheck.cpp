@@ -27,6 +27,18 @@ namespace clang {
                 // Anything else - including passing as a function-call
                 // argument - cannot be decidably proven transient and is
                 // treated as non-transient.
+                // Strip parens, implicit casts, and temporary-materialization
+                // wrappers to reach the underlying LambdaExpr (if any).
+                const Expr* peelToLambda(const Expr* E) {
+                    if (!E) return nullptr;
+                    E = E->IgnoreParenImpCasts();
+                    while (const auto* MT =
+                               dyn_cast<MaterializeTemporaryExpr>(E)) {
+                        E = MT->getSubExpr()->IgnoreParenImpCasts();
+                    }
+                    return E;
+                }
+
                 bool isTransientLambda(const LambdaExpr* LE, ASTContext& Ctx) {
                     DynTypedNode N = DynTypedNode::create(*LE);
                     while (true) {
@@ -42,23 +54,29 @@ namespace clang {
                             N = P;
                             continue;
                         }
-                        // IIFE: a `CXXOperatorCallExpr` with OO_Call where
-                        // operand 0 is our lambda (operand 0 is the object,
-                        // the callee is the implicit conversion to the
-                        // function-pointer of `operator()`).
+                        // IIFE, resolved form: a `CXXOperatorCallExpr` with
+                        // OO_Call where operand 0 is our lambda (operand 0 is
+                        // the object; the callee is the conversion to
+                        // `operator()`).
                         if (const auto* OC =
                                 P.get<CXXOperatorCallExpr>()) {
                             if (OC->getOperator() == OO_Call &&
                                 OC->getNumArgs() >= 1) {
-                                const Expr* Obj =
-                                    OC->getArg(0)->IgnoreParenImpCasts();
-                                while (const auto* MT =
-                                           dyn_cast<MaterializeTemporaryExpr>(
-                                               Obj)) {
-                                    Obj = MT->getSubExpr()
-                                              ->IgnoreParenImpCasts();
+                                if (peelToLambda(OC->getArg(0)) == LE) {
+                                    return true;
                                 }
-                                if (Obj == LE) return true;
+                            }
+                            return false;
+                        }
+                        // IIFE, dependent form: when the lambda is generic
+                        // and/or sits inside a template, the call to it is
+                        // type-dependent and clang cannot yet resolve
+                        // `operator()`. It is then represented as a plain
+                        // `CallExpr` whose *callee* is the lambda itself (e.g.
+                        // SDC_VERIFY_STREAM's `[&](auto&&...){...}(expr, fn)`).
+                        if (const auto* CE = P.get<CallExpr>()) {
+                            if (peelToLambda(CE->getCallee()) == LE) {
+                                return true;
                             }
                             return false;
                         }
