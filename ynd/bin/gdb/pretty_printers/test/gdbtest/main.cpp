@@ -60,9 +60,9 @@ std::unique_ptr<int> test_unique_empty;
 std::shared_ptr<int> test_shared_int(new int(1));
 std::shared_ptr<int> test_shared_empty;
 
-std::variant<int, std::string> test_variant_default;  // Untested.
-std::variant<int, std::string> test_variant_int(10);  // Untested.
-std::variant<int, std::string> test_variant_string(test_string);  // Untested.
+std::variant<int, std::string> test_variant_default;
+std::variant<int, std::string> test_variant_int(10);
+std::variant<int, std::string> test_variant_string(test_string);
 
 TVector<int> test_tvector = {1, 2, 3, 4};
 THashMap<int, int> test_hashmap = {{1, 2}, {3, 4}};

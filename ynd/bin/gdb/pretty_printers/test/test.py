@@ -107,6 +107,9 @@ tests = dict(
     test_list='std::__y1::list = {[0] = 1, [1] = 2, [2] = 3}',
     test_forward_list_empty='empty std::__y1::forward_list',
     test_forward_list='std::__y1::forward_list = {[0] = 1, [1] = 2, [2] = 3}',
+    test_variant_default='std::__y1::variant<int, std::__y1::basic_string<char, std::__y1::char_traits<char>, std::__y1::allocator<char> > > = {int = 0}',
+    test_variant_int='std::__y1::variant<int, std::__y1::basic_string<char, std::__y1::char_traits<char>, std::__y1::allocator<char> > > = {int = 10}',
+    test_variant_string='std::__y1::variant<int, std::__y1::basic_string<char, std::__y1::char_traits<char>, std::__y1::allocator<char> > > = {std::string = "Это тест."}',
     # test_json=r'formats::json::Value = {value = {["a"] = {1, {}, []}, ["b"] = {true, false},'
     #           r' ["c"] = {["internal"] = {["subkey"] = 2}}, ["i"] = -1, ["u"] = 1, ["i64"] ='
     #           r' -1.8446744073709552e+19, ["u64"] = 18446744073709551614, ["d"] = 0.40000000000000002}}',
