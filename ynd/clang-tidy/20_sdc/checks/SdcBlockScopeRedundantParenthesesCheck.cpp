@@ -110,11 +110,27 @@ namespace clang {
                         return false;
                     }
 
-                    if (!MacroName.empty() && Check.macroHasRedundantParens(MacroName)) {
+                    StringRef Name = Variable->getName();
+                    // A name-less VarDecl (e.g. the synthetic outer decl of a
+                    // structured binding `auto [a, b] = ...`) has an empty
+                    // name; the substring search would find spurious matches
+                    // and the `[a, b]` syntax is required, not optional.
+                    if (Name.empty()) {
+                        return false;
+                    }
+
+                    // Path 1 (macro-driven): only apply when this variable's
+                    // *name token* itself originated as a macro argument that
+                    // landed in a `( param )` slot of the macro's body. Without
+                    // the argument-origin check we would flag every variable
+                    // declared inside any macro whose body happens to contain
+                    // a `( param )` token sequence anywhere.
+                    if (!MacroName.empty() && Loc.isMacroID() &&
+                        SM.isMacroArgExpansion(Loc) &&
+                        Check.macroHasRedundantParens(MacroName)) {
                         return true;
                     }
 
-                    StringRef Name = Variable->getName();
                     return rangeHasParenWrappedName(Variable->getBeginLoc(), Variable->getEndLoc(), Name, SM, LangOpts) ||
                            (Loc.isMacroID() &&
                             rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts));

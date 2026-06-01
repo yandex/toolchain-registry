@@ -11,32 +11,46 @@
 #include "util_tstring_methods.h"
 
 #include "SdcBannedIdentifierNameCheck.h"
+#include "SdcBitwiseOperandsUnsignedCheck.h"
+#include "SdcConsistentTypeAliasCheck.h"
 #include "SdcDynamicMemoryAutomaticCheck.h"
 #include "SdcEscapeSequenceCheck.h"
+#include "SdcFunctionToPointerContextCheck.h"
 #include "SdcGetenvPointerConstQualifiedCheck.h"
 #include "SdcIdentifierLeadingUnderscoreCheck.h"
 #include "SdcIntegerLiteralSuffixLongLongCheck.h"
 #include "SdcIntegerLiteralSuffixUnsignedCheck.h"
 #include "SdcNoAdvancedMemoryManagementCheck.h"
+#include "SdcNoArithmeticCategoryChangeCheck.h"
+#include "SdcNoArrayDecayInCallCheck.h"
 #include "SdcNoAtoFunctionsCheck.h"
+#include "SdcNoBoolConversionCheck.h"
+#include "SdcNoCharacterConversionCheck.h"
 #include "SdcNoCharacterFunctionsCheck.h"
 #include "SdcNoCsetjmpFacilitiesCheck.h"
 #include "SdcNoCsignalFacilitiesCheck.h"
 #include "SdcNoCstdargFacilitiesCheck.h"
+#include "SdcNoGlobalVariablesCheck.h"
+#include "SdcNoImplicitThisCaptureCheck.h"
 #include "SdcNoIoFunctionsCheck.h"
 #include "SdcNoLowercaseLSuffixCheck.h"
 #include "SdcNoMemFunctionsCheck.h"
 #include "SdcNoOctalConstantsCheck.h"
 #include "SdcNoSetlocaleGlobalCheck.h"
+#include "SdcNoStackAddressAssignCheck.h"
 #include "SdcNoStaticLocalVariablesCheck.h"
 #include "SdcNoStringFunctionsCheck.h"
 #include "SdcNoSystemCheck.h"
+#include "SdcNoThrowStackAddressCheck.h"
+#include "SdcNumericAssignmentCheck.h"
 #include "SdcReservedNamespaceDefinitionCheck.h"
 #include "SdcReturnValueUsedCheck.h"
 #include "SdcSpecialMemberFunctionsCheck.h"
 #include "SdcStdMoveNonConstLvalueCheck.h"
 #include "SdcStringLiteralConcatenationCheck.h"
 #include "SdcUnreachableCodeCheck.h"
+#include "SdcUseNullptrCheck.h"
+#include "SdcVirtualBaseCastViaDynamicCheck.h"
 #include "SdcNoOffsetofCheck.h"
 #include "SdcBannedMainCheck.h"
 #include "SdcNoReinterpretCastCheck.h"
@@ -71,44 +85,58 @@ public:
 
         CheckFactories.registerCheck<sdc::SdcBannedIdentifierNameCheck>("sdc-banned-identifier-name");
         CheckFactories.registerCheck<sdc::SdcBannedMainCheck>("sdc-banned-main");
+        CheckFactories.registerCheck<sdc::SdcBitwiseOperandsUnsignedCheck>("sdc-bitwise-operands-unsigned");
+        CheckFactories.registerCheck<sdc::SdcBlockScopeFunctionDeclarationCheck>("sdc-block-scope-function-declaration");
+        CheckFactories.registerCheck<sdc::SdcBlockScopeRedundantParenthesesCheck>("sdc-block-scope-redundant-parentheses");
+        CheckFactories.registerCheck<sdc::SdcConsistentTypeAliasCheck>("sdc-consistent-type-alias");
         CheckFactories.registerCheck<sdc::SdcDynamicMemoryAutomaticCheck>("sdc-dynamic-memory-automatic");
         CheckFactories.registerCheck<sdc::SdcEscapeSequenceCheck>("sdc-escape-sequence");
+        CheckFactories.registerCheck<sdc::SdcFunctionToPointerContextCheck>("sdc-function-to-pointer-context");
         CheckFactories.registerCheck<sdc::SdcGetenvPointerConstQualifiedCheck>("sdc-getenv-pointer-const-qualified");
         CheckFactories.registerCheck<sdc::SdcIdentifierLeadingUnderscoreCheck>("sdc-identifier-leading-underscore");
         CheckFactories.registerCheck<sdc::SdcIntegerLiteralSuffixLongLongCheck>("sdc-integer-literal-suffix-longlong");
         CheckFactories.registerCheck<sdc::SdcIntegerLiteralSuffixUnsignedCheck>("sdc-integer-literal-suffix-unsigned");
         CheckFactories.registerCheck<sdc::SdcNoAdvancedMemoryManagementCheck>("sdc-no-advanced-memory-management");
+        CheckFactories.registerCheck<sdc::SdcNoArithmeticCategoryChangeCheck>("sdc-no-arithmetic-category-change");
+        CheckFactories.registerCheck<sdc::SdcNoArrayDecayInCallCheck>("sdc-no-array-decay-in-call");
         CheckFactories.registerCheck<sdc::SdcNoAtoFunctionsCheck>("sdc-no-ato-functions");
+        CheckFactories.registerCheck<sdc::SdcNoBoolConversionCheck>("sdc-no-bool-conversion");
+        CheckFactories.registerCheck<sdc::SdcNoCStyleFunctionalCastsCheck>("sdc-no-cstyle-functional-casts");
+        CheckFactories.registerCheck<sdc::SdcNoCharacterConversionCheck>("sdc-no-character-conversion");
         CheckFactories.registerCheck<sdc::SdcNoCharacterFunctionsCheck>("sdc-no-character-functions");
         CheckFactories.registerCheck<sdc::SdcNoCsetjmpFacilitiesCheck>("sdc-no-csetjmp-facilities");
         CheckFactories.registerCheck<sdc::SdcNoCsignalFacilitiesCheck>("sdc-no-csignal-facilities");
         CheckFactories.registerCheck<sdc::SdcNoCstdargFacilitiesCheck>("sdc-no-cstdarg-facilities");
+        CheckFactories.registerCheck<sdc::SdcNoCvQualificationRemovalCastCheck>("sdc-no-cv-qualification-removal-cast");
+        CheckFactories.registerCheck<sdc::SdcNoDependentBaseUnqualifiedLookupCheck>("sdc-no-dependent-base-unqualified-lookup");
+        CheckFactories.registerCheck<sdc::SdcNoFunctionPointerCastsCheck>("sdc-no-function-pointer-casts");
+        CheckFactories.registerCheck<sdc::SdcNoGlobalVariablesCheck>("sdc-no-global-variables");
+        CheckFactories.registerCheck<sdc::SdcNoImplicitThisCaptureCheck>("sdc-no-implicit-this-capture");
+        CheckFactories.registerCheck<sdc::SdcNoInheritedFunctionConcealingCheck>("sdc-no-inherited-function-concealing");
+        CheckFactories.registerCheck<sdc::SdcNoIntEnumVoidPtrToPointerCastCheck>("sdc-no-int-enum-voidptr-to-pointer-cast");
         CheckFactories.registerCheck<sdc::SdcNoIoFunctionsCheck>("sdc-no-io-functions");
         CheckFactories.registerCheck<sdc::SdcNoLowercaseLSuffixCheck>("sdc-no-lowercase-l-suffix");
         CheckFactories.registerCheck<sdc::SdcNoMemFunctionsCheck>("sdc-no-mem-functions");
+        CheckFactories.registerCheck<sdc::SdcNoObjectPointerToIntegralCastCheck>("sdc-no-object-pointer-to-integral-cast");
         CheckFactories.registerCheck<sdc::SdcNoOctalConstantsCheck>("sdc-no-octal-constants");
         CheckFactories.registerCheck<sdc::SdcNoOffsetofCheck>("sdc-no-offsetof");
         CheckFactories.registerCheck<sdc::SdcNoReinterpretCastCheck>("sdc-no-reinterpret-cast");
         CheckFactories.registerCheck<sdc::SdcNoSetlocaleGlobalCheck>("sdc-no-setlocale-global");
+        CheckFactories.registerCheck<sdc::SdcNoStackAddressAssignCheck>("sdc-no-stack-address-assign");
         CheckFactories.registerCheck<sdc::SdcNoStaticLocalVariablesCheck>("sdc-no-static-local-variables");
         CheckFactories.registerCheck<sdc::SdcNoStringFunctionsCheck>("sdc-no-string-functions");
         CheckFactories.registerCheck<sdc::SdcNoSystemCheck>("sdc-no-system");
+        CheckFactories.registerCheck<sdc::SdcNoThrowStackAddressCheck>("sdc-no-throw-stack-address");
+        CheckFactories.registerCheck<sdc::SdcNoVariableShadowingCheck>("sdc-no-variable-shadowing");
+        CheckFactories.registerCheck<sdc::SdcNumericAssignmentCheck>("sdc-numeric-assignment");
         CheckFactories.registerCheck<sdc::SdcReservedNamespaceDefinitionCheck>("sdc-reserved-namespace-definition");
         CheckFactories.registerCheck<sdc::SdcReturnValueUsedCheck>("sdc-return-value-used");
         CheckFactories.registerCheck<sdc::SdcSpecialMemberFunctionsCheck>("sdc-special-member-functions");
         CheckFactories.registerCheck<sdc::SdcStdMoveNonConstLvalueCheck>("sdc-std-move-non-const-lvalue");
         CheckFactories.registerCheck<sdc::SdcStringLiteralConcatenationCheck>("sdc-string-literal-concatenation");
         CheckFactories.registerCheck<sdc::SdcUnreachableCodeCheck>("sdc-unreachable-code");
-        CheckFactories.registerCheck<sdc::SdcBlockScopeFunctionDeclarationCheck>("sdc-block-scope-function-declaration");
-        CheckFactories.registerCheck<sdc::SdcBlockScopeRedundantParenthesesCheck>("sdc-block-scope-redundant-parentheses");
-        CheckFactories.registerCheck<sdc::SdcNoVariableShadowingCheck>("sdc-no-variable-shadowing");
-        CheckFactories.registerCheck<sdc::SdcNoInheritedFunctionConcealingCheck>("sdc-no-inherited-function-concealing");
-        CheckFactories.registerCheck<sdc::SdcNoDependentBaseUnqualifiedLookupCheck>("sdc-no-dependent-base-unqualified-lookup");
-        CheckFactories.registerCheck<sdc::SdcNoCStyleFunctionalCastsCheck>("sdc-no-cstyle-functional-casts");
-        CheckFactories.registerCheck<sdc::SdcNoCvQualificationRemovalCastCheck>("sdc-no-cv-qualification-removal-cast");
-        CheckFactories.registerCheck<sdc::SdcNoFunctionPointerCastsCheck>("sdc-no-function-pointer-casts");
-        CheckFactories.registerCheck<sdc::SdcNoIntEnumVoidPtrToPointerCastCheck>("sdc-no-int-enum-voidptr-to-pointer-cast");
-        CheckFactories.registerCheck<sdc::SdcNoObjectPointerToIntegralCastCheck>("sdc-no-object-pointer-to-integral-cast");
+        CheckFactories.registerCheck<sdc::SdcUseNullptrCheck>("sdc-use-nullptr");
+        CheckFactories.registerCheck<sdc::SdcVirtualBaseCastViaDynamicCheck>("sdc-virtual-base-cast-via-dynamic");
     }
 };
 
