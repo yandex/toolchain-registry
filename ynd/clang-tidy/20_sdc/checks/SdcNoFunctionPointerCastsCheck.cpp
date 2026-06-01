@@ -60,7 +60,10 @@ namespace clang {
                     return;
                 }
 
-                diag(Cast->getBeginLoc(), "casts shall not be performed between a pointer to function and any other type");
+                diag(Cast->getBeginLoc(),
+                     "cast between pointer-to-function and unrelated type is "
+                     "not permitted (from %0 to %1)")
+                    << From << To;
             }
 
         } // namespace sdc

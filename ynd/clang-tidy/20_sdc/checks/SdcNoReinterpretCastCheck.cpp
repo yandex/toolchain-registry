@@ -68,7 +68,7 @@ namespace clang {
                     }
                 }
 
-                diag(Cast->getBeginLoc(), "reinterpret_cast shall not be used except for permitted pointer conversions");
+                diag(Cast->getBeginLoc(), "reinterpret_cast shall not be used");
             }
 
         } // namespace sdc

@@ -87,7 +87,10 @@ namespace clang {
                 }
 
                 diag(Cast->getBeginLoc(),
-                     "object pointer types shall not be cast to integral types other than explicitly named std::uintptr_t or std::intptr_t");
+                     "cast from object pointer %0 to integral type %1 is not "
+                     "permitted; use an explicit cast to std::uintptr_t or "
+                     "std::intptr_t instead")
+                    << From << To;
             }
 
         } // namespace sdc

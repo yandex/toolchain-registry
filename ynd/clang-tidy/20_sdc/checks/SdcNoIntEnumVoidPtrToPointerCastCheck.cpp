@@ -60,8 +60,18 @@ namespace clang {
                     return;
                 }
 
+                StringRef SourceKind;
+                if (cast_utils::isVoidPointer(From)) {
+                    SourceKind = "void pointer";
+                } else if (From->isEnumeralType()) {
+                    SourceKind = "enumeration";
+                } else {
+                    SourceKind = "integral";
+                }
+
                 diag(Cast->getBeginLoc(),
-                     "objects with integral, enumerated, or void pointer type shall not be cast to pointer type");
+                     "cast from %0 type %1 to pointer type %2 is not permitted")
+                    << SourceKind << From << To;
             }
 
         } // namespace sdc

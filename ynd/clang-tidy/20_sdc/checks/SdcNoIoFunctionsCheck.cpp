@@ -1,4 +1,5 @@
 #include "SdcNoIoFunctionsCheck.h"
+#include "clang/AST/Decl.h"
 
 namespace clang {
 namespace tidy {
@@ -103,6 +104,20 @@ ArrayRef<StringRef> SdcNoIoFunctionsCheck::getProhibitedFunctions() const {
 std::string SdcNoIoFunctionsCheck::getDiagnosticMessage(StringRef FunctionName) const {
     return ("C library input/output function '" + FunctionName +
             "' shall not be used").str();
+}
+
+bool SdcNoIoFunctionsCheck::isAllowedDecl(const FunctionDecl* FD) const {
+    if (!FD) return false;
+    // `std::remove` is overloaded: <cstdio> declares a free function
+    // `int remove(const char*)`, while <algorithm> declares a function
+    // template `template<class FwdIt, class T> FwdIt remove(FwdIt, FwdIt,
+    // const T&)`. They share the qualified name ::std::remove, so qualified-
+    // name matching alone cannot distinguish them. The cstdio entry is never
+    // a template; the algorithm entry always is. Allow any template form.
+    if (FD->getDescribedFunctionTemplate() != nullptr) return true;
+    if (FD->getPrimaryTemplate() != nullptr) return true;
+    if (FD->getTemplatedKind() != FunctionDecl::TK_NonTemplate) return true;
+    return false;
 }
 
 } // namespace sdc
