@@ -64,6 +64,28 @@
 #include "SdcNoFunctionPointerCastsCheck.h"
 #include "SdcNoIntEnumVoidPtrToPointerCastCheck.h"
 #include "SdcNoObjectPointerToIntegralCastCheck.h"
+#include "SdcNoAsmCheck.h"
+#include "SdcNoUnionCheck.h"
+#include "SdcNoLogicalOperatorOverloadCheck.h"
+#include "SdcNoAddressofOperatorOverloadCheck.h"
+#include "SdcNoFunctionTemplateSpecializationCheck.h"
+#include "SdcEnumExplicitUnderlyingTypeCheck.h"
+#include "SdcUnscopedEnumNumericUseCheck.h"
+#include "SdcImplicitEnumConstantUniqueValueCheck.h"
+#include "SdcBitFieldAppropriateTypeCheck.h"
+#include "SdcOverrideDefaultArgCheck.h"
+#include "SdcInitializerListOnlyConstructorCheck.h"
+#include "SdcNoFunctionalCastStatementCheck.h"
+#include "SdcIfElseIfFinalElseCheck.h"
+#include "SdcSwitchStructureCheck.h"
+#include "SdcForRangeInitOneCallCheck.h"
+#include "SdcEmptyThrowInCatchCheck.h"
+#include "SdcFuncTryBlockMemberRefCheck.h"
+#include "SdcExceptionUnfriendlyNoexceptCheck.h"
+#include "SdcNoTypeidPolymorphicCheck.h"
+#include "SdcVirtualFinalNonOverrideCheck.h"
+#include "SdcVirtualPMFNullCompareCheck.h"
+#include "SdcExplicitSingleArgCtorCheck.h"
 
 
 using namespace clang::ast_matchers;
@@ -137,6 +159,28 @@ public:
         CheckFactories.registerCheck<sdc::SdcUnreachableCodeCheck>("sdc-unreachable-code");
         CheckFactories.registerCheck<sdc::SdcUseNullptrCheck>("sdc-use-nullptr");
         CheckFactories.registerCheck<sdc::SdcVirtualBaseCastViaDynamicCheck>("sdc-virtual-base-cast-via-dynamic");
+        CheckFactories.registerCheck<sdc::SdcNoAsmCheck>("sdc-no-asm");
+        CheckFactories.registerCheck<sdc::SdcNoUnionCheck>("sdc-no-union");
+        CheckFactories.registerCheck<sdc::SdcNoLogicalOperatorOverloadCheck>("sdc-no-logical-operator-overload");
+        CheckFactories.registerCheck<sdc::SdcNoAddressofOperatorOverloadCheck>("sdc-no-addressof-operator-overload");
+        CheckFactories.registerCheck<sdc::SdcNoFunctionTemplateSpecializationCheck>("sdc-no-function-template-specialization");
+        CheckFactories.registerCheck<sdc::SdcEnumExplicitUnderlyingTypeCheck>("sdc-enum-explicit-underlying-type");
+        CheckFactories.registerCheck<sdc::SdcUnscopedEnumNumericUseCheck>("sdc-no-unscoped-enum-numeric-use");
+        CheckFactories.registerCheck<sdc::SdcImplicitEnumConstantUniqueValueCheck>("sdc-implicit-enum-constant-unique-value");
+        CheckFactories.registerCheck<sdc::SdcBitFieldAppropriateTypeCheck>("sdc-bit-field-appropriate-type");
+        CheckFactories.registerCheck<sdc::SdcOverrideDefaultArgCheck>("sdc-override-default-arg");
+        CheckFactories.registerCheck<sdc::SdcInitializerListOnlyConstructorCheck>("sdc-initializer-list-only-constructor");
+        CheckFactories.registerCheck<sdc::SdcNoFunctionalCastStatementCheck>("sdc-no-functional-cast-statement");
+        CheckFactories.registerCheck<sdc::SdcIfElseIfFinalElseCheck>("sdc-if-else-if-final-else");
+        CheckFactories.registerCheck<sdc::SdcSwitchStructureCheck>("sdc-switch-structure");
+        CheckFactories.registerCheck<sdc::SdcForRangeInitOneCallCheck>("sdc-for-range-init-one-call");
+        CheckFactories.registerCheck<sdc::SdcEmptyThrowInCatchCheck>("sdc-empty-throw-in-catch");
+        CheckFactories.registerCheck<sdc::SdcFuncTryBlockMemberRefCheck>("sdc-func-try-block-member-ref");
+        CheckFactories.registerCheck<sdc::SdcExceptionUnfriendlyNoexceptCheck>("sdc-exception-unfriendly-noexcept");
+        CheckFactories.registerCheck<sdc::SdcNoTypeidPolymorphicCheck>("sdc-no-typeid-polymorphic");
+        CheckFactories.registerCheck<sdc::SdcVirtualFinalNonOverrideCheck>("sdc-virtual-final-non-override");
+        CheckFactories.registerCheck<sdc::SdcVirtualPMFNullCompareCheck>("sdc-virtual-pmf-null-compare");
+        CheckFactories.registerCheck<sdc::SdcExplicitSingleArgCtorCheck>("sdc-explicit-single-arg-ctor");
     }
 };
 
