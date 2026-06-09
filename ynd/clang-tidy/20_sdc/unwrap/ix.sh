@@ -33,6 +33,10 @@ possible_nullptr_check.cpp
 {% endblock %}
 
 {% block sdc_check_srcs %}
+SdcAlgorithmResultUsedCheck.cpp
+SdcAlgorithmResultUsedCheck.h
+SdcAssertConstantCheck.cpp
+SdcAssertConstantCheck.h
 SdcBannedHeaderFacilitiesCheck.cpp
 SdcBannedHeaderFacilitiesCheck.h
 SdcBannedIdentifierNameCheck.cpp
@@ -51,12 +55,18 @@ SdcCastUtils.cpp
 SdcCastUtils.h
 SdcConsistentTypeAliasCheck.cpp
 SdcConsistentTypeAliasCheck.h
+SdcDeleteIncompletePtrCheck.cpp
+SdcDeleteIncompletePtrCheck.h
 SdcDynamicMemoryAutomaticCheck.cpp
 SdcDynamicMemoryAutomaticCheck.h
+SdcEllipsisArgTypeCheck.cpp
+SdcEllipsisArgTypeCheck.h
 SdcEmptyThrowInCatchCheck.cpp
 SdcEmptyThrowInCatchCheck.h
 SdcEnumExplicitUnderlyingTypeCheck.cpp
 SdcEnumExplicitUnderlyingTypeCheck.h
+SdcErrnoZeroAssignCheck.cpp
+SdcErrnoZeroAssignCheck.h
 SdcEscapeSequenceCheck.cpp
 SdcEscapeSequenceCheck.h
 SdcExceptionUnfriendlyNoexceptCheck.cpp
@@ -65,6 +75,8 @@ SdcExplicitSingleArgCtorCheck.cpp
 SdcExplicitSingleArgCtorCheck.h
 SdcForRangeInitOneCallCheck.cpp
 SdcForRangeInitOneCallCheck.h
+SdcForwardingReferenceCheck.cpp
+SdcForwardingReferenceCheck.h
 SdcFuncTryBlockMemberRefCheck.cpp
 SdcFuncTryBlockMemberRefCheck.h
 SdcFunctionToPointerContextCheck.cpp
@@ -75,8 +87,14 @@ SdcIdentifierLeadingUnderscoreCheck.cpp
 SdcIdentifierLeadingUnderscoreCheck.h
 SdcIfElseIfFinalElseCheck.cpp
 SdcIfElseIfFinalElseCheck.h
+SdcIfEndifSameFileCheck.cpp
+SdcIfEndifSameFileCheck.h
 SdcImplicitEnumConstantUniqueValueCheck.cpp
 SdcImplicitEnumConstantUniqueValueCheck.h
+SdcIncludeFilenameCharsCheck.cpp
+SdcIncludeFilenameCharsCheck.h
+SdcIncludeFormatCheck.cpp
+SdcIncludeFormatCheck.h
 SdcInitializerListOnlyConstructorCheck.cpp
 SdcInitializerListOnlyConstructorCheck.h
 SdcIntegerLiteralSuffix.cpp
@@ -85,6 +103,18 @@ SdcIntegerLiteralSuffixLongLongCheck.cpp
 SdcIntegerLiteralSuffixLongLongCheck.h
 SdcIntegerLiteralSuffixUnsignedCheck.cpp
 SdcIntegerLiteralSuffixUnsignedCheck.h
+SdcInvalidDirectiveCheck.cpp
+SdcInvalidDirectiveCheck.h
+SdcMacroDirectiveInArgCheck.cpp
+SdcMacroDirectiveInArgCheck.h
+SdcMacroHashHashCheck.cpp
+SdcMacroHashHashCheck.h
+SdcMacroMixedUseCheck.cpp
+SdcMacroMixedUseCheck.h
+SdcMacroParensCheck.cpp
+SdcMacroParensCheck.h
+SdcMovedFromStateCheck.cpp
+SdcMovedFromStateCheck.h
 SdcNoAddressofOperatorOverloadCheck.cpp
 SdcNoAddressofOperatorOverloadCheck.h
 SdcNoAdvancedMemoryManagementCheck.cpp
@@ -115,6 +145,8 @@ SdcNoCvQualificationRemovalCastCheck.cpp
 SdcNoCvQualificationRemovalCastCheck.h
 SdcNoDependentBaseUnqualifiedLookupCheck.cpp
 SdcNoDependentBaseUnqualifiedLookupCheck.h
+SdcNoFunctionLikeMacrosCheck.cpp
+SdcNoFunctionLikeMacrosCheck.h
 SdcNoFunctionPointerCastsCheck.cpp
 SdcNoFunctionPointerCastsCheck.h
 SdcNoFunctionTemplateSpecializationCheck.cpp
@@ -167,6 +199,7 @@ SdcNumericAssignmentCheck.cpp
 SdcNumericAssignmentCheck.h
 SdcOverrideDefaultArgCheck.cpp
 SdcOverrideDefaultArgCheck.h
+SdcPreprocessorUtils.h
 SdcProhibitedFunctionsCheck.cpp
 SdcProhibitedFunctionsCheck.h
 SdcReservedNamespaceDefinitionCheck.cpp
@@ -193,6 +226,8 @@ SdcVirtualFinalNonOverrideCheck.cpp
 SdcVirtualFinalNonOverrideCheck.h
 SdcVirtualPMFNullCompareCheck.cpp
 SdcVirtualPMFNullCompareCheck.h
+SdcVolatileAppropriateCheck.cpp
+SdcVolatileAppropriateCheck.h
 tidy_module_sdc.cpp
 {% endblock %}
 
