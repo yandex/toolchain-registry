@@ -28,7 +28,13 @@ const EnumDecl* unscopedUnfixed(QualType Q) {
 // Returns the EnumDecl if the expression, after stripping implicit casts,
 // has an unscoped-unfixed enum type.
 const EnumDecl* unscopedUnfixedOf(const Expr* E) {
-    return E ? unscopedUnfixed(E->IgnoreImpCasts()->getType()) : nullptr;
+    if (!E) return nullptr;
+    const Expr* Inner = E->IgnoreImpCasts();
+    QualType T = Inner->getType();
+    // ParenListExpr and dependent expressions in template patterns have null or
+    // dependent types that crash getCanonicalType() — guard before use.
+    if (T.isNull() || T->isDependentType()) return nullptr;
+    return unscopedUnfixed(T);
 }
 
 // Returns true if Target can hold all values of ED without losing information.
@@ -163,7 +169,9 @@ void SdcUnscopedEnumNumericUseCheck::check(
     // --- static_cast ---
     if (const auto* SC = Result.Nodes.getNodeAs<CXXStaticCastExpr>("scast")) {
         if (isUnevaluated(SC, Ctx)) return;
-        QualType Target = SC->getType().getCanonicalType();
+        QualType RawTarget = SC->getType();
+        if (RawTarget.isNull() || RawTarget->isDependentType()) return;
+        QualType Target = RawTarget.getCanonicalType();
 
         // static_cast TO an unscoped-unfixed enum is always prohibited.
         if (unscopedUnfixed(Target)) {

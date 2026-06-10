@@ -43,17 +43,12 @@ void SdcImplicitEnumConstantUniqueValueCheck::check(
     const auto* ED = Result.Nodes.getNodeAs<EnumDecl>("enum");
     if (!ED) return;
 
-    // Enum constants inside a class template pattern do not have their implicit
-    // values computed at parse time (getInitVal() returns 0 for all of them).
-    // Skip both the pattern and its instantiations; we would need a different
-    // analysis path (walking instantiations) to handle these, which is out of
-    // scope for a single-TU AST check.
-    if (const auto* RD = dyn_cast<CXXRecordDecl>(ED->getDeclContext())) {
-        // Template pattern.
-        if (RD->getDescribedClassTemplate() != nullptr) return;
-        // Template instantiation.
-        if (RD->getTemplateSpecializationKind() != TSK_Undeclared) return;
-    }
+    // In a dependent context (uninstantiated template pattern — whether the enum
+    // is a class member or local to a function template), clang does not compute
+    // implicit enumerator values at parse time: getInitVal() returns 0 for every
+    // implicit constant, making every pair look like a collision.  Skip the
+    // dependent pattern; instantiations will be checked with correct values.
+    if (ED->getDeclContext()->isDependentContext()) return;
 
     // Collect enumerators in declaration order.
     llvm::SmallVector<const EnumConstantDecl*, 16> Enums(

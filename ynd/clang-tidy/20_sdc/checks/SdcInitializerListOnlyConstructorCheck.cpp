@@ -103,6 +103,10 @@ void SdcInitializerListOnlyConstructorCheck::check(
              "constructor in the same class; only copy and move constructors "
              "are permitted alongside an initializer-list constructor")
             << Other->getNameAsString();
+        for (const CXXConstructorDecl* IL : InitListCtors)
+            diag(IL->getLocation(),
+                 "initializer-list constructor defined here",
+                 DiagnosticIDs::Note);
     }
 }
 

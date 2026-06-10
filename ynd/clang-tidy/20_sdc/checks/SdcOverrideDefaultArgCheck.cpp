@@ -90,6 +90,9 @@ void SdcOverrideDefaultArgCheck::check(
                      "default argument of overriding parameter '%0' is not a "
                      "constant expression")
                     << DerivedParam->getName();
+                diag(BaseCanon->getLocation(),
+                     "overrides base method declared here",
+                     DiagnosticIDs::Note);
                 continue;
             }
 
@@ -102,6 +105,9 @@ void SdcOverrideDefaultArgCheck::check(
                      "overriding parameter '%0' specifies a default argument "
                      "but the corresponding base parameter has none")
                     << DerivedParam->getName();
+                diag(BaseCanon->getLocation(),
+                     "overrides base method declared here",
+                     DiagnosticIDs::Note);
                 continue;
             }
 
@@ -115,6 +121,9 @@ void SdcOverrideDefaultArgCheck::check(
                      "overriding parameter '%0' has a constant default argument "
                      "but the base parameter's default is not a constant expression")
                     << DerivedParam->getName();
+                diag(BaseCanon->getLocation(),
+                     "overrides base method declared here",
+                     DiagnosticIDs::Note);
                 continue;
             }
 
@@ -124,6 +133,9 @@ void SdcOverrideDefaultArgCheck::check(
                      "default argument of overriding parameter '%0' differs "
                      "from the base class default")
                     << DerivedParam->getName();
+                diag(BaseCanon->getLocation(),
+                     "overrides base method declared here",
+                     DiagnosticIDs::Note);
             }
         }
     }
