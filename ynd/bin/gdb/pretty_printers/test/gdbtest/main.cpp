@@ -63,6 +63,7 @@ std::shared_ptr<int> test_shared_empty;
 std::variant<int, std::string> test_variant_default;
 std::variant<int, std::string> test_variant_int(10);
 std::variant<int, std::string> test_variant_string(test_string);
+std::variant<int, std::string>& test_variant_int_ref = test_variant_int;
 
 TVector<int> test_tvector = {1, 2, 3, 4};
 THashMap<int, int> test_hashmap = {{1, 2}, {3, 4}};
