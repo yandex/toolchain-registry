@@ -5,6 +5,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Lexer.h"
 
 using namespace clang::ast_matchers;
@@ -86,11 +87,23 @@ namespace clang {
                     return;
                 }
 
-                diag(Cast->getBeginLoc(),
+                const SourceManager& SM = *Result.SourceManager;
+                SourceLocation DiagLoc = Cast->getBeginLoc();
+                SourceLocation MacroCallSite;
+                if (DiagLoc.isMacroID() && SM.isMacroBodyExpansion(DiagLoc)) {
+                    MacroCallSite = DiagLoc;
+                    while (MacroCallSite.isMacroID())
+                        MacroCallSite = SM.getExpansionLoc(MacroCallSite);
+                    DiagLoc = SM.getSpellingLoc(DiagLoc);
+                }
+                diag(DiagLoc,
                      "cast from object pointer %0 to integral type %1 is not "
                      "permitted; use an explicit cast to std::uintptr_t or "
                      "std::intptr_t instead")
                     << From << To;
+                if (MacroCallSite.isValid())
+                    diag(MacroCallSite, "expanded via macro invocation here",
+                         DiagnosticIDs::Note);
             }
 
         } // namespace sdc

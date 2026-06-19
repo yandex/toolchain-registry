@@ -31,12 +31,19 @@ namespace clang {
 
                 QualType From = Cast->getSubExpr()->getType();
                 QualType To = Cast->getTypeAsWritten();
-                if (!cast_utils::removesCvQualification(From, To)) {
+                auto Removal = cast_utils::findCvRemoval(From, To);
+                if (!Removal) {
                     return;
                 }
 
+                StringRef Qual = (Removal->LostConst && Removal->LostVolatile)
+                                     ? "const volatile"
+                                 : Removal->LostConst ? "const"
+                                                      : "volatile";
                 diag(Cast->getBeginLoc(),
-                     "casts shall not remove const or volatile qualification from the type accessed via a pointer or reference");
+                     "cast removes '%0' qualifier from %1; casts shall not "
+                     "remove const or volatile qualification")
+                    << Qual << Removal->QualifiedType;
             }
 
         } // namespace sdc

@@ -2,6 +2,7 @@
 
 #include "clang/AST/Decl.h"
 #include "clang/AST/ExprCXX.h"
+#include <optional>
 
 namespace {
 
@@ -97,23 +98,26 @@ namespace clang {
                     return Canonical->getPointeeType();
                 }
 
-                bool removesCvQualification(QualType From, QualType To) {
+                std::optional<CvRemoval> findCvRemoval(QualType From, QualType To) {
                     QualType FromAccessed = firstAccessedType(From);
                     QualType ToAccessed = firstAccessedType(To);
 
                     while (!FromAccessed.isNull() && !ToAccessed.isNull()) {
-                        Qualifiers FromQualifiers = FromAccessed.getQualifiers();
-                        Qualifiers ToQualifiers = ToAccessed.getQualifiers();
-                        if ((FromQualifiers.hasConst() && !ToQualifiers.hasConst()) ||
-                            (FromQualifiers.hasVolatile() && !ToQualifiers.hasVolatile())) {
-                            return true;
+                        Qualifiers FQ = FromAccessed.getQualifiers();
+                        Qualifiers TQ = ToAccessed.getQualifiers();
+                        bool ConstLost    = FQ.hasConst()    && !TQ.hasConst();
+                        bool VolatileLost = FQ.hasVolatile() && !TQ.hasVolatile();
+                        if (ConstLost || VolatileLost) {
+                            return CvRemoval{FromAccessed, ConstLost, VolatileLost};
                         }
-
                         FromAccessed = nextAccessedType(FromAccessed);
-                        ToAccessed = nextAccessedType(ToAccessed);
+                        ToAccessed   = nextAccessedType(ToAccessed);
                     }
+                    return std::nullopt;
+                }
 
-                    return false;
+                bool removesCvQualification(QualType From, QualType To) {
+                    return findCvRemoval(From, To).has_value();
                 }
 
             } // namespace cast_utils

@@ -131,9 +131,17 @@ namespace clang {
                         return true;
                     }
 
-                    return rangeHasParenWrappedName(Variable->getBeginLoc(), Variable->getEndLoc(), Name, SM, LangOpts) ||
-                           (Loc.isMacroID() &&
-                            rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts));
+                    // When the VarDecl name is inside a macro body, the spelling
+                    // range [BeginLoc, EndLoc] can span from the macro definition
+                    // to the expanded argument in user code.  That huge text window
+                    // may accidentally contain "(name)" from a completely unrelated
+                    // expression in the macro body (e.g. a function call using the
+                    // same identifier).  Skip the range search for macro-body VarDecls
+                    // and only check the expansion call-site instead.
+                    if (Loc.isMacroID()) {
+                        return rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts);
+                    }
+                    return rangeHasParenWrappedName(Variable->getBeginLoc(), Variable->getEndLoc(), Name, SM, LangOpts);
                 }
 
             } // namespace

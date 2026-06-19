@@ -244,6 +244,33 @@ void SdcBannedHeaderFacilitiesCheck::onEndOfTranslationUnit() {
         if (isInExemptRange(U.Loc)) {
             return;
         }
+
+        // When a prohibited macro (e.g. offsetof) is expanded from within
+        // another macro's body, MacroNameTok.getLocation() is a macro-body
+        // expansion location rather than a file location.  Clang's diagnostic
+        // engine then resolves it through the entire expansion chain and
+        // reports the primary error at the outermost call site (user code),
+        // making it look as though the user's innocent wrapper macro is the
+        // offender and hiding where offsetof actually lives.
+        //
+        // Fix: report at the spelling location (the file where the prohibited
+        // macro text is written) and add a note pointing back to the outermost
+        // expansion in user code so both ends of the chain are visible.
+        if (SM_ && U.Loc.isMacroID() && SM_->isMacroBodyExpansion(U.Loc)) {
+            SourceLocation SpellingLoc = SM_->getSpellingLoc(U.Loc);
+            // Walk expansion chain to the outermost file location (user code).
+            SourceLocation UserLoc = U.Loc;
+            while (UserLoc.isMacroID()) {
+                UserLoc = SM_->getExpansionLoc(UserLoc);
+            }
+            diag(SpellingLoc, getDiagnosticMessage(U.Name));
+            if (UserLoc.isValid() && UserLoc != SpellingLoc) {
+                diag(UserLoc, "expanded via macro invocation here",
+                     DiagnosticIDs::Note);
+            }
+            return;
+        }
+
         diag(U.Loc, getDiagnosticMessage(U.Name));
     };
 

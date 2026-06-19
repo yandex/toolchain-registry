@@ -84,7 +84,12 @@ void SdcEllipsisArgTypeCheck::check(const MatchFinder::MatchResult& Result) {
 
     const unsigned NumNamedParams = FPT->getNumParams();
 
-    for (unsigned I = NumNamedParams; I < CE->getNumArgs(); ++I) {
+    // For CXXOperatorCallExpr (e.g. obj(...)), clang inserts the implicit object
+    // as argument 0 in CE->getArgs(), but FPT->getNumParams() does not count it.
+    // Shift the start index so we skip the object and only check true ellipsis args.
+    const unsigned ArgOffset = isa<CXXOperatorCallExpr>(CE) ? 1u : 0u;
+
+    for (unsigned I = NumNamedParams + ArgOffset; I < CE->getNumArgs(); ++I) {
         const Expr* Arg = CE->getArg(I);
         QualType T = Arg->getType();
 

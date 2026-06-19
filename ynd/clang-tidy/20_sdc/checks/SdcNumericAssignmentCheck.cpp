@@ -235,6 +235,15 @@ namespace clang {
                                             const char* ContextLabel,
                                             bool AllowNonIdWiden = false) {
                     if (!Src) return;
+                    // ParenListExpr is a placeholder for T x(args...) in
+                    // uninstantiated templates.  The dependency guards below
+                    // catch most cases, but when the args are concrete (e.g.
+                    // T tmp(std::move(concreteVal))) the ParenListExpr may not
+                    // be flagged as type-dependent even though T is — leading
+                    // to a crash when we try to inspect its unresolved type.
+                    // Skip unconditionally; the instantiated CXXConstructExpr
+                    // is handled separately.
+                    if (isa<ParenListExpr>(Src)) return;
                     // In an uninstantiated template, initializers/operands can
                     // be dependent placeholders (e.g. ParenListExpr for
                     // `T a2(args)`) whose type is unresolved/null. Dereferencing

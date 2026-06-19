@@ -5,6 +5,7 @@
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Basic/SourceManager.h"
 
 using namespace clang::ast_matchers;
 
@@ -119,21 +120,39 @@ namespace clang {
                     }
                 }
 
+                // When the cast is inside a macro body, getExprLoc() is a
+                // macro expansion location that clang resolves to the outermost
+                // call site, pushing the actual code into "expanded from" notes.
+                // Report at the spelling location (where the code lives) and
+                // add a note pointing to the user's call site instead.
+                const SourceManager& SM = *Result.SourceManager;
+                SourceLocation DiagLoc = CE->getExprLoc();
+                SourceLocation MacroCallSite;
+                if (DiagLoc.isMacroID() && SM.isMacroBodyExpansion(DiagLoc)) {
+                    MacroCallSite = DiagLoc;
+                    while (MacroCallSite.isMacroID())
+                        MacroCallSite = SM.getExpansionLoc(MacroCallSite);
+                    DiagLoc = SM.getSpellingLoc(DiagLoc);
+                }
+
                 if (SrcChar) {
-                    diag(CE->getExprLoc(),
+                    diag(DiagLoc,
                          "conversion from character type %0 to %1 is not "
                          "allowed; do not use the numerical value of a "
                          "character")
                         << CE->getSubExpr()->getType()
                         << CE->getType();
                 } else {
-                    diag(CE->getExprLoc(),
+                    diag(DiagLoc,
                          "conversion from %0 to character type %1 is not "
                          "allowed; do not use the numerical value of a "
                          "character")
                         << CE->getSubExpr()->getType()
                         << CE->getType();
                 }
+                if (MacroCallSite.isValid())
+                    diag(MacroCallSite, "expanded via macro invocation here",
+                         DiagnosticIDs::Note);
             }
 
         } // namespace sdc
