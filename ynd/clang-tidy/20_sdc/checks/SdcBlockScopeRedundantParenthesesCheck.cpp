@@ -125,10 +125,35 @@ namespace clang {
                     // the argument-origin check we would flag every variable
                     // declared inside any macro whose body happens to contain
                     // a `( param )` token sequence anywhere.
-                    if (!MacroName.empty() && Loc.isMacroID() &&
-                        SM.isMacroArgExpansion(Loc) &&
-                        Check.macroHasRedundantParens(MacroName)) {
-                        return true;
+                    //
+                    // Additional guard: if the variable is declared inside a
+                    // lambda whose DEFINITION is itself inside a macro argument
+                    // (e.g. INSTANTIATE_TEST_SUITE_P(prefix, suite, []{N;}())),
+                    // the lambda is the argument expression — the variable N is
+                    // NOT the paren-wrapped argument, it merely lives inside it.
+                    //
+                    // Contrast: DECLARE_PAREN_OBJECT(int, x) called inside a
+                    // lambda body — there the lambda is the caller, not the
+                    // argument. The lambda's own location is NOT in a macro-arg
+                    // expansion, so Path 1 still fires correctly.
+                    {
+                        bool lambdaIsArgument = false;
+                        if (const auto* MD =
+                                dyn_cast<CXXMethodDecl>(Variable->getDeclContext())) {
+                            if (MD->getParent()->isLambda()) {
+                                SourceLocation LambdaLoc =
+                                    MD->getParent()->getBeginLoc();
+                                if (LambdaLoc.isValid() &&
+                                    SM.isMacroArgExpansion(LambdaLoc)) {
+                                    lambdaIsArgument = true;
+                                }
+                            }
+                        }
+                        if (!lambdaIsArgument && !MacroName.empty() &&
+                            Loc.isMacroID() && SM.isMacroArgExpansion(Loc) &&
+                            Check.macroHasRedundantParens(MacroName)) {
+                            return true;
+                        }
                     }
 
                     // When the VarDecl name is inside a macro body, the spelling

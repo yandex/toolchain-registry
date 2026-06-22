@@ -87,23 +87,11 @@ namespace clang {
                     return;
                 }
 
-                const SourceManager& SM = *Result.SourceManager;
-                SourceLocation DiagLoc = Cast->getBeginLoc();
-                SourceLocation MacroCallSite;
-                if (DiagLoc.isMacroID() && SM.isMacroBodyExpansion(DiagLoc)) {
-                    MacroCallSite = DiagLoc;
-                    while (MacroCallSite.isMacroID())
-                        MacroCallSite = SM.getExpansionLoc(MacroCallSite);
-                    DiagLoc = SM.getSpellingLoc(DiagLoc);
-                }
-                diag(DiagLoc,
+                diag(Cast->getBeginLoc(),
                      "cast from object pointer %0 to integral type %1 is not "
                      "permitted; use an explicit cast to std::uintptr_t or "
                      "std::intptr_t instead")
                     << From << To;
-                if (MacroCallSite.isValid())
-                    diag(MacroCallSite, "expanded via macro invocation here",
-                         DiagnosticIDs::Note);
             }
 
         } // namespace sdc

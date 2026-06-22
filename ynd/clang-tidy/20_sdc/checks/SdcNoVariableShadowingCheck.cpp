@@ -130,7 +130,16 @@ namespace clang {
                     }
 
                     bool TraverseParmVarDecl(ParmVarDecl* Declaration) {
-                        handleDeclaration(Declaration);
+                        // Parameters of function *definitions* are added to the
+                        // scope manually inside traverseFunctionDecl(), which also
+                        // controls scope creation.  TraverseParmVarDecl reaches
+                        // only parameters that fall outside that path — chiefly
+                        // function-pointer typedef parameters such as:
+                        //   typedef void(*F)(int options);
+                        // Those parameter names are purely documentary; they occupy
+                        // no real scope and must not be registered here, or they
+                        // would cause false "shadows" for any local variable with
+                        // the same name.
                         return true;
                     }
 

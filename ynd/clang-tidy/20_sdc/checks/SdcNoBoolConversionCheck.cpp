@@ -171,25 +171,6 @@ namespace clang {
                 if (!CE) return;
                 ASTContext& Ctx = *Result.Context;
 
-                // When the cast is inside a macro body, getExprLoc() resolves
-                // to the outermost call site as primary with the actual code
-                // buried in notes — the reverse of what's useful.  Remap to
-                // the spelling location and add a note at the call site.
-                const SourceManager& SM = *Result.SourceManager;
-                SourceLocation DiagLoc = CE->getExprLoc();
-                SourceLocation MacroCallSite;
-                if (DiagLoc.isMacroID() && SM.isMacroBodyExpansion(DiagLoc)) {
-                    MacroCallSite = DiagLoc;
-                    while (MacroCallSite.isMacroID())
-                        MacroCallSite = SM.getExpansionLoc(MacroCallSite);
-                    DiagLoc = SM.getSpellingLoc(DiagLoc);
-                }
-                auto emitNote = [&] {
-                    if (MacroCallSite.isValid())
-                        diag(MacroCallSite, "expanded via macro invocation here",
-                             DiagnosticIDs::Note);
-                };
-
                 QualType DstTy = CE->getType()
                                      .getCanonicalType()
                                      .getUnqualifiedType();
@@ -241,9 +222,9 @@ namespace clang {
                             }
                         }
                     }
-                    diag(DiagLoc, "conversion from 'bool' to %0 is not allowed")
+                    diag(CE->getExprLoc(),
+                         "conversion from 'bool' to %0 is not allowed")
                         << CE->getType();
-                    emitNote();
                     return;
                 }
 
@@ -278,9 +259,9 @@ namespace clang {
                     }
                 }
 
-                diag(DiagLoc, "conversion from %0 to 'bool' is not allowed")
+                diag(CE->getExprLoc(),
+                     "conversion from %0 to 'bool' is not allowed")
                     << CE->getSubExpr()->getType();
-                emitNote();
             }
 
         } // namespace sdc

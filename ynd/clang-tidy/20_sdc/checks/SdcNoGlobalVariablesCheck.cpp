@@ -99,12 +99,9 @@ namespace clang {
                     return VD->getType().isConstQualified();
                 }
 
-                // True if the initialization (if any) is constant
-                // initialization, i.e. static initialization. A declaration
-                // without an initializer (e.g. `extern const int x;` or an
-                // in-class static data-member declaration whose definition
-                // lives elsewhere) does not satisfy this and therefore cannot
-                // claim the const-with-static-init exemption.
+                // True if the variable definition has constant (static)
+                // initialization. Only called for actual definitions, never
+                // for extern declarations (those are skipped earlier).
                 bool hasStaticInitialization(const VarDecl* VD) {
                     if (!VD->hasInit()) {
                         return false;
@@ -137,6 +134,19 @@ namespace clang {
                 }
 
                 if (isFromTemplateInstantiation(VD)) {
+                    return;
+                }
+
+                // Skip `extern const T x;` declarations (not definitions).
+                // The const+static-init exemption can only be evaluated at
+                // the definition, where the initializer is present. The
+                // definition will be checked in its own translation unit.
+                // Non-const extern declarations are still flagged here because
+                // they are definitively violations regardless of where the
+                // definition lives.
+                if (VD->isThisDeclarationADefinition() ==
+                        VarDecl::DeclarationOnly &&
+                    VD->hasExternalStorage() && isConstQualified(VD)) {
                     return;
                 }
 

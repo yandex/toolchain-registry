@@ -4,6 +4,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "llvm/ADT/FoldingSet.h"
 
 using namespace clang::ast_matchers;
 
@@ -26,28 +27,25 @@ void SdcOverrideDefaultArgCheck::registerMatchers(MatchFinder* Finder) {
 
 namespace {
 
-// Returns true if the parameter has a usable (parsed, instantiated) default.
+// Returns true if the parameter has a usable (parsed, instantiated) default
+// whose expression can be safely profiled.
 bool hasUsableDefault(const ParmVarDecl* P) {
     return P->hasDefaultArg() &&
            !P->hasUnparsedDefaultArg() &&
            !P->hasUninstantiatedDefaultArg();
 }
 
-// Returns true if two APValues represent the same value.
-// Handles the common cases (integer, float); treats unknown kinds as unequal.
-bool apValuesEqual(const APValue& A, const APValue& B) {
-    if (A.getKind() != B.getKind()) return false;
-    switch (A.getKind()) {
-    case APValue::Int:
-        return A.getInt() == B.getInt();
-    case APValue::Float:
-        return A.getFloat().bitwiseIsEqual(B.getFloat());
-    case APValue::None:
-    case APValue::Indeterminate:
-        return true;
-    default:
-        return false; // conservative: treat as different
-    }
+// Returns true if two default-argument expressions are syntactically identical
+// (after canonical type substitution).  This is the right comparison for this
+// rule: targets inconsistent defaults, not non-constant ones, and two
+// declarations that look different in source are confusing even if they happen
+// to evaluate to the same value.
+bool defaultExpressionsEqual(const Expr* A, const Expr* B,
+                              const ASTContext& Ctx) {
+    llvm::FoldingSetNodeID IdA, IdB;
+    A->Profile(IdA, Ctx, /*Canonical=*/true);
+    B->Profile(IdB, Ctx, /*Canonical=*/true);
+    return IdA == IdB;
 }
 
 } // namespace
@@ -67,7 +65,6 @@ void SdcOverrideDefaultArgCheck::check(
 
     ASTContext& Ctx = *Result.Context;
 
-    // Check against each directly overridden base method.
     for (const CXXMethodDecl* Base : Method->overridden_methods()) {
         const CXXMethodDecl* BaseCanon = Base->getCanonicalDecl();
 
@@ -75,32 +72,14 @@ void SdcOverrideDefaultArgCheck::check(
         for (unsigned i = 0; i < NumParams; ++i) {
             const ParmVarDecl* DerivedParam = Method->getParamDecl(i);
 
-            // Option 1: no default specified in the override — always compliant.
+            // No default in override — always compliant.
             if (!hasUsableDefault(DerivedParam)) continue;
 
-            const Expr* DerivedExpr = DerivedParam->getDefaultArg();
-
-            // The override's default must be a constant expression.
-            Expr::EvalResult DerivedEval;
-            bool DerivedIsConst =
-                DerivedExpr->EvaluateAsConstantExpr(DerivedEval, Ctx);
-
-            if (!DerivedIsConst) {
-                diag(DerivedParam->getDefaultArgRange().getBegin(),
-                     "default argument of overriding parameter '%0' is not a "
-                     "constant expression")
-                    << DerivedParam->getName();
-                diag(BaseCanon->getLocation(),
-                     "overrides base method declared here",
-                     DiagnosticIDs::Note);
-                continue;
-            }
-
-            // The base parameter must also have a default.
             if (i >= BaseCanon->getNumParams()) continue;
             const ParmVarDecl* BaseParam = BaseCanon->getParamDecl(i);
 
-            if (!hasUsableDefault(BaseParam)) {
+            // Base has no default at all — violation.
+            if (!BaseParam->hasDefaultArg()) {
                 diag(DerivedParam->getDefaultArgRange().getBegin(),
                      "overriding parameter '%0' specifies a default argument "
                      "but the corresponding base parameter has none")
@@ -111,24 +90,15 @@ void SdcOverrideDefaultArgCheck::check(
                 continue;
             }
 
-            // The base's default must also be a constant expression.
-            const Expr* BaseExpr = BaseParam->getDefaultArg();
-            Expr::EvalResult BaseEval;
-            bool BaseIsConst = BaseExpr->EvaluateAsConstantExpr(BaseEval, Ctx);
+            // Base has a default that is uninstantiated or unparsed — we
+            // cannot profile it yet; defer to the instantiation.
+            if (!hasUsableDefault(BaseParam)) continue;
 
-            if (!BaseIsConst) {
-                diag(DerivedParam->getDefaultArgRange().getBegin(),
-                     "overriding parameter '%0' has a constant default argument "
-                     "but the base parameter's default is not a constant expression")
-                    << DerivedParam->getName();
-                diag(BaseCanon->getLocation(),
-                     "overrides base method declared here",
-                     DiagnosticIDs::Note);
-                continue;
-            }
-
-            // Both are constant: values must be equal.
-            if (!apValuesEqual(DerivedEval.Val, BaseEval.Val)) {
+            // Compare syntactically: the source-visible expression must be the
+            // same in both declarations so that readers see consistent defaults
+            // regardless of which declaration they look at.
+            if (!defaultExpressionsEqual(DerivedParam->getDefaultArg(),
+                                         BaseParam->getDefaultArg(), Ctx)) {
                 diag(DerivedParam->getDefaultArgRange().getBegin(),
                      "default argument of overriding parameter '%0' differs "
                      "from the base class default")

@@ -8,6 +8,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 
 using namespace clang::ast_matchers;
@@ -43,8 +44,16 @@ namespace clang {
                     return nullptr;
                 }
 
-                void collectDependentBaseNames(const CXXRecordDecl* Record, llvm::StringSet<>& Names) {
+                void collectDependentBaseNames(const CXXRecordDecl* Record,
+                                               llvm::StringSet<>& Names,
+                                               llvm::SmallPtrSet<const CXXRecordDecl*, 32>& Visited) {
                     if (!Record || !Record->hasDefinition()) {
+                        return;
+                    }
+                    // Guard against re-visiting the same record (handles diamond
+                    // inheritance and prevents stack overflow in deeply-nested
+                    // template hierarchies like Boost.MPL).
+                    if (!Visited.insert(Record).second) {
                         return;
                     }
 
@@ -55,7 +64,7 @@ namespace clang {
                         }
 
                         Pattern = Pattern->getDefinition();
-                        collectDependentBaseNames(Pattern, Names);
+                        collectDependentBaseNames(Pattern, Names, Visited);
                         for (const Decl* Declaration : Pattern->decls()) {
                             if (const auto* Named = dyn_cast<NamedDecl>(Declaration)) {
                                 if (isNamedClassMember(Named)) {
@@ -153,7 +162,8 @@ namespace clang {
                 }
 
                 llvm::StringSet<> DependentBaseNames;
-                collectDependentBaseNames(Record, DependentBaseNames);
+                llvm::SmallPtrSet<const CXXRecordDecl*, 32> Visited;
+                collectDependentBaseNames(Record, DependentBaseNames, Visited);
                 if (DependentBaseNames.empty()) {
                     return;
                 }

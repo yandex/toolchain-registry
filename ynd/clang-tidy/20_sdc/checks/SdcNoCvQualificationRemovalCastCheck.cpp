@@ -31,6 +31,14 @@ namespace clang {
 
                 QualType From = Cast->getSubExpr()->getType();
                 QualType To = Cast->getTypeAsWritten();
+                // In an uninstantiated template, operand types can be
+                // dependent (e.g. `static_cast<T>(const T2 other)`).
+                // Qualification removal cannot be determined until the
+                // template is instantiated with concrete types; defer to
+                // those instantiations to avoid false positives.
+                if (From->isDependentType() || To->isDependentType()) {
+                    return;
+                }
                 auto Removal = cast_utils::findCvRemoval(From, To);
                 if (!Removal) {
                     return;

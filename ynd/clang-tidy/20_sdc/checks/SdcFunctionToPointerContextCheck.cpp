@@ -81,6 +81,12 @@ namespace clang {
                 if (P.get<CallExpr>()) return;
                 if (P.get<CXXConstructExpr>()) return;
                 if (P.get<ReturnStmt>()) return;
+                // InitListExpr: the function pointer is being placed into an
+                // array element or aggregate member whose declared type is
+                // pointer-to-function.  This is the "assigning to an object
+                // with pointer-to-function type" exemption applied to aggregate
+                // initialisation (e.g. `FnPtr arr[] = { f, g };`).
+                if (P.get<InitListExpr>()) return;
 
                 diag(CE->getExprLoc(),
                      "implicit conversion to pointer-to-function is only "

@@ -77,6 +77,14 @@ namespace clang {
 
                 if (const auto* First = Result.Nodes.getNodeAs<FunctionDecl>("fn")) {
                     if (!First->isFirstDecl()) return;
+                    // Skip compiler-generated implicit declarations (e.g. the
+                    // implicit operator new / operator new[] built-in). Their
+                    // parameters use bare fundamental types (e.g. `unsigned long`)
+                    // rather than typedef aliases (`std::size_t`), so comparing
+                    // them against explicit library redeclarations always reports
+                    // a false mismatch, and their source location is invalid so
+                    // the "previous declaration here" note points nowhere.
+                    if (First->isImplicit()) return;
                     // Function templates and their instantiations: we anchor
                     // on the pattern; redecls of the pattern are what we want.
                     // For implicit instantiations there are no redeclarations
@@ -110,9 +118,11 @@ namespace clang {
                                      "type %2; the first declaration used %3")
                                     << PR << R
                                     << PR->getType() << PA->getType();
-                                diag(PA->getLocation(),
-                                     "previous declaration here",
-                                     DiagnosticIDs::Note);
+                                if (PA->getLocation().isValid()) {
+                                    diag(PA->getLocation(),
+                                         "previous declaration here",
+                                         DiagnosticIDs::Note);
+                                }
                             }
                         }
                     }
