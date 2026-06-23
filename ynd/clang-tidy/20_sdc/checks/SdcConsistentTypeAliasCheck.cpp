@@ -18,8 +18,20 @@ namespace clang {
                 // QualType so that top-level cv-qualifiers - which are
                 // discarded from the function signature for parameters - do
                 // not cause false positives.
-                bool sameAlias(QualType A, QualType B) {
-                    return A.getUnqualifiedType() == B.getUnqualifiedType();
+                //
+                // Fallback: when the pointer comparison fails, compare the
+                // printed representations. Inline namespaces (e.g. libcxx's
+                // std::__1) can make the *same* typedef resolve to different
+                // Type* nodes in different declaration contexts even within the
+                // same translation unit.  Printing is stable and reflects what
+                // a programmer actually writes, so it correctly treats
+                // `::std::string` vs `::std::string` as identical while still
+                // flagging genuinely different aliases like `int32_t` vs `int`.
+                bool sameAlias(QualType A, QualType B, const PrintingPolicy& PP) {
+                    if (A.getUnqualifiedType() == B.getUnqualifiedType())
+                        return true;
+                    return A.getUnqualifiedType().getAsString(PP) ==
+                           B.getUnqualifiedType().getAsString(PP);
                 }
 
                 StringRef kindNoun(const NamedDecl* D) {
@@ -55,13 +67,15 @@ namespace clang {
 
             void SdcConsistentTypeAliasCheck::check(
                 const MatchFinder::MatchResult& Result) {
+                const PrintingPolicy& PP = Result.Context->getPrintingPolicy();
+
                 if (const auto* First = Result.Nodes.getNodeAs<VarDecl>("var")) {
                     if (!First->isFirstDecl()) return;
                     QualType Anchor = First->getType();
                     for (const Decl* R : First->redecls()) {
                         const auto* VD = cast<VarDecl>(R);
                         if (VD == First) continue;
-                        if (!sameAlias(Anchor, VD->getType())) {
+                        if (!sameAlias(Anchor, VD->getType(), PP)) {
                             diag(VD->getTypeSpecStartLoc(),
                                  "%0 %1 is redeclared with type %2; the "
                                  "first declaration used %3")
@@ -100,7 +114,7 @@ namespace clang {
                             // code, but skip defensively.
                             continue;
                         }
-                        if (!sameAlias(AnchorRet, R->getReturnType())) {
+                        if (!sameAlias(AnchorRet, R->getReturnType(), PP)) {
                             diag(R->getReturnTypeSourceRange().getBegin(),
                                  "return type of %0 is redeclared as %1; the "
                                  "first declaration used %2")
@@ -112,7 +126,7 @@ namespace clang {
                         for (unsigned I = 0; I < NumParams; ++I) {
                             const ParmVarDecl* PA = First->getParamDecl(I);
                             const ParmVarDecl* PR = R->getParamDecl(I);
-                            if (!sameAlias(PA->getType(), PR->getType())) {
+                            if (!sameAlias(PA->getType(), PR->getType(), PP)) {
                                 diag(PR->getTypeSpecStartLoc(),
                                      "parameter %0 of %1 is redeclared with "
                                      "type %2; the first declaration used %3")

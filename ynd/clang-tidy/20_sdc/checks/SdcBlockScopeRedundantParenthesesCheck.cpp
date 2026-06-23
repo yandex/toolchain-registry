@@ -75,6 +75,22 @@ namespace clang {
                     for (size_t I = 1; I + 1 < Tokens.size(); ++I) {
                         if (Tokens[I - 1].is(tok::l_paren) && isMacroParameter(Tokens[I]) &&
                             Tokens[I + 1].is(tok::r_paren)) {
+                            // Only consider this a declarator-context paren wrap when
+                            // the '(' is preceded by something that looks like a type
+                            // specifier (identifier, keyword, *, &, >) rather than an
+                            // operator.  Standard C macro operator-precedence guards
+                            // such as `!(COND)` or aggregate initialisers like
+                            // `{loc, (MSG)}` must not be mistaken for a declaration
+                            // paren wrapping a variable name.
+                            if (I >= 2) {
+                                tok::TokenKind PrevKind = Tokens[I - 2].getKind();
+                                if (PrevKind == tok::exclaim    ||  // !(PARAM)
+                                    PrevKind == tok::comma      ||  // {x, (PARAM)}
+                                    PrevKind == tok::l_brace    ||  // {(PARAM)}
+                                    PrevKind == tok::l_paren) {     // ((PARAM))
+                                    continue;
+                                }
+                            }
                             return true;
                         }
                     }
@@ -166,7 +182,24 @@ namespace clang {
                     if (Loc.isMacroID()) {
                         return rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts);
                     }
-                    return rangeHasParenWrappedName(Variable->getBeginLoc(), Variable->getEndLoc(), Name, SM, LangOpts);
+                    // Limit the search range to the declarator only — not the
+                    // full initializer.  Variable->getEndLoc() can span an
+                    // entire lambda body, and '(name)' might appear there as a
+                    // legitimate function-call argument, producing a false positive.
+                    // We only need a window that covers the type specifiers plus
+                    // the variable name and the one character after it (the ')' if
+                    // the name is paren-wrapped).
+                    {
+                        SourceLocation SpellingNameLoc = SM.getSpellingLoc(Loc);
+                        // +2: one byte for potential ')' directly after the name,
+                        // one byte to make the exclusive end include it.
+                        SourceLocation NarrowEnd = SpellingNameLoc.getLocWithOffset(
+                            static_cast<int>(Name.size()) + 2);
+                        CharSourceRange NarrowRange = CharSourceRange::getCharRange(
+                            SM.getSpellingLoc(Variable->getBeginLoc()), NarrowEnd);
+                        StringRef Source = Lexer::getSourceText(NarrowRange, SM, LangOpts);
+                        return !Source.empty() && sourceHasParenWrappedName(Source, Name);
+                    }
                 }
 
             } // namespace

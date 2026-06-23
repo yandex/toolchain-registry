@@ -33,7 +33,12 @@ namespace clang {
                     if (const auto* TemplateSpecialization = BaseType->getAs<TemplateSpecializationType>()) {
                         TemplateName Name = TemplateSpecialization->getTemplateName();
                         if (const TemplateDecl* Template = Name.getAsTemplateDecl()) {
-                            return dyn_cast<CXXRecordDecl>(Template->getTemplatedDecl());
+                            // getTemplatedDecl() is null for TemplateTemplateParmDecl
+                            // (a template template parameter like `Container` in
+                            // `class linestring : Container<Point, Alloc<Point>>`).
+                            // dyn_cast_or_null handles null safely.
+                            return dyn_cast_or_null<CXXRecordDecl>(
+                                Template->getTemplatedDecl());
                         }
                     }
 

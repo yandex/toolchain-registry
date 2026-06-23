@@ -45,12 +45,12 @@ namespace clang {
                             return true;
                         }
 
-                        pushScope();
+                        pushScope(); ClassScopeDepth_++;
                         addBaseClassMembers(Declaration);
-                        pushScope();
+                        pushScope(); ClassScopeDepth_++;
                         bool Result = RecursiveASTVisitor<ShadowingVisitor>::TraverseCXXRecordDecl(Declaration);
-                        popScope();
-                        popScope();
+                        popScope(); ClassScopeDepth_--;
+                        popScope(); ClassScopeDepth_--;
                         return Result;
                     }
 
@@ -182,6 +182,20 @@ namespace clang {
                             return true;
                         }
 
+                        // A non-member function (e.g. an inline friend) defined
+                        // inside a class body does NOT have class members in
+                        // scope — unqualified lookup never searches the enclosing
+                        // class for non-members.  Temporarily hide the
+                        // class-context scopes so that parameters/locals of this
+                        // function are not incorrectly flagged as shadowing them.
+                        SmallVector<llvm::StringMap<const NamedDecl*>, 4> HiddenClassScopes;
+                        if (!isa<CXXMethodDecl>(Declaration) && ClassScopeDepth_ > 0) {
+                            for (size_t i = 0; i < ClassScopeDepth_; ++i) {
+                                HiddenClassScopes.push_back(std::move(Scopes_.back()));
+                                Scopes_.pop_back();
+                            }
+                        }
+
                         bool AddedClassScope = false;
                         if (const auto* Method = dyn_cast<CXXMethodDecl>(Declaration)) {
                             if (const CXXRecordDecl* Parent = Method->getParent()) {
@@ -204,6 +218,12 @@ namespace clang {
                         popScope();
                         if (AddedClassScope) {
                             popScope();
+                        }
+
+                        // Restore hidden class scopes in original order.
+                        while (!HiddenClassScopes.empty()) {
+                            Scopes_.push_back(std::move(HiddenClassScopes.back()));
+                            HiddenClassScopes.pop_back();
                         }
                         return true;
                     }
@@ -277,6 +297,10 @@ namespace clang {
                     ASTContext& Context_;
                     const SourceManager& SourceMgr_;
                     SmallVector<llvm::StringMap<const NamedDecl*>, 16> Scopes_;
+                    // Number of scopes pushed by TraverseCXXRecordDecl that are
+                    // currently on the stack.  Used to hide class-context scopes
+                    // when traversing non-member (friend/free) functions.
+                    size_t ClassScopeDepth_ = 0;
                     const Stmt* FunctionBody_ = nullptr;
                 };
 

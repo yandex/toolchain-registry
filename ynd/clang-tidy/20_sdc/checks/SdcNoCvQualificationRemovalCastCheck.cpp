@@ -39,6 +39,14 @@ namespace clang {
                 if (From->isDependentType() || To->isDependentType()) {
                     return;
                 }
+                // 'auto' whose deduction is still pending (e.g. `const auto`
+                // in a template where the initialiser is type-dependent)
+                // appears as an AutoType, not a dependent type.  Skip it —
+                // the check will run again on the concrete instantiation.
+                if (isa<AutoType>(From.getTypePtr()) ||
+                    isa<AutoType>(To.getTypePtr())) {
+                    return;
+                }
                 auto Removal = cast_utils::findCvRemoval(From, To);
                 if (!Removal) {
                     return;
@@ -49,9 +57,9 @@ namespace clang {
                                  : Removal->LostConst ? "const"
                                                       : "volatile";
                 diag(Cast->getBeginLoc(),
-                     "cast removes '%0' qualifier from %1; casts shall not "
-                     "remove const or volatile qualification")
-                    << Qual << Removal->QualifiedType;
+                     "cast from %0 to %1 removes '%2' qualifier; casts shall "
+                     "not remove const or volatile qualification")
+                    << From << To << Qual;
             }
 
         } // namespace sdc
