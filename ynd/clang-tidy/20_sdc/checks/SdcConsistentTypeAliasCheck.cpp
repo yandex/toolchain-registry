@@ -107,6 +107,10 @@ namespace clang {
                     unsigned NumParams = First->getNumParams();
                     for (const FunctionDecl* R : First->redecls()) {
                         if (R == First) continue;
+                        // Skip compiler-generated redeclarations (e.g. implicit
+                        // template instantiations) — they have no written source
+                        // location and would produce a locationless diagnostic.
+                        if (R->isImplicit()) continue;
                         if (R->getNumParams() != NumParams) {
                             // Mismatch in arity means this is actually a
                             // different overload that happens to share the
@@ -115,7 +119,16 @@ namespace clang {
                             continue;
                         }
                         if (!sameAlias(AnchorRet, R->getReturnType(), PP)) {
-                            diag(R->getReturnTypeSourceRange().getBegin(),
+                            SourceLocation RetLoc =
+                                R->getReturnTypeSourceRange().getBegin();
+                            // Guard against invalid source locations (e.g. for
+                            // compiler-synthesised redeclarations that slipped
+                            // through the isImplicit() check).  Fall back to the
+                            // function-name location so the diagnostic is at
+                            // least anchored to a visible line.
+                            if (!RetLoc.isValid()) RetLoc = R->getLocation();
+                            if (!RetLoc.isValid()) continue;
+                            diag(RetLoc,
                                  "return type of %0 is redeclared as %1; the "
                                  "first declaration used %2")
                                 << R << R->getReturnType() << AnchorRet;

@@ -172,33 +172,45 @@ namespace clang {
                         }
                     }
 
-                    // When the VarDecl name is inside a macro body, the spelling
-                    // range [BeginLoc, EndLoc] can span from the macro definition
-                    // to the expanded argument in user code.  That huge text window
-                    // may accidentally contain "(name)" from a completely unrelated
-                    // expression in the macro body (e.g. a function call using the
-                    // same identifier).  Skip the range search for macro-body VarDecls
-                    // and only check the expansion call-site instead.
+                    // For macro-body VarDecls, check the expansion call-site.
                     if (Loc.isMacroID()) {
                         return rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts);
                     }
-                    // Limit the search range to the declarator only — not the
-                    // full initializer.  Variable->getEndLoc() can span an
-                    // entire lambda body, and '(name)' might appear there as a
-                    // legitimate function-call argument, producing a false positive.
-                    // We only need a window that covers the type specifiers plus
-                    // the variable name and the one character after it (the ')' if
-                    // the name is paren-wrapped).
+
+                    // For non-macro declarations: directly inspect the source
+                    // buffer characters immediately adjacent to the name token.
+                    //
+                    // All previous range-based approaches accumulated fragile
+                    // heuristics (BeginLoc spanning macro definitions, EndLoc
+                    // spanning lambda bodies, macro-attribute 256-byte guards…).
+                    // The fundamental question is simply:
+                    //   is '(' the token before the name, and ')' after it?
+                    // Reading from the file buffer answers this in O(name.size())
+                    // with no range boundary issues at all.
                     {
-                        SourceLocation SpellingNameLoc = SM.getSpellingLoc(Loc);
-                        // +2: one byte for potential ')' directly after the name,
-                        // one byte to make the exclusive end include it.
-                        SourceLocation NarrowEnd = SpellingNameLoc.getLocWithOffset(
-                            static_cast<int>(Name.size()) + 2);
-                        CharSourceRange NarrowRange = CharSourceRange::getCharRange(
-                            SM.getSpellingLoc(Variable->getBeginLoc()), NarrowEnd);
-                        StringRef Source = Lexer::getSourceText(NarrowRange, SM, LangOpts);
-                        return !Source.empty() && sourceHasParenWrappedName(Source, Name);
+                        SourceLocation SpellingLoc = SM.getSpellingLoc(Loc);
+                        if (!SpellingLoc.isValid()) return false;
+
+                        bool Invalid = false;
+                        StringRef Buf = SM.getBufferData(SM.getFileID(SpellingLoc), &Invalid);
+                        if (Invalid || Buf.empty()) return false;
+
+                        unsigned NameOff = SM.getFileOffset(SpellingLoc);
+                        if (NameOff + Name.size() > Buf.size()) return false;
+
+                        // Find the non-whitespace character immediately before the name.
+                        int Before = static_cast<int>(NameOff) - 1;
+                        while (Before >= 0 &&
+                               std::isspace(static_cast<unsigned char>(Buf[Before])))
+                            --Before;
+                        if (Before < 0 || Buf[Before] != '(') return false;
+
+                        // Find the non-whitespace character immediately after the name.
+                        size_t After = NameOff + Name.size();
+                        while (After < Buf.size() &&
+                               std::isspace(static_cast<unsigned char>(Buf[After])))
+                            ++After;
+                        return After < Buf.size() && Buf[After] == ')';
                     }
                 }
 
