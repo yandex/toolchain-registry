@@ -70,11 +70,13 @@ void SdcInitializerListOnlyConstructorCheck::check(
     const auto* RD = Result.Nodes.getNodeAs<CXXRecordDecl>("cls");
     if (!RD) return;
 
-    // Skip template patterns: constructors in uninstantiated templates may have
-    // dependent parameter types that cannot be resolved yet.
-    if (RD->getDescribedClassTemplate()) return;
-    // Skip instantiations to avoid duplicate diagnostics.
-    if (RD->getTemplateSpecializationKind() != TSK_Undeclared) return;
+    // Check class-template patterns as well: an initializer-list constructor
+    // is syntactically identifiable even with dependent element type
+    // (std::initializer_list<T>). Skip implicit instantiations to avoid
+    // duplicate diagnostics; explicit specializations are checked as normal
+    // class definitions by Clang's AST representation.
+    if (!RD->getDescribedClassTemplate() &&
+        RD->getTemplateSpecializationKind() != TSK_Undeclared) return;
 
     ASTContext& Ctx = *Result.Context;
 

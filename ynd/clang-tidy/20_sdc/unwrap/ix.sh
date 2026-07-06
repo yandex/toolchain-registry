@@ -177,6 +177,8 @@ SdcNoOffsetofCheck.cpp
 SdcNoOffsetofCheck.h
 SdcNoReinterpretCastCheck.cpp
 SdcNoReinterpretCastCheck.h
+SdcNoReturnStackAddressCheck.cpp
+SdcNoReturnStackAddressCheck.h
 SdcNoSetlocaleGlobalCheck.cpp
 SdcNoSetlocaleGlobalCheck.h
 SdcNoStackAddressAssignCheck.cpp

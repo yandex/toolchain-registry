@@ -32,7 +32,7 @@ static bool isDirectiveName(StringRef Name) {
 // Such tokens look like preprocessing directives and are non-compliant inside
 // macro argument lists.
 static void checkRawSource(SdcMacroDirectiveInArgCheck& Check,
-                             SourceLocation InvokeLoc,
+                             StringRef MacroName,
                              SourceRange Range,
                              const SourceManager& SM) {
     // Only scan file-level (non-macro) source.
@@ -102,8 +102,8 @@ static void checkRawSource(SdcMacroDirectiveInArgCheck& Check,
                     Check.diag(Loc,
                                 "token '#%0' resembles a preprocessing "
                                 "directive and shall not appear within "
-                                "a macro argument")
-                        << Directive;
+                                "a macro argument of '%1'")
+                        << Directive << MacroName;
                 }
             }
         }
@@ -129,7 +129,7 @@ public:
         if (!Args) return; // Object-like macro
         if (::sdc::pp::isSystemHeader(MacroNameTok.getLocation(), SM)) return;
 
-        checkRawSource(Check, MacroNameTok.getLocation(), Range, SM);
+        checkRawSource(Check, MacroNameTok.getIdentifierInfo()->getName(), Range, SM);
     }
 };
 

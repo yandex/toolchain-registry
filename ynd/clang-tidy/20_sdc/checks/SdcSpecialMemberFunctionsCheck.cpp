@@ -55,8 +55,7 @@ namespace clang {
                 checkCustomizedCopyMoveRequiresCustomizedDtor(Info);
                 checkCustomizedDestructorIsNonEmpty(Info);
                 checkManagerTypeRequirements(Info);
-                // Note: File location checking is not needed - ODR already enforces
-                // that all definitions must be in a single translation unit
+                checkFileLocations(Info);
 
                 // Check immediate inheritance requirement: public virtual dtor must be unmovable
                 if (Info.DtorDecl && Info.DtorDecl->getAccess() == AS_public &&
@@ -364,17 +363,12 @@ namespace clang {
                     return ClassCategory::MoveOnly;
                 }
 
-                // Copy-enabled: copy-constructible and move-constructible
-                // Can optionally be copy-assignable and move-assignable
+                // Copy-enabled: copy-constructible and move-constructible.
+                // Assignment is optional, but if present the class shall be
+                // both copy-assignable and move-assignable; copy-only
+                // assignability is an invalid category per the rule text.
                 if (copyCtor && moveCtor) {
-                    // Must have consistent assignment operators
-                    // Either both assignable or both not assignable
-                    // OR copy-assignable only (without move-assignable)
                     if ((copyAssign && moveAssign) || (!copyAssign && !moveAssign)) {
-                        return ClassCategory::CopyEnabled;
-                    }
-                    // Copy-assignable but not move-assignable is also valid
-                    if (copyAssign && !moveAssign) {
                         return ClassCategory::CopyEnabled;
                     }
                 }
@@ -687,14 +681,15 @@ namespace clang {
                         }
                     }
 
-                    if (hasProtectedDestructor(Info)) {
+                    if (hasProtectedDestructor(Info) &&
+                        !Info.DtorDecl->isVirtual()) {
                         satisfiesRequirement2 = true;
                     }
 
                     if (!satisfiesRequirement1 && !satisfiesRequirement2) {
                         diag(Info.ClassDecl->getLocation(),
                              "class used as public base must have either a public virtual destructor "
-                             "(and be unmovable) or a protected destructor");
+                             "(and be unmovable) or a protected non-virtual destructor");
                     }
                 }
 
@@ -742,7 +737,8 @@ namespace clang {
                     return false;
                 }
 
-                return Info.DtorDecl->getAccess() == AS_protected;
+                return Info.DtorDecl->getAccess() == AS_protected &&
+                       !Info.DtorDecl->isVirtual();
             }
 
             bool SdcSpecialMemberFunctionsCheck::isOutOfClassDefinition(

@@ -17,11 +17,13 @@ SdcErrnoZeroAssignCheck::SdcErrnoZeroAssignCheck(StringRef Name,
     : ClangTidyCheck(Name, Context) {}
 
 void SdcErrnoZeroAssignCheck::registerMatchers(MatchFinder* Finder) {
-    // Match simple assignment operators (not +=, -=, etc.) that are not in
-    // system headers — errno assignments inside the stdlib are permitted.
+    // Match all assignment operators that are not in system headers — errno
+    // assignments inside the stdlib are permitted.  Compound assignments are
+    // not the literal-token assignment required by the rule, so they are
+    // diagnosed unconditionally once the LHS is errno.
     Finder->addMatcher(
         binaryOperator(
-            hasOperatorName("="),
+            isAssignmentOperator(),
             unless(isExpansionInSystemHeader())
         ).bind("assign"),
         this
@@ -49,6 +51,13 @@ void SdcErrnoZeroAssignCheck::check(const MatchFinder::MatchResult& Result) {
     if (!isErrnoExpr(BO->getLHS(), *Result.SourceManager,
                      Result.Context->getLangOpts()))
         return;
+
+    if (BO->getOpcode() != BO_Assign) {
+        diag(BO->getOperatorLoc(),
+             "compound assignment to 'errno' is not allowed; only the "
+             "literal value zero may be assigned to 'errno'");
+        return;
+    }
 
     // RHS must be the integer literal 0 (after stripping implicit casts and
     // parens).  Macros that expand to the token '0' (e.g. #define OK 0) are

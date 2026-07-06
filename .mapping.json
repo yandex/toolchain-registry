@@ -253,6 +253,8 @@
   "ynd/clang-tidy/20_sdc/checks/SdcNoOffsetofCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoOffsetofCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcNoReinterpretCastCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoReinterpretCastCheck.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcNoReinterpretCastCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoReinterpretCastCheck.h",
+  "ynd/clang-tidy/20_sdc/checks/SdcNoReturnStackAddressCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoReturnStackAddressCheck.cpp",
+  "ynd/clang-tidy/20_sdc/checks/SdcNoReturnStackAddressCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoReturnStackAddressCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcNoSetlocaleGlobalCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoSetlocaleGlobalCheck.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcNoSetlocaleGlobalCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoSetlocaleGlobalCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcNoStackAddressAssignCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcNoStackAddressAssignCheck.cpp",

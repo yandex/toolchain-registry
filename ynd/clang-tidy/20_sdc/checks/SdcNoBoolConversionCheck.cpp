@@ -174,11 +174,49 @@ namespace clang {
                 QualType DstTy = CE->getType()
                                      .getCanonicalType()
                                      .getUnqualifiedType();
+
+                // User-defined class -> bool conversions are represented as
+                // a CastExpr whose subexpression is already a
+                // CXXMemberCallExpr returning bool.  If we only compare the
+                // cast's source/destination types below, both sides appear to
+                // be bool and implicit operator bool() is missed.  Inspect the
+                // conversion function before the same-type fast path.
+                if (DstTy->isBooleanType() &&
+                    CE->getCastKind() == CK_UserDefinedConversion) {
+                    const auto* Call = dyn_cast<CXXMemberCallExpr>(
+                        CE->getSubExpr()->IgnoreParenImpCasts());
+                    const auto* Conv = Call
+                        ? dyn_cast_or_null<CXXConversionDecl>(Call->getMethodDecl())
+                        : nullptr;
+                    if (Conv && Conv->getConversionType()->isBooleanType()) {
+                        if (Conv->isExplicit()) {
+                            return; // explicit operator bool is permitted
+                        }
+
+                        QualType ObjTy;
+                        if (const Expr* Obj = Call->getImplicitObjectArgument()) {
+                            ObjTy = Obj->getType();
+                        }
+                        diag(CE->getExprLoc(),
+                             "conversion from %0 to 'bool' using non-explicit "
+                             "operator bool is not allowed")
+                            << (ObjTy.isNull() ? Conv->getThisType() : ObjTy);
+                        return;
+                    }
+                }
+
                 QualType SrcTy = CE->getSubExpr()
                                      ->getType()
                                      .getCanonicalType()
                                      .getUnqualifiedType();
                 if (SrcTy == DstTy) return;
+
+                // Skip casts in dependent (uninstantiated template) contexts.
+                // The actual type may be valid once the template is instantiated,
+                // and flagging at the template definition produces false positives
+                // like "conversion from '<dependent type>' to 'bool'".
+                if (SrcTy->isDependentType() || DstTy->isDependentType())
+                    return;
 
                 const bool SrcBool = SrcTy->isBooleanType();
                 const bool DstBool = DstTy->isBooleanType();

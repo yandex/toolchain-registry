@@ -20,9 +20,17 @@ namespace clang {
                            (cast_utils::isObjectPointer(Type) || cast_utils::isVoidPointer(Type));
                 }
 
-                bool isIntegralOrDependentDestination(QualType Type) {
+                bool isIntegralDestination(QualType Type) {
                     QualType Canonical = cast_utils::canonicalUnqualified(Type);
-                    return Canonical->isIntegerType() || Canonical->isDependentType();
+                    // Only flag concrete integral destinations.  Dependent types
+                    // (template parameters, expressions involving them) are skipped
+                    // here — each concrete instantiation is checked separately by
+                    // clang-tidy with fully resolved types, so no violations are
+                    // missed.  Trying to warn on dependent types causes FPs: e.g.
+                    // `static_cast<T*>(void_ptr)` has a dependent destination that
+                    // can never be integral (it's always a pointer), but the old
+                    // isDependentType() path couldn't see that.
+                    return Canonical->isIntegerType();
                 }
 
                 std::string normalizedWrittenType(const ExplicitCastExpr* Cast,
@@ -78,7 +86,7 @@ namespace clang {
 
                 QualType From = Cast->getSubExpr()->IgnoreParenImpCasts()->getType();
                 QualType To = Cast->getTypeAsWritten();
-                if (!isObjectOrVoidPointer(From) || !isIntegralOrDependentDestination(To)) {
+                if (!isObjectOrVoidPointer(From) || !isIntegralDestination(To)) {
                     return;
                 }
 

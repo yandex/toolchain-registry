@@ -27,11 +27,31 @@ namespace clang {
                 // a programmer actually writes, so it correctly treats
                 // `::std::string` vs `::std::string` as identical while still
                 // flagging genuinely different aliases like `int32_t` vs `int`.
+                //
+                // Strip ElaboratedType wrappers before comparison.  When a
+                // class-member typedef/alias is written with its class qualifier
+                // in an out-of-class method definition (e.g. `Projector::CloudPtr`
+                // in the .cpp vs `CloudPtr` in the .h), Clang wraps the same
+                // underlying TypeAliasType in an ElaboratedType to carry the
+                // qualifier.  That makes the two QualTypes unequal even though
+                // they refer to the exact same alias declaration.
+                QualType stripElaborated(QualType Q) {
+                    Q = Q.getUnqualifiedType();
+                    while (const auto* ET =
+                               dyn_cast<ElaboratedType>(Q.getTypePtr())) {
+                        Q = ET->getNamedType().getUnqualifiedType();
+                    }
+                    return Q;
+                }
+
                 bool sameAlias(QualType A, QualType B, const PrintingPolicy& PP) {
                     if (A.getUnqualifiedType() == B.getUnqualifiedType())
                         return true;
-                    return A.getUnqualifiedType().getAsString(PP) ==
-                           B.getUnqualifiedType().getAsString(PP);
+                    // Strip class-qualification wrappers and retry.
+                    QualType SA = stripElaborated(A);
+                    QualType SB = stripElaborated(B);
+                    if (SA == SB) return true;
+                    return SA.getAsString(PP) == SB.getAsString(PP);
                 }
 
                 StringRef kindNoun(const NamedDecl* D) {
