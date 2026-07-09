@@ -13,7 +13,7 @@ https://github.com/bazelbuild/buildtools/archive/refs/tags/v{{self.version().str
 {% endblock %}
 
 {% block go_sha %}
-f3b800e9f6ca60bdef3709440f393348f7c18a29f30814288a7326285c80aab9
+fe8a56c70734e09e0f894f0cd54906d1004f36ebb745fd8e778395f8464c57ec
 {% endblock %}
 
 {% block go_bins %}
