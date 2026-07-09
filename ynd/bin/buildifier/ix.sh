@@ -24,6 +24,10 @@ buildifier
 {% endif %}
 {% endblock %}
 
+{% block go_refine %}
+find . -type d -path '*/warn/docs' -exec rm -rf {} + || true
+{% endblock %}
+
 {% block build %}
 {% if mingw32 %}
 GOOS=windows
