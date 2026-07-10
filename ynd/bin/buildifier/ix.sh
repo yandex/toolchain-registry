@@ -39,7 +39,7 @@ GOOS=windows
 {% if mingw32 %}
 -o buildifier.exe ./buildifier
 {% else %}
--o buildifier ./buildifier
+-o buildifier.bin ./buildifier
 {% endif %}
 {% endblock %}
 
@@ -49,5 +49,9 @@ bin/go/lang/23
 
 {% block install %}
 mkdir -p ${out}/bin
-cp {{self.go_bins().strip()}} ${out}/bin
+{% if mingw32 %}
+cp buildifier.exe ${out}/bin/buildifier.exe
+{% else %}
+cp buildifier.bin ${out}/bin/buildifier
+{% endif %}
 {% endblock %}
