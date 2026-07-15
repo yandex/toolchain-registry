@@ -13,6 +13,10 @@ https://github.com/facebook/pyrefly/archive/refs/tags/{{self.version().strip()}}
 {% endblock %}
 
 {% block cargo_sha %}
+a6d67b4f672443ddb66f16447e277c0b1befbec50594a4b7a34f7bfa3e3b4662
+{% endblock %}
+
+{% block cargo_fetch_sha %}
 b0de811112349a53422532ab393bdd52c7a3a97720c5bc498c1a314e6b2406bd
 {% endblock %}
 
