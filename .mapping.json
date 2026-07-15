@@ -91,6 +91,8 @@
   "ynd/bin/llvm-profdata/19/ix.sh":"toolchains/ynd/bin/llvm-profdata/19/ix.sh",
   "ynd/bin/llvm-profdata/20/ix.sh":"toolchains/ynd/bin/llvm-profdata/20/ix.sh",
   "ynd/bin/llvm-profdata/ix.sh":"toolchains/ynd/bin/llvm-profdata/ix.sh",
+  "ynd/bin/pyrefly/ix.sh":"toolchains/ynd/bin/pyrefly/ix.sh",
+  "ynd/bin/pyrefly/unwrap/ix.sh":"toolchains/ynd/bin/pyrefly/unwrap/ix.sh",
   "ynd/bin/ruff/ix.sh":"toolchains/ynd/bin/ruff/ix.sh",
   "ynd/bin/ruff/unwrap/ix.sh":"toolchains/ynd/bin/ruff/unwrap/ix.sh",
   "ynd/bin/yaml2json/ix.sh":"toolchains/ynd/bin/yaml2json/ix.sh",
