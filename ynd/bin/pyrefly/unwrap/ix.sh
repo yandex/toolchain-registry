@@ -13,7 +13,7 @@ https://github.com/facebook/pyrefly/archive/refs/tags/{{self.version().strip()}}
 {% endblock %}
 
 {% block cargo_sha %}
-a6d67b4f672443ddb66f16447e277c0b1befbec50594a4b7a34f7bfa3e3b4662
+1a11de839b3ab10f9d7c55b47352b93dbd5dfceb613836cf2ec81c3b43abfe08
 {% endblock %}
 
 {% block cargo_fetch_sha %}
@@ -35,6 +35,9 @@ v4
 {% block bld_libs %}
 lib/c
 lib/zstd
+{% if darwin %}
+ynd/bin/pyrefly/darwin
+{% endif %}
 {{super()}}
 {% endblock %}
 
@@ -54,6 +57,27 @@ bld/compiler
 ln -s $(which llvm-objcopy) rust-objcopy
 {% endif %}
 {{super()}}
+{% if host.os == 'linux' %}
+# Host proc-macros are Linux shared objects even for Darwin targets.
+# Add the musl search path only to rustcc's freestanding candidate.  Passing it
+# as a linker argument would also expose ELF libraries to the Darwin linker.
+freestanding_clang=$(command -v "${FREESTANDING_CLANG}")
+cat << EOF > rustcc-freestanding-clang
+#!/usr/bin/env sh
+exec "${freestanding_clang}" -L"${LDSO%/bin/*}/lib" "\${@}"
+EOF
+chmod +x rustcc-freestanding-clang
+
+for tool in cc c++; do
+    mv "${tool}" "${tool}.rustcc"
+    cat << EOF > "${tool}"
+#!/usr/bin/env sh
+export FREESTANDING_CLANG="${PWD}/rustcc-freestanding-clang"
+exec "${PWD}/${tool}.rustcc" "\${@}"
+EOF
+    chmod +x "${tool}"
+done
+{% endif %}
 {% endblock %}
 
 {% block cargo_flags %}
@@ -62,5 +86,5 @@ ln -s $(which llvm-objcopy) rust-objcopy
 {% endblock %}
 
 {% block cargo_tool %}
-bld/rust/88
+bld/rust/96
 {% endblock %}
