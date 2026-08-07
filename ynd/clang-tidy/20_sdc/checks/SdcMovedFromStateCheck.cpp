@@ -74,12 +74,14 @@ static const VarDecl* getMovedVarDecl(const Expr* MoveExpr) {
     return dyn_cast<VarDecl>(DRE->getDecl());
 }
 
-// Returns true if VD has type std::unique_ptr<...> (exempt from rule).
-static bool isUniquePtr(const VarDecl* VD) {
+// Standard smart pointers have a specified empty/null state after move and
+// may be queried or moved again safely.
+static bool hasSpecifiedMovedFromState(const VarDecl* VD) {
     QualType T = VD->getType().getCanonicalType();
     const auto* RD = T->getAsCXXRecordDecl();
     if (!RD) return false;
-    if (RD->getName() != "unique_ptr") return false;
+    if (RD->getName() != "unique_ptr" && RD->getName() != "shared_ptr")
+        return false;
     const auto* NS = dyn_cast<NamespaceDecl>(RD->getDeclContext());
     return NS && NS->isStdNamespace();
 }
@@ -92,6 +94,10 @@ class MovedFromVisitor : public RecursiveASTVisitor<MovedFromVisitor> {
 
     // VD → source location of the move that put it in the moved-from state.
     llvm::DenseMap<const VarDecl*, SourceLocation> MovedFrom;
+
+    // Loop re-traversal deliberately visits some AST nodes more than once.
+    // Keep diagnostics unique by spelling location.
+    llvm::DenseSet<unsigned> ReportedUses;
 
     // Guards against recursive re-entry while processing the argument of a move.
     bool InMoveArg = false;
@@ -111,7 +117,9 @@ public:
     bool TraverseCallExpr(CallExpr* CE) {
         if (isStdMoveOrForward(CE)) {
             const VarDecl* VD = getMovedVarDecl(CE);
-            if (VD && !isUniquePtr(VD)) {
+            if (VD && !hasSpecifiedMovedFromState(VD)) {
+                if (MovedFrom.count(VD) != 0 && CE->getNumArgs() != 0)
+                    checkUse(CE->getArg(0));
                 MovedFrom[VD] = CE->getBeginLoc();
                 // Do NOT recurse into the argument — we don't want to
                 // flag the DeclRefExpr inside the move call as a "use".
@@ -131,7 +139,9 @@ public:
     bool TraverseCXXStaticCastExpr(CXXStaticCastExpr* SC) {
         if (isRValueCast(SC)) {
             const VarDecl* VD = getMovedVarDecl(SC);
-            if (VD && !isUniquePtr(VD)) {
+            if (VD && !hasSpecifiedMovedFromState(VD)) {
+                if (MovedFrom.count(VD) != 0)
+                    checkUse(SC->getSubExpr());
                 MovedFrom[VD] = SC->getBeginLoc();
                 return true; // Don't recurse into operand
             }
@@ -143,6 +153,47 @@ public:
     bool TraverseCXXMemberCallExpr(CXXMemberCallExpr* MCE) {
         checkUse(MCE->getImplicitObjectArgument());
         return RecursiveASTVisitor::TraverseCXXMemberCallExpr(MCE);
+    }
+
+    // RecursiveASTVisitor dispatches overloaded operators through this
+    // method rather than TraverseCallExpr.  Check operands explicitly so
+    // stream insertion and other free operators count as uses.
+    bool TraverseCXXOperatorCallExpr(CXXOperatorCallExpr* OC) {
+        if (OC->getOperator() != OO_Equal)
+            for (const Expr* Arg : OC->arguments()) checkUse(Arg);
+        return RecursiveASTVisitor::TraverseCXXOperatorCallExpr(OC);
+    }
+
+    // A value moved at the end of a loop body is still moved-from at the
+    // beginning of the next iteration.  A second traversal is a bounded,
+    // conservative back-edge approximation suitable for this STU check.
+    bool TraverseForStmt(ForStmt* S) {
+        if (!RecursiveASTVisitor::TraverseForStmt(S)) return false;
+        return TraverseStmt(S->getBody());
+    }
+
+    bool TraverseCXXForRangeStmt(CXXForRangeStmt* S) {
+        if (!RecursiveASTVisitor::TraverseCXXForRangeStmt(S)) return false;
+        return TraverseStmt(S->getBody());
+    }
+
+    bool TraverseWhileStmt(WhileStmt* S) {
+        if (!RecursiveASTVisitor::TraverseWhileStmt(S)) return false;
+        return TraverseStmt(S->getBody());
+    }
+
+    bool TraverseDoStmt(DoStmt* S) {
+        if (!RecursiveASTVisitor::TraverseDoStmt(S)) return false;
+        return TraverseStmt(S->getBody());
+    }
+
+    // Each execution of a declaration creates a fresh object.  This is
+    // especially important during the bounded second traversal of loop
+    // bodies: a variable declared inside the body is not moved-from merely
+    // because the previous iteration's distinct object was moved.
+    bool VisitVarDecl(VarDecl* VD) {
+        MovedFrom.erase(VD);
+        return true;
     }
 
     // ── Binary operator: assignment clears moved-from state ──────────────────
@@ -176,7 +227,7 @@ public:
             // Direct variable bound to move ctor (e.g. T(rval_var)):
             if (const auto* DRE = dyn_cast<DeclRefExpr>(Arg)) {
                 if (const auto* VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-                    if (!isUniquePtr(VD)) {
+                    if (!hasSpecifiedMovedFromState(VD)) {
                         MovedFrom[VD] = CE->getBeginLoc();
                         return true;
                     }
@@ -218,7 +269,11 @@ private:
         auto It = MovedFrom.find(VD);
         if (It == MovedFrom.end()) return;
 
-        Check.diag(DRE->getBeginLoc(),
+        SourceLocation UseLoc = Ctx.getSourceManager().getSpellingLoc(
+            DRE->getBeginLoc());
+        if (!ReportedUses.insert(UseLoc.getRawEncoding()).second) return;
+
+        Check.diag(UseLoc,
                    "%0 used while in a potentially moved-from state "
                    "(moved from here)")
             << VD;

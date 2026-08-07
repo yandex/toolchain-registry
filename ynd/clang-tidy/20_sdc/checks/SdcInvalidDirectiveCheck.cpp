@@ -29,6 +29,21 @@ static bool isValidDirectiveName(StringRef Name) {
            Name == "line"    || Name == "error"    || Name == "pragma";
 }
 
+// Translation phase 2 removes a backslash-newline pair before preprocessing
+// directives are recognized.  Therefore a physical line following such a
+// splice is part of the preceding logical line and cannot start a directive.
+static bool isLineSplicedFromPrevious(const char* FileStart,
+                                      const char* LineStart) {
+    if (LineStart == FileStart || *(LineStart - 1) != '\n') return false;
+
+    const char* BeforeNewline = LineStart - 1;
+    // SourceManager buffers can retain CRLF line endings.
+    if (BeforeNewline != FileStart && *(BeforeNewline - 1) == '\r') {
+        --BeforeNewline;
+    }
+    return BeforeNewline != FileStart && *(BeforeNewline - 1) == '\\';
+}
+
 class InvalidDirectiveCallbacks : public PPCallbacks {
     SdcInvalidDirectiveCheck& Check;
     const SourceManager& SM;
@@ -54,10 +69,21 @@ public:
 
         FileID FID = SM.getFileID(Begin);
         unsigned StartOffset = SM.getFileOffset(Begin);
+        const char* FileStart = SM.getBufferData(FID, &Invalid).data();
+        if (Invalid) return;
 
         // Scan line by line.
         const char* LineStart = BufStart;
         while (LineStart < BufEnd) {
+            // A leading '#' on a continuation line belongs to the preceding
+            // logical line (for example, '#param' stringification in a
+            // multi-line #define), not to a preprocessing directive.
+            if (isLineSplicedFromPrevious(FileStart, LineStart)) {
+                while (LineStart < BufEnd && *LineStart != '\n') ++LineStart;
+                if (LineStart < BufEnd) ++LineStart;
+                continue;
+            }
+
             const char* P = LineStart;
 
             // Skip horizontal whitespace at line start.

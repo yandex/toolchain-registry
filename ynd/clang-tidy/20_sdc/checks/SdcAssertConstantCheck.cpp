@@ -97,6 +97,23 @@ static bool isExceptionAst(const Expr* E) {
     return false;
 }
 
+// Clang can fold a call through a non-constexpr variable holding an empty
+// lambda because the object's state is irrelevant.  It is nevertheless a
+// runtime function invocation for this rule, not a constant-expression named
+// in source.  A constexpr lambda variable remains eligible.
+static bool isCallThroughRuntimeLambdaObject(const Expr* E) {
+    E = E->IgnoreParenImpCasts();
+    const auto* Call = dyn_cast<CXXOperatorCallExpr>(E);
+    if (!Call || Call->getOperator() != OO_Call || Call->getNumArgs() == 0)
+        return false;
+    const Expr* Object = Call->getArg(0)->IgnoreParenImpCasts();
+    const auto* Ref = dyn_cast<DeclRefExpr>(Object);
+    const auto* VD = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    const CXXRecordDecl* RD =
+        VD ? VD->getType()->getAsCXXRecordDecl() : nullptr;
+    return VD && !VD->isConstexpr() && RD && RD->isLambda();
+}
+
 // ─── PP callback ───────────────────────────────────────────────────────────
 
 class AssertCallbacks : public PPCallbacks {
@@ -203,6 +220,7 @@ void SdcAssertConstantCheck::check(const MatchFinder::MatchResult& Result) {
 
     if (isExceptionAst(E)) return;
     if (E->isValueDependent() || E->isTypeDependent()) return;
+    if (isCallThroughRuntimeLambdaObject(E)) return;
 
     if (E->isCXX11ConstantExpr(*Result.Context))
         diag(AssertLoc, "assert shall not be used with a constant expression");

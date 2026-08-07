@@ -69,6 +69,37 @@ static bool isUnaryContext(tok::TokenKind K) {
     }
 }
 
+static bool isNamedCastKeyword(tok::TokenKind K) {
+    switch (K) {
+    case tok::kw_const_cast:
+    case tok::kw_dynamic_cast:
+    case tok::kw_reinterpret_cast:
+    case tok::kw_static_cast:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool hasMatchingTemplateClose(const std::vector<Token>& Toks,
+                                     unsigned Start) {
+    unsigned Depth = 0;
+    for (unsigned I = Start; I < Toks.size(); ++I) {
+        tok::TokenKind K = Toks[I].getKind();
+        if (K == tok::less) {
+            ++Depth;
+        } else if (K == tok::greater) {
+            if (--Depth == 0) return true;
+        } else if (K == tok::greatergreater) {
+            if (Depth <= 2) return true;
+            Depth -= 2;
+        } else if (K == tok::eof || K == tok::semi) {
+            return false;
+        }
+    }
+    return false;
+}
+
 // Returns true if the pre-expanded argument token sequence contains a
 // top-level BINARY critical operator (level <= 0, not the first token,
 // not preceded by a context that implies unary interpretation).
@@ -76,10 +107,61 @@ static bool hasTopLevelCriticalOp(const std::vector<Token>& Toks) {
     int Level = 0;
     tok::TokenKind PrevKind = tok::unknown; // unary context at start
     bool PrevWasOperator = true; // treat start as operator context
+    unsigned NamedCastTypeDepth = 0;
+    unsigned TemplateTypeDepth = 0;
+    bool AtStart = true;
 
-    for (const auto& T : Toks) {
+    for (unsigned I = 0; I < Toks.size(); ++I) {
+        const auto& T = Toks[I];
         if (T.is(tok::eof)) break;
         tok::TokenKind K = T.getKind();
+
+        // Template argument brackets in type spellings are not relational
+        // operators. Require a matching close so `a < b` is not suppressed.
+        if (TemplateTypeDepth != 0) {
+            if (K == tok::less) ++TemplateTypeDepth;
+            else if (K == tok::greater) --TemplateTypeDepth;
+            else if (K == tok::greatergreater)
+                TemplateTypeDepth = TemplateTypeDepth > 2
+                                        ? TemplateTypeDepth - 2
+                                        : 0;
+            PrevWasOperator = isUnaryContext(K);
+            PrevKind = K;
+            AtStart = false;
+            continue;
+        }
+        if (K == tok::less && PrevKind == tok::identifier &&
+            hasMatchingTemplateClose(Toks, I)) {
+            TemplateTypeDepth = 1;
+            PrevWasOperator = true;
+            PrevKind = K;
+            AtStart = false;
+            continue;
+        }
+
+        // The angle brackets in a named cast's type-id are not relational or
+        // shift operators.  The lexer has no parser context, so track the
+        // type-id introduced by the four C++ named-cast keywords explicitly.
+        if (NamedCastTypeDepth != 0) {
+            if (K == tok::less) {
+                ++NamedCastTypeDepth;
+            } else if (K == tok::greater) {
+                --NamedCastTypeDepth;
+            } else if (K == tok::greatergreater) {
+                NamedCastTypeDepth = NamedCastTypeDepth > 2
+                                         ? NamedCastTypeDepth - 2
+                                         : 0;
+            }
+            PrevWasOperator = isUnaryContext(K);
+            PrevKind = K;
+            continue;
+        }
+        if (K == tok::less && isNamedCastKeyword(PrevKind)) {
+            NamedCastTypeDepth = 1;
+            PrevWasOperator = true;
+            PrevKind = K;
+            continue;
+        }
 
         if (K == tok::l_paren) {
             Level++;
@@ -95,6 +177,15 @@ static bool hasTopLevelCriticalOp(const std::vector<Token>& Toks) {
         }
 
         if (Level <= 0 && isCriticalOp(K)) {
+            // A macro parameter used as a declaration initializer may receive
+            // an argument beginning with `=`. The introducer itself cannot
+            // cause precedence loss; operators in the initializer still can.
+            if (K == tok::equal && AtStart) {
+                PrevWasOperator = true;
+                PrevKind = K;
+                AtStart = false;
+                continue;
+            }
             // For potentially-unary operators, skip if in unary context.
             bool potentiallyUnary = (K == tok::plus || K == tok::minus ||
                                      K == tok::amp  || K == tok::star  ||
@@ -105,6 +196,7 @@ static bool hasTopLevelCriticalOp(const std::vector<Token>& Toks) {
 
         PrevWasOperator = isUnaryContext(K);
         PrevKind = K;
+        AtStart = false;
     }
     return false;
 }

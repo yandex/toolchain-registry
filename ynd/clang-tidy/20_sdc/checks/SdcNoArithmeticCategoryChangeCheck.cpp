@@ -34,6 +34,15 @@ namespace clang {
 
                 Cat categorize(QualType T) {
                     T = T.getCanonicalType().getUnqualifiedType();
+                    if (const auto* ET = T->getAs<EnumType>()) {
+                        const EnumDecl* ED = ET->getDecl();
+                        // Only an enumeration with a fixed underlying type is
+                        // a numeric type for this rule.  Use that explicitly
+                        // specified type when deciding whether promotion
+                        // changes signedness/category.
+                        if (!ED->isFixed()) return Cat::Other;
+                        return categorize(ED->getIntegerType());
+                    }
                     if (T->isBooleanType()) return Cat::Bool;
                     if (isCharacterCategory(T)) return Cat::Char;
                     if (T->isUnsignedIntegerType()) return Cat::Unsigned;
@@ -74,34 +83,24 @@ namespace clang {
                     return false;
                 }
 
-                void checkOperand(const Expr* Op, ASTContext& Ctx,
-                                  ClangTidyCheck& Check) {
-                    if (!Op) return;
-                    QualType Final =
-                        Op->getType().getCanonicalType().getUnqualifiedType();
+                bool checkOperand(const Expr* Op, ASTContext& Ctx,
+                                  ClangTidyCheck& Check,
+                                  QualType FinalOverride = QualType()) {
+                    if (!Op) return false;
+                    QualType Final = FinalOverride.isNull()
+                                         ? Op->getType()
+                                         : FinalOverride;
+                    Final = Final.getCanonicalType().getUnqualifiedType();
                     QualType Orig = Op->IgnoreImpCasts()
                                          ->getType()
                                          .getCanonicalType()
                                          .getUnqualifiedType();
-                    if (Orig == Final) return;
-
-                    // Enumeration operands are exempt. An unscoped enum
-                    // undergoes mandatory integral promotion whose target
-                    // (int vs unsigned int) is chosen by which type can
-                    // represent all enumerator values -- NOT by the enum's
-                    // underlying type. So an enum with an unsigned underlying
-                    // type but small non-negative values promotes to int,
-                    // which looks like an unsigned->signed change but is
-                    // value-preserving and applies identically to both sides
-                    // of a same-type comparison (e.g. `status != HTTP_OK`).
-                    // Enumerations are a distinct essential-type category with
-                    // their own rules; this check constrains integer operands.
-                    if (Orig->isEnumeralType()) return;
+                    if (Orig == Final) return false;
 
                     Cat O = categorize(Orig);
                     Cat F = categorize(Final);
-                    if (O == Cat::Other || F == Cat::Other) return;
-                    if (O == F) return;
+                    if (O == Cat::Other || F == Cat::Other) return false;
+                    if (O == F) return false;
 
                     const Expr* Stripped = Op->IgnoreImpCasts();
 
@@ -109,21 +108,22 @@ namespace clang {
                     // constant -> unsigned.
                     if (O == Cat::Signed && F == Cat::Unsigned &&
                         isNonNegativeIntConstant(Stripped, Ctx)) {
-                        return;
+                        return false;
                     }
                     // Exception 2: compile-time integral constant -> floating.
                     if (F == Cat::Floating &&
                         (O == Cat::Signed || O == Cat::Unsigned ||
                          O == Cat::Char || O == Cat::Bool) &&
                         isIntegralConstant(Stripped, Ctx)) {
-                        return;
+                        return false;
                     }
 
                     Check.diag(Op->getExprLoc(),
                                "implicit promotion changes operand from %0 "
                                "(%1) to %2 (%3)")
                         << Op->IgnoreImpCasts()->getType() << catName(O)
-                        << Op->getType() << catName(F);
+                        << Final << catName(F);
+                    return true;
                 }
 
             } // namespace
@@ -191,6 +191,24 @@ namespace clang {
                 ASTContext& Ctx = *Result.Context;
                 if (const auto* BO =
                         Result.Nodes.getNodeAs<BinaryOperator>("bin")) {
+                    // Pointer arithmetic is explicitly outside this rule.
+                    if (BO->getType()->isPointerType()) return;
+
+                    // CompoundAssignOperator does not expose the usual
+                    // arithmetic conversions as ImplicitCastExpr nodes on
+                    // both operands.  Clang records their effective types
+                    // separately.  The RHS still contains its own implicit
+                    // promotion, so check both operands: both may violate the
+                    // rule independently.  In particular, the RHS of a shift
+                    // is promoted independently rather than converted to the
+                    // result type of the compound assignment.
+                    if (const auto* CAO =
+                            dyn_cast<CompoundAssignOperator>(BO)) {
+                        checkOperand(CAO->getLHS(), Ctx, *this,
+                                     CAO->getComputationLHSType());
+                        checkOperand(CAO->getRHS(), Ctx, *this);
+                        return;
+                    }
                     checkOperand(BO->getLHS(), Ctx, *this);
                     checkOperand(BO->getRHS(), Ctx, *this);
                     return;

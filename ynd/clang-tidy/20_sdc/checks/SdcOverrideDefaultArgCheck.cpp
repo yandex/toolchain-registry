@@ -35,13 +35,11 @@ bool hasUsableDefault(const ParmVarDecl* P) {
            !P->hasUninstantiatedDefaultArg();
 }
 
-// Returns true if two default-argument expressions are syntactically identical
-// (after canonical type substitution).  This is the right comparison for this
-// rule: targets inconsistent defaults, not non-constant ones, and two
-// declarations that look different in source are confusing even if they happen
-// to evaluate to the same value.
+// Project qualification decision: compare source-level expression structure,
+// not evaluated values. Different spellings can convey different intent even
+// when they currently evaluate to the same value.
 bool defaultExpressionsEqual(const Expr* A, const Expr* B,
-                              const ASTContext& Ctx) {
+                             const ASTContext& Ctx) {
     llvm::FoldingSetNodeID IdA, IdB;
     A->Profile(IdA, Ctx, /*Canonical=*/true);
     B->Profile(IdB, Ctx, /*Canonical=*/true);
@@ -94,14 +92,20 @@ void SdcOverrideDefaultArgCheck::check(
             // cannot profile it yet; defer to the instantiation.
             if (!hasUsableDefault(BaseParam)) continue;
 
-            // Compare syntactically: the source-visible expression must be the
-            // same in both declarations so that readers see consistent defaults
-            // regardless of which declaration they look at.
-            if (!defaultExpressionsEqual(DerivedParam->getDefaultArg(),
-                                         BaseParam->getDefaultArg(), Ctx)) {
+            const Expr* DerivedDefault = DerivedParam->getDefaultArg();
+            const Expr* BaseDefault = BaseParam->getDefaultArg();
+
+            // Constant-expression validity is a separate normative condition.
+            // The QM decision makes source-level identity an additional,
+            // conservative condition; it does not exempt identical
+            // non-constant expressions.
+            if (!DerivedDefault->isCXX11ConstantExpr(Ctx) ||
+                !BaseDefault->isCXX11ConstantExpr(Ctx) ||
+                !defaultExpressionsEqual(DerivedDefault, BaseDefault, Ctx)) {
                 diag(DerivedParam->getDefaultArgRange().getBegin(),
-                     "default argument of overriding parameter '%0' differs "
-                     "from the base class default")
+                     "default argument of overriding parameter '%0' and its "
+                     "base default shall be constant expressions with "
+                     "identical source structure")
                     << DerivedParam->getName();
                 diag(BaseCanon->getLocation(),
                      "overrides base method declared here",

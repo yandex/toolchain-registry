@@ -6,6 +6,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
@@ -54,9 +55,12 @@ void SdcExceptionUnfriendlyNoexceptCheck::registerMatchers(MatchFinder* Finder) 
         varDecl(
             noSys,
             unless(isConstexpr()),
-            anyOf(hasStaticStorageDuration(), hasThreadStorageDuration()),
-            hasType(cxxRecordDecl())
+            anyOf(hasStaticStorageDuration(), hasThreadStorageDuration())
         ).bind("static_var"), this);
+
+    // Functions passed across a C-language boundary and registered exit or
+    // terminate handlers are also exception-unfriendly contexts.
+    Finder->addMatcher(callExpr(noSys).bind("special_call"), this);
 }
 
 namespace {
@@ -99,6 +103,57 @@ bool inheritsFromStdException(const CXXRecordDecl* RD) {
             if (inheritsFromStdException(BaseRD)) return true;
     }
     return false;
+}
+
+class ThrowingInitializerVisitor
+    : public RecursiveASTVisitor<ThrowingInitializerVisitor> {
+public:
+    const FunctionDecl* Throwing = nullptr;
+
+    bool VisitCXXConstructExpr(CXXConstructExpr* E) {
+        if (!Throwing && !isEffectivelyNoexcept(E->getConstructor()))
+            Throwing = E->getConstructor();
+        return !Throwing;
+    }
+
+    bool VisitCallExpr(CallExpr* E) {
+        if (!Throwing)
+            if (const FunctionDecl* FD = E->getDirectCallee())
+                if (!isEffectivelyNoexcept(FD)) Throwing = FD;
+        return !Throwing;
+    }
+};
+
+class LambdaFinder : public RecursiveASTVisitor<LambdaFinder> {
+public:
+    const LambdaExpr* Found = nullptr;
+    bool VisitLambdaExpr(LambdaExpr* E) {
+        if (!Found) Found = E;
+        return false;
+    }
+};
+
+const FunctionDecl* callableFunction(const Expr* E) {
+    if (!E) return nullptr;
+    E = E->IgnoreParenImpCasts();
+    if (const auto* DRE = dyn_cast<DeclRefExpr>(E))
+        return dyn_cast<FunctionDecl>(DRE->getDecl());
+    if (const auto* LE = dyn_cast<LambdaExpr>(E))
+        return LE->getCallOperator();
+    // Conversion of a captureless lambda to a function pointer introduces a
+    // user-defined conversion call around the LambdaExpr.  Recover the source
+    // lambda so its operator() exception specification is checked.
+    LambdaFinder Finder;
+    Finder.TraverseStmt(const_cast<Expr*>(E));
+    if (Finder.Found) return Finder.Found->getCallOperator();
+    return nullptr;
+}
+
+bool isExitOrTerminateRegistration(const FunctionDecl* FD) {
+    if (!FD) return false;
+    StringRef Name = FD->getName();
+    return Name == "atexit" || Name == "at_quick_exit" ||
+           Name == "set_terminate";
 }
 
 } // namespace
@@ -156,27 +211,40 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         return;
     }
 
-    // Sub-clause 1: non-local static/thread variable with class-type initializer.
+    if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("special_call")) {
+        const FunctionDecl* Callee = Call->getDirectCallee();
+        if (!Callee) return;
+        const bool CBoundary = Callee->isExternC();
+        const bool Registration = isExitOrTerminateRegistration(Callee);
+        if (!CBoundary && !Registration) return;
+
+        for (const Expr* Arg : Call->arguments()) {
+            const FunctionDecl* Callback = callableFunction(Arg);
+            if (!Callback || isEffectivelyNoexcept(Callback)) continue;
+            diag(Arg->getExprLoc(),
+                 "function '%0' passed to %1 shall be noexcept")
+                << Callback->getQualifiedNameAsString()
+                << (Registration ? "an exit or terminate handler"
+                                 : "an extern C function");
+        }
+        return;
+    }
+
+    // Sub-clause 1: static/thread variable initializer.  This includes block
+    // scope statics, calls returning scalar values, and construction inside a
+    // new-expression used by a static pointer initializer.
     if (const auto* VD = Result.Nodes.getNodeAs<VarDecl>("static_var")) {
-        // Only non-local variables (function-scope static is still local).
-        if (VD->isLocalVarDecl()) return;
-
-        // Find the constructor used to initialize this variable.
-        const CXXConstructorDecl* Ctor = nullptr;
-
+        const FunctionDecl* Throwing = nullptr;
         if (const Expr* Init = VD->getInit()) {
-            // Strip any implicit casts or cleanup expressions.
-            const Expr* E = Init->IgnoreImpCasts();
-            if (const auto* EWC = dyn_cast<ExprWithCleanups>(E))
-                E = EWC->getSubExpr()->IgnoreImpCasts();
-            if (const auto* CE = dyn_cast<CXXConstructExpr>(E))
-                Ctor = CE->getConstructor();
+            ThrowingInitializerVisitor V;
+            V.TraverseStmt(const_cast<Expr*>(Init));
+            Throwing = V.Throwing;
         } else {
             // Default-initialization: iterate ctors to find the default one.
             if (const auto* RD = VD->getType()->getAsCXXRecordDecl()) {
                 for (const CXXConstructorDecl* C : RD->ctors()) {
                     if (C->isDefaultConstructor() && !C->isImplicit()) {
-                        Ctor = C;
+                        Throwing = C;
                         break;
                     }
                 }
@@ -184,11 +252,11 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
             }
         }
 
-        if (Ctor && !isEffectivelyNoexcept(Ctor)) {
+        if (Throwing && !isEffectivelyNoexcept(Throwing)) {
             diag(VD->getLocation(),
-                 "constructor used to initialize non-local variable '%0' "
-                 "with static or thread storage duration shall be noexcept")
-                << VD->getName();
+                 "function '%0' used to initialize variable '%1' with static "
+                 "or thread storage duration shall be noexcept")
+                << Throwing->getQualifiedNameAsString() << VD->getName();
         }
         return;
     }

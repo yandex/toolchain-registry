@@ -73,20 +73,27 @@ void SdcVolatileAppropriateCheck::registerMatchers(MatchFinder* Finder) {
 void SdcVolatileAppropriateCheck::check(const MatchFinder::MatchResult& Result) {
     // ── Case 1 + 5: local variable (including structured bindings) ──────────
     if (const auto* VD = Result.Nodes.getNodeAs<VarDecl>("local")) {
+        if (isImplicitInstantiation(VD)) return;
+
+        // The structured-binding prohibition is independent of storage
+        // duration.  Handle it before the ordinary-local-variable filter so a
+        // namespace-scope decomposition cannot escape the rule.
+        if (isa<DecompositionDecl>(VD)) {
+            if (VD->getType().isVolatileQualified())
+                diag(VD->getLocation(),
+                     "structured binding shall not be declared volatile");
+            return;
+        }
+
         if (!VD->isLocalVarDecl()) return;
         // Block-scope extern declarations reference an external global — they
         // are not local variables and volatile on the global is permitted.
         if (VD->hasExternalStorage()) return;
-        if (isImplicitInstantiation(VD)) return;
         if (!VD->getType().isVolatileQualified()) return;
 
-        if (isa<DecompositionDecl>(VD))
-            diag(VD->getLocation(),
-                 "structured binding shall not be declared volatile");
-        else
-            diag(VD->getLocation(),
-                 "local variable %0 shall not be declared volatile")
-                << VD;
+        diag(VD->getLocation(),
+             "local variable %0 shall not be declared volatile")
+            << VD;
         return;
     }
 

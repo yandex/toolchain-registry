@@ -16,35 +16,108 @@ namespace {
 
 // Returns the EnumDecl if the type is an unscoped enum without an explicitly
 // written underlying type (no enum-base in source), otherwise null.
-const EnumDecl* unscopedUnfixed(QualType Q) {
+const EnumDecl* unscopedUnfixed(QualType Q, ASTContext& Ctx) {
     const auto* ET = Q.getCanonicalType()->getAs<EnumType>();
     if (!ET) return nullptr;
     const EnumDecl* ED = ET->getDecl();
     if (ED->isScoped()) return nullptr;
-    if (ED->getIntegerTypeSourceInfo() != nullptr) return nullptr;
+    // Clang may synthesize integer type source information when the values
+    // force a representation.  Inspect the declaration spelling so only an
+    // enum-base actually written with ':' counts as fixed for this rule.
+    const SourceManager& SM = Ctx.getSourceManager();
+    SourceLocation Begin = SM.getSpellingLoc(ED->getBeginLoc());
+    SourceLocation Brace = SM.getSpellingLoc(ED->getBraceRange().getBegin());
+    if (Begin.isValid() && Brace.isValid() &&
+        SM.getFileID(Begin) == SM.getFileID(Brace)) {
+        StringRef Buffer = SM.getBufferData(SM.getFileID(Begin));
+        unsigned B = SM.getFileOffset(Begin);
+        unsigned E = SM.getFileOffset(Brace);
+        if (B < E && E <= Buffer.size() && Buffer.slice(B, E).contains(':'))
+            return nullptr;
+    } else if (ED->getIntegerTypeSourceInfo() != nullptr) {
+        return nullptr;
+    }
     return ED;
 }
 
 // Returns the EnumDecl if the expression, after stripping implicit casts,
 // has an unscoped-unfixed enum type.
-const EnumDecl* unscopedUnfixedOf(const Expr* E) {
+const EnumDecl* unscopedUnfixedOf(const Expr* E, ASTContext& Ctx) {
     if (!E) return nullptr;
-    const Expr* Inner = E->IgnoreImpCasts();
+    const Expr* Inner = E;
+    // IgnoreImpCasts() intentionally preserves some casts marked as part of
+    // an explicit cast.  For this rule we need the written source operand,
+    // including through those LValueToRValue wrappers.
+    while (true) {
+        if (const auto* IC = dyn_cast<ImplicitCastExpr>(Inner)) {
+            Inner = IC->getSubExpr();
+            continue;
+        }
+        if (const auto* PE = dyn_cast<ParenExpr>(Inner)) {
+            Inner = PE->getSubExpr();
+            continue;
+        }
+        if (const auto* CE = dyn_cast<ConstantExpr>(Inner)) {
+            Inner = CE->getSubExpr();
+            continue;
+        }
+        break;
+    }
     QualType T = Inner->getType();
     // ParenListExpr and dependent expressions in template patterns have null or
     // dependent types that crash getCanonicalType() — guard before use.
     if (T.isNull() || T->isDependentType()) return nullptr;
-    return unscopedUnfixed(T);
+    return unscopedUnfixed(T, Ctx);
 }
 
 // Returns true if Target can hold all values of ED without losing information.
 // We compare bit-widths of Target against Clang's chosen underlying type for ED.
 bool isLargeEnough(QualType Target, const EnumDecl* ED, ASTContext& Ctx) {
-    QualType Underlying = ED->getIntegerType();
-    if (Underlying.isNull()) return true;
     Target = Ctx.getCanonicalType(Target);
     if (!Target->isIntegerType()) return false;
-    return Ctx.getTypeSize(Target) >= Ctx.getTypeSize(Underlying);
+
+    const unsigned TargetBits = Ctx.getTypeSize(Target);
+    const bool TargetUnsigned = Target->isUnsignedIntegerType();
+
+    auto EnumeratorsFit = [&]() {
+        for (const EnumConstantDecl* EC : ED->enumerators()) {
+            const llvm::APSInt& V = EC->getInitVal();
+            if (TargetUnsigned) {
+                if (V.isNegative() || V.getActiveBits() > TargetBits)
+                    return false;
+            } else {
+                // APSInt::isSignedIntN interprets an unsigned all-ones bit
+                // pattern as -1.  Preserve the enumerator's mathematical
+                // value: non-negative values need one spare sign bit.
+                if (V.isNegative()) {
+                    if (!V.isSignedIntN(TargetBits)) return false;
+                } else if (V.getActiveBits() >= TargetBits) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    QualType Underlying = ED->getIntegerType();
+    // Some unfixed enums whose range exceeds int do not expose a selected
+    // integer type through this API.  Their enumerator range is still fully
+    // available and is the conservative representability test.
+    if (Underlying.isNull()) return EnumeratorsFit();
+    Underlying = Ctx.getCanonicalType(Underlying);
+    const unsigned SourceBits = Ctx.getTypeSize(Underlying);
+    const bool SourceUnsigned = Underlying->isUnsignedIntegerType();
+
+    if (TargetBits < SourceBits)
+        return false;
+    if (TargetUnsigned == SourceUnsigned)
+        return EnumeratorsFit();
+
+    // For equal-width mixed-sign conversions, inspect the actual enumerator
+    // range.  This preserves ordinary small positive enums (which Clang often
+    // gives an unsigned underlying type) while rejecting, for example, an
+    // enum containing UINT32_MAX converted to int32_t.
+    return EnumeratorsFit();
 }
 
 // Returns true if the expression is inside an unevaluated operand
@@ -131,7 +204,8 @@ void SdcUnscopedEnumNumericUseCheck::check(
     // --- Arithmetic / bitwise / shift / logical / compound-assignment ---
     if (const auto* BO = Result.Nodes.getNodeAs<BinaryOperator>("arith")) {
         if (isUnevaluated(BO, Ctx)) return;
-        if (!unscopedUnfixedOf(BO->getLHS()) && !unscopedUnfixedOf(BO->getRHS()))
+        if (!unscopedUnfixedOf(BO->getLHS(), Ctx) &&
+            !unscopedUnfixedOf(BO->getRHS(), Ctx))
             return;
         diag(BO->getOperatorLoc(),
              "unscoped enumeration with no fixed underlying type shall not be "
@@ -143,7 +217,7 @@ void SdcUnscopedEnumNumericUseCheck::check(
     // --- Unary +  -  ~  ! ---
     if (const auto* UO = Result.Nodes.getNodeAs<UnaryOperator>("unary")) {
         if (isUnevaluated(UO, Ctx)) return;
-        if (!unscopedUnfixedOf(UO->getSubExpr())) return;
+        if (!unscopedUnfixedOf(UO->getSubExpr(), Ctx)) return;
         diag(UO->getOperatorLoc(),
              "unscoped enumeration with no fixed underlying type shall not be "
              "used as an operand to '%0'")
@@ -154,8 +228,8 @@ void SdcUnscopedEnumNumericUseCheck::check(
     // --- Relational / equality ---
     if (const auto* BO = Result.Nodes.getNodeAs<BinaryOperator>("cmp")) {
         if (isUnevaluated(BO, Ctx)) return;
-        const EnumDecl* L = unscopedUnfixedOf(BO->getLHS());
-        const EnumDecl* R = unscopedUnfixedOf(BO->getRHS());
+        const EnumDecl* L = unscopedUnfixedOf(BO->getLHS(), Ctx);
+        const EnumDecl* R = unscopedUnfixedOf(BO->getRHS(), Ctx);
         if (!L && !R) return;
         // Compliant only when both operands share the same unscoped-unfixed enum.
         if (L && R && L->getCanonicalDecl() == R->getCanonicalDecl()) return;
@@ -173,8 +247,17 @@ void SdcUnscopedEnumNumericUseCheck::check(
         if (RawTarget.isNull() || RawTarget->isDependentType()) return;
         QualType Target = RawTarget.getCanonicalType();
 
-        // static_cast TO an unscoped-unfixed enum is always prohibited.
-        if (unscopedUnfixed(Target)) {
+        const EnumDecl* Src = unscopedUnfixedOf(SC->getSubExpr(), Ctx);
+        const EnumDecl* TargetEnum = unscopedUnfixed(Target, Ctx);
+
+        // A redundant cast to the same enumeration type does not use its
+        // numeric value.  Check this before rejecting casts to unfixed enums.
+        if (Src && TargetEnum &&
+            TargetEnum->getCanonicalDecl() == Src->getCanonicalDecl())
+            return;
+
+        // static_cast TO a different unscoped-unfixed enum is prohibited.
+        if (TargetEnum) {
             diag(SC->getOperatorLoc(),
                  "static_cast to an unscoped enumeration type with no fixed "
                  "underlying type is prohibited");
@@ -182,12 +265,13 @@ void SdcUnscopedEnumNumericUseCheck::check(
         }
 
         // static_cast FROM an unscoped-unfixed enum.
-        const EnumDecl* Src = unscopedUnfixedOf(SC->getSubExpr());
         if (!Src) return;
-        // Allowed: target is same unscoped-unfixed enum type.
-        if (unscopedUnfixed(Target) &&
-            unscopedUnfixed(Target)->getCanonicalDecl() == Src->getCanonicalDecl())
+        if (Target->isEnumeralType()) {
+            diag(SC->getOperatorLoc(),
+                 "static_cast from unscoped enumeration with no fixed "
+                 "underlying type to a different enumeration type is prohibited");
             return;
+        }
         // Allowed: target is a large-enough integer type.
         if (Target->isIntegerType() && isLargeEnough(Target, Src, Ctx)) return;
 
@@ -201,13 +285,13 @@ void SdcUnscopedEnumNumericUseCheck::check(
 
     // --- switch condition ---
     if (const auto* SS = Result.Nodes.getNodeAs<SwitchStmt>("sw")) {
-        const EnumDecl* CondEnum = unscopedUnfixedOf(SS->getCond());
+        const EnumDecl* CondEnum = unscopedUnfixedOf(SS->getCond(), Ctx);
         if (!CondEnum) return;
         for (const SwitchCase* SC = SS->getSwitchCaseList(); SC;
              SC = SC->getNextSwitchCase()) {
             const auto* CS = dyn_cast<CaseStmt>(SC);
             if (!CS) continue; // default: is fine
-            const EnumDecl* CaseEnum = unscopedUnfixedOf(CS->getLHS());
+            const EnumDecl* CaseEnum = unscopedUnfixedOf(CS->getLHS(), Ctx);
             if (!CaseEnum ||
                 CaseEnum->getCanonicalDecl() != CondEnum->getCanonicalDecl()) {
                 diag(CS->getCaseLoc(),
@@ -225,11 +309,11 @@ void SdcUnscopedEnumNumericUseCheck::check(
         // handled by the static_cast checker — skip them here.
         if (IC->isPartOfExplicitCast()) return;
         if (isUnevaluated(IC, Ctx)) return;
-        const EnumDecl* Src = unscopedUnfixedOf(IC->getSubExpr());
+        const EnumDecl* Src = unscopedUnfixedOf(IC->getSubExpr(), Ctx);
         if (!Src) return;
         QualType Target = Ctx.getCanonicalType(IC->getType());
         // Same enum type: not an integral cast scenario, but guard anyway.
-        if (unscopedUnfixed(Target)) return;
+        if (unscopedUnfixed(Target, Ctx)) return;
         // Large-enough integer: compliant.
         if (Target->isIntegerType() && isLargeEnough(Target, Src, Ctx)) return;
         // Also: bool is large enough for any flag-style enum (0/1 range),

@@ -1,5 +1,6 @@
 #include "SdcDeleteIncompletePtrCheck.h"
 
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Type.h"
@@ -16,6 +17,35 @@ namespace sdc {
 SdcDeleteIncompletePtrCheck::SdcDeleteIncompletePtrCheck(
     StringRef Name, ClangTidyContext* Context)
     : ClangTidyCheck(Name, Context) {}
+
+namespace {
+
+// An instantiated template body keeps the source locations of its primary
+// template.  A source-order comparison against a concrete type's definition
+// therefore does not describe the point at which the delete is checked.
+static bool isInTemplateInstantiation(const Stmt* S, ASTContext& Context) {
+    DynTypedNode Node = DynTypedNode::create(*S);
+    while (true) {
+        auto Parents = Context.getParents(Node);
+        if (Parents.empty()) return false;
+
+        Node = Parents[0];
+        if (const auto* D = Node.get<FunctionDecl>()) {
+            if (::clang::isTemplateInstantiation(
+                    D->getTemplateSpecializationKind())) {
+                return true;
+            }
+        }
+        if (const auto* D = Node.get<CXXRecordDecl>()) {
+            if (::clang::isTemplateInstantiation(
+                    D->getTemplateSpecializationKind())) {
+                return true;
+            }
+        }
+    }
+}
+
+} // namespace
 
 void SdcDeleteIncompletePtrCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
@@ -45,6 +75,8 @@ void SdcDeleteIncompletePtrCheck::check(const MatchFinder::MatchResult& Result) 
         // No definition anywhere in this TU.
         incomplete = true;
     } else {
+        if (isInTemplateInstantiation(DE, *Result.Context)) return;
+
         // clang-tidy sees the fully-built AST, so even a type defined *after*
         // the delete site appears complete.  Use source locations to detect the
         // "defined later" case: the delete precedes the definition in the file.

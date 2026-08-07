@@ -25,6 +25,10 @@ const StringRef ProhibitedCsetjmpMacros[] = {
     "setjmp",
 };
 
+const StringRef ProhibitedCsetjmpHeaders[] = {
+    "csetjmp", "setjmp.h",
+};
+
 } // namespace
 
 SdcNoCsetjmpFacilitiesCheck::SdcNoCsetjmpFacilitiesCheck(
@@ -41,6 +45,10 @@ ArrayRef<StringRef> SdcNoCsetjmpFacilitiesCheck::getProhibitedTypes() const {
 
 ArrayRef<StringRef> SdcNoCsetjmpFacilitiesCheck::getProhibitedMacros() const {
     return ProhibitedCsetjmpMacros;
+}
+
+ArrayRef<StringRef> SdcNoCsetjmpFacilitiesCheck::getProhibitedHeaders() const {
+    return ProhibitedCsetjmpHeaders;
 }
 
 StringRef SdcNoCsetjmpFacilitiesCheck::getHeaderName() const {

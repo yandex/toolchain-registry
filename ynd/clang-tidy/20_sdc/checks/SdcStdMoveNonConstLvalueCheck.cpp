@@ -49,6 +49,14 @@ namespace clang {
                     return;
                 }
 
+                if (ValueKind == VK_XValue) {
+                    diag(MoveCall->getBeginLoc(),
+                         "std::move called on an xvalue of type %0; the "
+                         "argument to std::move shall be a non-const lvalue")
+                        << ArgType;
+                    return;
+                }
+
                 if (ValueKind == VK_LValue) {
                     if (ArgType.isConstQualified()) {
                         diag(MoveCall->getBeginLoc(),

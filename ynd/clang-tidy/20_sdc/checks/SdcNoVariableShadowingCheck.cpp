@@ -3,11 +3,13 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace clang::ast_matchers;
 
@@ -119,9 +121,82 @@ namespace clang {
                         return Result;
                     }
 
+                    bool TraverseCXXCatchStmt(CXXCatchStmt* Statement) {
+                        if (!Statement) {
+                            return true;
+                        }
+                        pushScope();
+                        if (VarDecl* Exception = Statement->getExceptionDecl()) {
+                            handleDeclaration(Exception);
+                        }
+                        bool Result = TraverseStmt(Statement->getHandlerBlock());
+                        popScope();
+                        return Result;
+                    }
+
+                    bool TraverseLambdaExpr(LambdaExpr* Expression) {
+                        if (!Expression) {
+                            return true;
+                        }
+
+                        llvm::SmallPtrSet<const ValueDecl*, 8> CapturedVariables;
+                        bool CapturesThis = false;
+                        for (const LambdaCapture& Capture : Expression->captures()) {
+                            if (Capture.capturesVariable()) {
+                                CapturedVariables.insert(Capture.getCapturedVar());
+                            } else if (Capture.capturesThis()) {
+                                CapturesThis = true;
+                            }
+                        }
+
+                        // A lambda does not inherit ordinary automatic locals
+                        // unless they are captured. It can still name globals,
+                        // static/thread locals, usable constant-expression
+                        // variables, enumerators, and fields through captured
+                        // this. Build exactly that visible outer scope.
+                        llvm::StringMap<const NamedDecl*> VisibleOuter;
+                        for (const auto& Scope : Scopes_) {
+                            for (const auto& Entry : Scope) {
+                                const NamedDecl* Declaration = Entry.second;
+                                bool Visible = isa<EnumConstantDecl>(Declaration);
+                                if (const auto* Variable =
+                                        dyn_cast<VarDecl>(Declaration)) {
+                                    Visible = Variable->hasGlobalStorage() ||
+                                              Variable->isUsableInConstantExpressions(Context_) ||
+                                              CapturedVariables.contains(Variable);
+                                } else if (isa<FieldDecl>(Declaration)) {
+                                    Visible = CapturesThis;
+                                }
+                                if (Visible) {
+                                    VisibleOuter[Entry.getKey()] = Declaration;
+                                }
+                            }
+                        }
+
+                        auto SavedScopes = std::move(Scopes_);
+                        Scopes_.clear();
+                        Scopes_.push_back(std::move(VisibleOuter));
+                        pushScope();
+                        if (const CXXMethodDecl* CallOperator =
+                                Expression->getCallOperator()) {
+                            for (const ParmVarDecl* Param :
+                                 CallOperator->parameters()) {
+                                handleDeclaration(Param);
+                            }
+                        }
+                        bool Result = TraverseStmt(Expression->getBody());
+                        popScope();
+                        Scopes_ = std::move(SavedScopes);
+                        return Result;
+                    }
+
                     bool TraverseVarDecl(VarDecl* Declaration) {
                         handleDeclaration(Declaration);
-                        return true;
+                        // Initializers can introduce nested scopes (notably a
+                        // lambda body) that must be visited after the variable
+                        // itself has entered the current scope.
+                        return !Declaration || !Declaration->hasInit() ||
+                               TraverseStmt(Declaration->getInit());
                     }
 
                     bool TraverseFieldDecl(FieldDecl* Declaration) {

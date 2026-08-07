@@ -45,6 +45,7 @@ public:
 
     // Called by the PP callback. Public so the callback can reach it.
     void recordMacroUse(StringRef Name, SourceLocation Loc);
+    void recordHeaderUse(StringRef Name, SourceLocation Loc);
 
 protected:
     // Subclass hooks. Each ArrayRef must point to data with program
@@ -53,6 +54,10 @@ protected:
     virtual ArrayRef<StringRef> getProhibitedFunctions() const = 0;
     virtual ArrayRef<StringRef> getProhibitedTypes() const = 0;
     virtual ArrayRef<StringRef> getProhibitedMacros() const = 0;
+
+    // Most rules ban facilities rather than the inclusion itself. Rules whose
+    // wording bans a header (for example <csetjmp>) override this list.
+    virtual ArrayRef<StringRef> getProhibitedHeaders() const { return {}; }
 
     // Header spelling used in diagnostics, e.g. "<csignal>".
     virtual StringRef getHeaderName() const = 0;
@@ -82,6 +87,7 @@ private:
     SmallVector<DeferredUse, 16> FunctionUses_;
     SmallVector<DeferredUse, 8>  TypeUses_;
     SmallVector<DeferredUse, 32> MacroUses_;
+    SmallVector<DeferredUse, 4>  HeaderUses_;
     SmallVector<SourceRange, 4>  ExemptRanges_;
 };
 

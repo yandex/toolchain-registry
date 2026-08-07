@@ -21,6 +21,7 @@ protected:
     ArrayRef<StringRef> getProhibitedFunctions() const override;
     ArrayRef<StringRef> getProhibitedTypes() const override;
     ArrayRef<StringRef> getProhibitedMacros() const override;
+    ArrayRef<StringRef> getProhibitedHeaders() const override;
     StringRef getHeaderName() const override;
 };
 

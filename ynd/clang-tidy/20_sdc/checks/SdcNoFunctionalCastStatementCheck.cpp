@@ -40,15 +40,35 @@ namespace {
 // meaningful expressions like CallExpr, BinaryOperator, ReturnStmt — means
 // the expression is being *used*, not discarded as a statement.
 bool isExpressionStatement(const Expr* E, ASTContext& Ctx) {
+    const Stmt* Current = E;
     DynTypedNodeList Parents = Ctx.getParents(*E);
     while (!Parents.empty()) {
         const DynTypedNode& P = Parents[0];
         if (P.get<CompoundStmt>()) return true;
+        // A for-init is an expression-statement in the grammar even though
+        // Clang attaches its expression directly to the ForStmt.  Do not
+        // confuse it with the condition or increment expressions, whose
+        // values have distinct language semantics.
+        if (const auto* FS = P.get<ForStmt>())
+            return FS->getInit() == Current;
         // Transparent wrappers inserted by Clang for cleanup/binding.
-        if (P.get<ExprWithCleanups>()        ||
-            P.get<CXXBindTemporaryExpr>()    ||
-            P.get<MaterializeTemporaryExpr>() ||
-            P.get<ParenExpr>()) {
+        if (const auto* W = P.get<ExprWithCleanups>()) {
+            Current = W;
+            Parents = Ctx.getParents(P);
+            continue;
+        }
+        if (const auto* W = P.get<CXXBindTemporaryExpr>()) {
+            Current = W;
+            Parents = Ctx.getParents(P);
+            continue;
+        }
+        if (const auto* W = P.get<MaterializeTemporaryExpr>()) {
+            Current = W;
+            Parents = Ctx.getParents(P);
+            continue;
+        }
+        if (const auto* W = P.get<ParenExpr>()) {
+            Current = W;
             Parents = Ctx.getParents(P);
             continue;
         }

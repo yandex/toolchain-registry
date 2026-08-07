@@ -103,6 +103,8 @@
 #include "SdcVirtualFinalNonOverrideCheck.h"
 #include "SdcVirtualPMFNullCompareCheck.h"
 #include "SdcVolatileAppropriateCheck.h"
+#include "SdcIfIdentifierDefinedCheck.h"
+#include "SdcBracesAroundStatementsCheck.h"
 
 
 
@@ -216,6 +218,8 @@ public:
         CheckFactories.registerCheck<sdc::SdcMacroMixedUseCheck>("sdc-macro-mixed-use");
         CheckFactories.registerCheck<sdc::SdcMacroParensCheck>("sdc-macro-parens");
         CheckFactories.registerCheck<sdc::SdcMacroDirectiveInArgCheck>("sdc-macro-directive-in-arg");
+        CheckFactories.registerCheck<sdc::SdcIfIdentifierDefinedCheck>("sdc-if-identifier-defined");
+        CheckFactories.registerCheck<sdc::SdcBracesAroundStatementsCheck>("sdc-braces-around-statements");
     }
 };
 

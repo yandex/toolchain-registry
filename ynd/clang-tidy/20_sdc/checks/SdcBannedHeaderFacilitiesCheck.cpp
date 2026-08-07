@@ -5,6 +5,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/PPCallbacks.h"
@@ -33,12 +34,94 @@ bool isProhibitedQualifiedName(ArrayRef<StringRef> Prohibited, StringRef QualNam
     return false;
 }
 
+const NamedDecl* findProhibitedTypedef(ArrayRef<StringRef> Prohibited,
+                                       QualType QT) {
+    // Do not use canonicalType here: canonicalization intentionally erases
+    // typedef names, including the fact that an alias ultimately names a
+    // prohibited standard-library typedef such as va_list.
+    while (!QT.isNull()) {
+        const Type* Ty = QT.getTypePtrOrNull();
+        if (!Ty) return nullptr;
+        if (const auto* TT = dyn_cast<TypedefType>(Ty)) {
+            const TypedefNameDecl* TD = TT->getDecl();
+            if (isProhibitedQualifiedName(Prohibited,
+                                          TD->getQualifiedNameAsString())) {
+                return TD;
+            }
+            QT = TD->getUnderlyingType();
+            continue;
+        }
+        if (const auto* UT = dyn_cast<UsingType>(Ty)) {
+            QT = UT->getUnderlyingType();
+            continue;
+        }
+        if (const auto* ET = dyn_cast<ElaboratedType>(Ty)) {
+            QT = ET->getNamedType();
+            continue;
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
+StringRef fileBaseName(StringRef Path) {
+    return Path.rsplit('/').second;
+}
+
+bool isDefinitionFromStandardHeader(SourceLocation DefLoc,
+                                    const SourceManager& SM,
+                                    StringRef HeaderName) {
+    if (DefLoc.isInvalid()) return false;
+    if (SM.isInSystemHeader(DefLoc)) return true;
+
+    // The qualification stubs deliberately model the standard library but
+    // are supplied as ordinary include directories, so Clang does not mark
+    // them as system headers. Recognize the standard header's basename while
+    // still rejecting an unrelated user macro with the same spelling.
+    StringRef Header = HeaderName.trim("<>");
+    StringRef Base = fileBaseName(SM.getFilename(SM.getSpellingLoc(DefLoc)));
+    if (Base == Header) return true;
+    if (Header.starts_with("c") && Header.size() > 1) {
+        std::string CHeader = (Header.drop_front() + ".h").str();
+        if (Base == CHeader) return true;
+    }
+    return false;
+}
+
 class BannedFacilityPPCallbacks: public PPCallbacks {
 public:
     BannedFacilityPPCallbacks(SdcBannedHeaderFacilitiesCheck* Check,
                               ArrayRef<StringRef> Macros,
+                              ArrayRef<StringRef> Headers,
+                              StringRef HeaderName,
                               const SourceManager& SM)
-        : Check_(Check), Macros_(Macros), SM_(SM) {}
+        : Check_(Check), Macros_(Macros), Headers_(Headers),
+          HeaderName_(HeaderName), SM_(SM) {}
+
+    void InclusionDirective(SourceLocation HashLoc,
+                            const Token& /*IncludeTok*/,
+                            StringRef FileName,
+                            bool /*IsAngled*/,
+                            CharSourceRange /*FilenameRange*/,
+                            OptionalFileEntryRef /*File*/,
+                            StringRef /*SearchPath*/,
+                            StringRef /*RelativePath*/,
+                            const Module* /*SuggestedModule*/,
+                            bool /*ModuleImported*/,
+                            SrcMgr::CharacteristicKind /*FileType*/) override {
+        if (HashLoc.isInvalid() || SM_.isInSystemHeader(HashLoc)) return;
+        // Do not blame the implementation detail where a C++ wrapper header
+        // (for example <csetjmp>) includes its corresponding C header. This is
+        // relevant for qualification stubs that are not marked as system
+        // headers by Clang.
+        if (isDefinitionFromStandardHeader(HashLoc, SM_, HeaderName_)) return;
+        for (StringRef Header : Headers_) {
+            if (FileName == Header) {
+                Check_->recordHeaderUse(FileName, HashLoc);
+                return;
+            }
+        }
+    }
 
     void MacroExpands(const Token& MacroNameTok,
                       const MacroDefinition& MD,
@@ -71,7 +154,7 @@ public:
         // skip those, since they're not "facilities provided by <X>".
         if (const MacroInfo* MI = MD.getMacroInfo()) {
             SourceLocation DefLoc = MI->getDefinitionLoc();
-            if (DefLoc.isValid() && !SM_.isInSystemHeader(DefLoc)) {
+            if (!isDefinitionFromStandardHeader(DefLoc, SM_, HeaderName_)) {
                 return;
             }
         }
@@ -82,6 +165,8 @@ public:
 private:
     SdcBannedHeaderFacilitiesCheck* Check_;
     ArrayRef<StringRef> Macros_;
+    ArrayRef<StringRef> Headers_;
+    StringRef HeaderName_;
     const SourceManager& SM_;
 };
 
@@ -102,7 +187,9 @@ void SdcBannedHeaderFacilitiesCheck::registerPPCallbacks(
     SM_ = &SM;
     PP_ = PP;
     PP->addPPCallbacks(
-        std::make_unique<BannedFacilityPPCallbacks>(this, getProhibitedMacros(), SM));
+        std::make_unique<BannedFacilityPPCallbacks>(
+            this, getProhibitedMacros(), getProhibitedHeaders(),
+            getHeaderName(), SM));
 }
 
 void SdcBannedHeaderFacilitiesCheck::registerMatchers(MatchFinder* Finder) {
@@ -147,10 +234,40 @@ void SdcBannedHeaderFacilitiesCheck::registerMatchers(MatchFinder* Finder) {
         // We pin to typedefType so we don't match the underlying primitive
         // (`int` rather than `sig_atomic_t`).
         Finder->addMatcher(
-            typeLoc(
-                loc(typedefType(hasDeclaration(namedDecl(hasAnyName(Types))))),
-                unless(isExpansionInSystemHeader()))
+            typeLoc(loc(typedefType()),
+                    unless(hasAncestor(varDecl())),
+                    unless(isExpansionInSystemHeader()))
                 .bind("typeUse"),
+            this);
+
+        // Diagnose every declared object, not merely the shared type spelling
+        // in declarations such as `va_list first, second`.
+        Finder->addMatcher(
+            varDecl(unless(parmVarDecl()),
+                    unless(isExpansionInSystemHeader()))
+                .bind("variableTypeUse"),
+            this);
+
+        // A qualified typedef spelling such as std::sig_atomic_t has an
+        // ElaboratedTypeLoc wrapper around the underlying TypedefTypeLoc.
+        // The matcher above sees the unqualified spelling but not this outer
+        // form, so bind the typedef declaration explicitly for that case.
+        Finder->addMatcher(
+            elaboratedTypeLoc(
+                hasNamedTypeLoc(anyOf(
+                    loc(typedefType(hasDeclaration(namedDecl(hasAnyName(Types))))),
+                    loc(usingType(hasUnderlyingType(typedefType(hasDeclaration(
+                        namedDecl(hasAnyName(Types))))))))),
+                unless(isExpansionInSystemHeader()))
+                .bind("qualifiedTypeUse"),
+            this);
+
+        // Array parameters are adjusted to pointers in the AST. Their normal
+        // TypeLoc therefore loses typedef sugar (notably va_list aliases), but
+        // ParmVarDecl retains the source-level type through getOriginalType().
+        Finder->addMatcher(
+            parmVarDecl(unless(isExpansionInSystemHeader()))
+                .bind("parameterTypeUse"),
             this);
     }
 }
@@ -190,14 +307,44 @@ void SdcBannedHeaderFacilitiesCheck::check(const MatchFinder::MatchResult& Resul
         if (!Ty) {
             return;
         }
-        const auto* TT = Ty->getAs<TypedefType>();
-        if (!TT) {
+        const NamedDecl* ND = findProhibitedTypedef(Types, TL->getType());
+        if (!ND) return;
+        TypeUses_.push_back({ND->getNameAsString(), TL->getBeginLoc()});
+        return;
+    }
+
+
+    if (const auto* Parm =
+            Result.Nodes.getNodeAs<ParmVarDecl>("parameterTypeUse")) {
+        QualType Original = Parm->getOriginalType();
+        const NamedDecl* ND = findProhibitedTypedef(Types, Original);
+        if (!ND) return;
+        TypeUses_.push_back({ND->getNameAsString(), Parm->getLocation()});
+        return;
+    }
+
+
+    if (const auto* VD =
+            Result.Nodes.getNodeAs<VarDecl>("variableTypeUse")) {
+        const NamedDecl* ND = findProhibitedTypedef(Types, VD->getType());
+        if (!ND) return;
+        TypeUses_.push_back({ND->getNameAsString(), VD->getLocation()});
+        return;
+    }
+
+
+    if (const auto* TL =
+            Result.Nodes.getNodeAs<ElaboratedTypeLoc>("qualifiedTypeUse")) {
+        const Type* NamedTy =
+            TL->getNamedTypeLoc().getType().getTypePtrOrNull();
+        const TypedefType* TT = NamedTy ? NamedTy->getAs<TypedefType>() : nullptr;
+        if (!TT)
+            if (const auto* UT = dyn_cast_or_null<UsingType>(NamedTy))
+                TT = UT->getUnderlyingType()->getAs<TypedefType>();
+        const NamedDecl* ND = TT ? TT->getDecl() : nullptr;
+        if (!ND || !isProhibitedQualifiedName(
+                       Types, ND->getQualifiedNameAsString()))
             return;
-        }
-        const NamedDecl* ND = TT->getDecl();
-        if (!isProhibitedQualifiedName(Types, ND->getQualifiedNameAsString())) {
-            return;
-        }
         TypeUses_.push_back({ND->getNameAsString(), TL->getBeginLoc()});
         return;
     }
@@ -205,6 +352,11 @@ void SdcBannedHeaderFacilitiesCheck::check(const MatchFinder::MatchResult& Resul
 
 void SdcBannedHeaderFacilitiesCheck::recordMacroUse(StringRef Name, SourceLocation Loc) {
     MacroUses_.push_back({Name.str(), Loc});
+}
+
+void SdcBannedHeaderFacilitiesCheck::recordHeaderUse(StringRef Name,
+                                                     SourceLocation Loc) {
+    HeaderUses_.push_back({Name.str(), Loc});
 }
 
 bool SdcBannedHeaderFacilitiesCheck::isInExemptRange(SourceLocation Loc) const {
@@ -283,10 +435,14 @@ void SdcBannedHeaderFacilitiesCheck::onEndOfTranslationUnit() {
     for (const auto& U : MacroUses_) {
         Emit(U);
     }
+    for (const auto& U : HeaderUses_) {
+        Emit(U);
+    }
 
     FunctionUses_.clear();
     TypeUses_.clear();
     MacroUses_.clear();
+    HeaderUses_.clear();
     ExemptRanges_.clear();
 }
 

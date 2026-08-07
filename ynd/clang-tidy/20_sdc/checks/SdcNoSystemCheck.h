@@ -11,6 +11,10 @@ namespace clang {
             public:
                 SdcNoSystemCheck(StringRef Name, ClangTidyContext* Context);
 
+                void registerPPCallbacks(const SourceManager& SM,
+                                         Preprocessor* PP,
+                                         Preprocessor* ModuleExpanderPP) override;
+
             protected:
                 ArrayRef<StringRef> getProhibitedFunctions() const override;
                 std::string getDiagnosticMessage(StringRef FunctionName) const override;

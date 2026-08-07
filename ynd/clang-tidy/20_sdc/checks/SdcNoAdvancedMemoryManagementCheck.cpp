@@ -9,6 +9,49 @@ namespace clang {
     namespace tidy {
         namespace sdc {
 
+            namespace {
+
+            bool hasQualifiedTagName(QualType Type, StringRef Name) {
+                Type = Type.getNonReferenceType().getUnqualifiedType();
+                if (const auto* RT = Type->getAs<RecordType>())
+                    return RT->getDecl()->getQualifiedNameAsString() == Name;
+                if (const auto* ET = Type->getAs<EnumType>())
+                    return ET->getDecl()->getQualifiedNameAsString() == Name;
+                return false;
+            }
+
+            bool isAdvancedOperator(const FunctionDecl* FD,
+                                    const ASTContext& Context) {
+                if (!FD) return false;
+                DeclarationName Name = FD->getDeclName();
+                if (Name.getNameKind() != DeclarationName::CXXOperatorName)
+                    return false;
+                OverloadedOperatorKind Op = Name.getCXXOverloadedOperator();
+                if (Op != OO_New && Op != OO_Array_New &&
+                    Op != OO_Delete && Op != OO_Array_Delete)
+                    return false;
+
+                // The leading size_t (new) or void* (delete) parameter is part
+                // of every allocation/deallocation signature. Extra size_t,
+                // align_val_t and nothrow_t parameters occur in the standard
+                // replaceable forms. Any other extra parameter denotes a
+                // placement or custom allocation function and is advanced
+                // memory management under Rule 21.6.3.
+                for (unsigned I = 1; I < FD->getNumParams(); ++I) {
+                    QualType PT = FD->getParamDecl(I)->getType();
+                    if (Context.hasSameType(PT.getUnqualifiedType(),
+                                            Context.getSizeType()) ||
+                        hasQualifiedTagName(PT, "std::align_val_t") ||
+                        hasQualifiedTagName(PT, "std::nothrow_t")) {
+                        continue;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            } // namespace
+
             // Rules 1 & 2 for the <memory> function list. The base class
             // matches both calls and address-of references against these names.
             static const StringRef ProhibitedAdvancedMemoryFunctions[] = {
@@ -66,6 +109,27 @@ namespace clang {
                               hasName("operator delete"), hasName("operator delete[]")))
                         .bind("user_operator_new_delete"),
                     this);
+
+                // Calls to placement/custom allocation functions are encoded
+                // as CXXNewExpr rather than ordinary CallExpr nodes.
+                Finder->addMatcher(
+                    cxxNewExpr(unless(isExpansionInSystemHeader()))
+                        .bind("advanced_new_expression"),
+                    this);
+
+                // Taking the address of an overloaded operator resolves to a
+                // DeclRefExpr once the target function-pointer type selects an
+                // overload.
+                Finder->addMatcher(
+                    declRefExpr(
+                        to(functionDecl(anyOf(
+                            hasOverloadedOperatorName("new"),
+                            hasOverloadedOperatorName("new[]"),
+                            hasOverloadedOperatorName("delete"),
+                            hasOverloadedOperatorName("delete[]")))),
+                        unless(isExpansionInSystemHeader()))
+                        .bind("advanced_operator_reference"),
+                    this);
             }
 
             void SdcNoAdvancedMemoryManagementCheck::check(
@@ -74,6 +138,32 @@ namespace clang {
                 // returns immediately when its bindings aren't present, so this
                 // is safe to call for every match.
                 SdcProhibitedFunctionsCheck::check(Result);
+
+                if (const auto* New =
+                        Result.Nodes.getNodeAs<CXXNewExpr>(
+                            "advanced_new_expression")) {
+                    if (isAdvancedOperator(New->getOperatorNew(),
+                                           *Result.Context)) {
+                        diag(New->getBeginLoc(),
+                             "call to a placement or custom allocation function "
+                             "is not allowed; advanced memory management shall "
+                             "not be used");
+                    }
+                    return;
+                }
+
+                if (const auto* Ref =
+                        Result.Nodes.getNodeAs<DeclRefExpr>(
+                            "advanced_operator_reference")) {
+                    const auto* FD = dyn_cast<FunctionDecl>(Ref->getDecl());
+                    if (isAdvancedOperator(FD, *Result.Context)) {
+                        diag(Ref->getBeginLoc(),
+                             "taking the address of a placement or custom "
+                             "allocation function is not allowed; advanced "
+                             "memory management shall not be used");
+                    }
+                    return;
+                }
 
                 // Check for explicit destructor calls
                 if (const auto* DestructorCall = Result.Nodes.getNodeAs<CXXMemberCallExpr>("explicit_destructor")) {

@@ -4,8 +4,10 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ParentMapContext.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace clang::ast_matchers;
 
@@ -15,61 +17,216 @@ namespace clang {
 
             namespace {
 
-                // Walk through implicit casts, parens, and array-to-pointer
-                // decay to find the leaf expression.
-                const Expr* peelCasts(const Expr* E) {
-                    if (!E) return nullptr;
-                    return E->IgnoreParenImpCasts();
+                const VarDecl* findAddressedVar(
+                    const Expr* E, SourceLocation Before, ASTContext& Ctx,
+                    llvm::SmallPtrSetImpl<const VarDecl*>& Visiting);
+                const VarDecl* storageBase(
+                    const Expr* E, SourceLocation Before, ASTContext& Ctx,
+                    llvm::SmallPtrSetImpl<const VarDecl*>& Visiting);
+
+                bool before(SourceLocation A, SourceLocation B,
+                            const SourceManager& SM) {
+                    if (A.isInvalid() || B.isInvalid()) return false;
+                    return SM.isBeforeInTranslationUnit(SM.getExpansionLoc(A),
+                                                        SM.getExpansionLoc(B));
                 }
 
-                // From the RHS of an assignment, identify a VarDecl whose
-                // address is being taken (directly via `&x`, via array decay
-                // of `x`, or via a call to std::addressof). Returns nullptr if
-                // the RHS does not match any of these forms.
-                // Resolve a DeclRefExpr to the VarDecl whose storage the
-                // address designates. Crucially, taking the address of a
-                // *reference* variable yields the address of its referent, not
-                // of the reference's own slot; the referent's storage duration
-                // is not determinable from this point (it may be a container
-                // element, a returned reference, a heap object, etc.), so such
-                // cases are not stack-address escapes we can prove. Return
-                // nullptr for reference-typed variables.
-                const VarDecl* addressedVarFromDeclRef(const Expr* Sub) {
-                    const auto* DRE = dyn_cast_or_null<DeclRefExpr>(Sub);
-                    if (!DRE) return nullptr;
-                    const auto* VD = dyn_cast<VarDecl>(DRE->getDecl());
-                    if (!VD) return nullptr;
-                    if (VD->getType()->isReferenceType()) return nullptr;
-                    return VD;
+                const FunctionDecl* enclosingFunction(const VarDecl* VD) {
+                    const DeclContext* DC = VD ? VD->getDeclContext() : nullptr;
+                    while (DC && !isa<FunctionDecl>(DC)) DC = DC->getParent();
+                    return dyn_cast_or_null<FunctionDecl>(DC);
                 }
 
-                const VarDecl* findAddressedVar(const Expr* RHS) {
-                    const Expr* E = RHS ? RHS->IgnoreParens() : nullptr;
-                    if (!E) return nullptr;
+                class LatestAssignmentVisitor
+                    : public RecursiveASTVisitor<LatestAssignmentVisitor> {
+                public:
+                    LatestAssignmentVisitor(const VarDecl* Target,
+                                            SourceLocation Before,
+                                            const SourceManager& SM)
+                        : Target(Target), Before(Before), SM(SM) {}
 
-                    // `&x`
-                    if (const auto* UO = dyn_cast<UnaryOperator>(E)) {
-                        if (UO->getOpcode() == UO_AddrOf) {
-                            const Expr* Sub = peelCasts(UO->getSubExpr());
-                            return addressedVarFromDeclRef(Sub);
+                    bool VisitBinaryOperator(BinaryOperator* BO) {
+                        if (!BO->isAssignmentOp() ||
+                            BO->getOpcode() != BO_Assign ||
+                            !before(BO->getOperatorLoc(), Before, SM)) {
+                            return true;
                         }
-                        return nullptr;
+                        const Expr* LHS = BO->getLHS()->IgnoreParenImpCasts();
+                        const auto* DRE = dyn_cast<DeclRefExpr>(LHS);
+                        if (!DRE || DRE->getDecl() != Target) return true;
+                        if (!Latest || before(Latest->getOperatorLoc(),
+                                              BO->getOperatorLoc(), SM)) {
+                            Latest = BO;
+                        }
+                        return true;
                     }
 
-                    // Array-to-pointer decay: an ImplicitCastExpr with kind
-                    // CK_ArrayToPointerDecay wrapping a DeclRefExpr.
-                    if (const auto* ICE = dyn_cast<ImplicitCastExpr>(RHS)) {
-                        if (ICE->getCastKind() == CK_ArrayToPointerDecay) {
-                            const Expr* Sub = ICE->getSubExpr()->IgnoreParens();
-                            if (const auto* DRE = dyn_cast<DeclRefExpr>(Sub)) {
-                                if (const auto* VD =
-                                        dyn_cast<VarDecl>(DRE->getDecl())) {
-                                    if (VD->getType()->isArrayType()) {
-                                        return VD;
-                                    }
-                                }
+                    const BinaryOperator* get() const { return Latest; }
+
+                private:
+                    const VarDecl* Target;
+                    SourceLocation Before;
+                    const SourceManager& SM;
+                    const BinaryOperator* Latest = nullptr;
+                };
+
+                // Resolve a pointer/reference parameter through direct calls in
+                // this translation unit. This deliberately asks only whether
+                // *some* call supplies a proven automatic object: that is
+                // sufficient for a Required rule diagnostic at the assignment.
+                class ParameterCallVisitor
+                    : public RecursiveASTVisitor<ParameterCallVisitor> {
+                public:
+                    ParameterCallVisitor(const ParmVarDecl* Param,
+                                         ASTContext& Ctx,
+                                         llvm::SmallPtrSetImpl<const VarDecl*>& Visiting)
+                        : Param(Param), Ctx(Ctx), Visiting(Visiting) {}
+
+                    bool VisitCallExpr(CallExpr* CE) {
+                        const auto* Owner = dyn_cast<FunctionDecl>(
+                            Param->getDeclContext());
+                        const FunctionDecl* Callee = CE->getDirectCallee();
+                        if (!Owner || !Callee ||
+                            Owner->getCanonicalDecl() !=
+                                Callee->getCanonicalDecl()) {
+                            return true;
+                        }
+                        unsigned Index = Param->getFunctionScopeIndex();
+                        if (Index >= CE->getNumArgs()) return true;
+                        if (const VarDecl* VD = findAddressedVar(
+                                CE->getArg(Index), CE->getExprLoc(), Ctx,
+                                Visiting)) {
+                            Result = VD;
+                            return false;
+                        }
+                        return true;
+                    }
+
+                    const VarDecl* get() const { return Result; }
+
+                private:
+                    const ParmVarDecl* Param;
+                    ASTContext& Ctx;
+                    llvm::SmallPtrSetImpl<const VarDecl*>& Visiting;
+                    const VarDecl* Result = nullptr;
+                };
+
+                const VarDecl* resolveVar(const VarDecl* VD,
+                                          SourceLocation Before,
+                                          ASTContext& Ctx,
+                                          llvm::SmallPtrSetImpl<const VarDecl*>& Visiting) {
+                    if (!VD || !Visiting.insert(VD).second) return nullptr;
+
+                    const VarDecl* Result = nullptr;
+                    if (const auto* Param = dyn_cast<ParmVarDecl>(VD)) {
+                        ParameterCallVisitor V(Param, Ctx, Visiting);
+                        V.TraverseDecl(Ctx.getTranslationUnitDecl());
+                        Result = V.get();
+                    } else {
+                        const FunctionDecl* FD = enclosingFunction(VD);
+                        const BinaryOperator* Assignment = nullptr;
+                        if (FD && FD->doesThisDeclarationHaveABody()) {
+                            LatestAssignmentVisitor V(VD, Before,
+                                                      Ctx.getSourceManager());
+                            V.TraverseStmt(FD->getBody());
+                            Assignment = V.get();
+                        }
+                        if (Assignment) {
+                            Result = findAddressedVar(
+                                Assignment->getRHS(),
+                                Assignment->getOperatorLoc(), Ctx, Visiting);
+                        } else if (VD->hasInit()) {
+                            if (VD->getType()->isReferenceType()) {
+                                Result = storageBase(VD->getInit(),
+                                                     VD->getLocation(), Ctx,
+                                                     Visiting);
+                            } else {
+                                Result = findAddressedVar(VD->getInit(),
+                                                         VD->getLocation(), Ctx,
+                                                         Visiting);
                             }
                         }
+                    }
+                    Visiting.erase(VD);
+                    return Result;
+                }
+
+                // Find the automatic object whose storage is designated by an
+                // lvalue. Member and array subobjects inherit the storage
+                // duration of their complete object.
+                const VarDecl* storageBase(const Expr* E,
+                                           SourceLocation Before,
+                                           ASTContext& Ctx,
+                                           llvm::SmallPtrSetImpl<const VarDecl*>& Visiting) {
+                    if (!E) return nullptr;
+                    E = E->IgnoreParenImpCasts();
+                    if (const auto* DRE = dyn_cast<DeclRefExpr>(E)) {
+                        const auto* VD = dyn_cast<VarDecl>(DRE->getDecl());
+                        if (!VD) return nullptr;
+                        if (VD->getType()->isReferenceType()) {
+                            return resolveVar(VD, Before, Ctx, Visiting);
+                        }
+                        return VD;
+                    }
+                    if (const auto* ME = dyn_cast<MemberExpr>(E)) {
+                        if (ME->isArrow()) {
+                            return findAddressedVar(ME->getBase(), Before, Ctx,
+                                                    Visiting);
+                        }
+                        return storageBase(ME->getBase(), Before, Ctx, Visiting);
+                    }
+                    if (const auto* ASE = dyn_cast<ArraySubscriptExpr>(E)) {
+                        return storageBase(ASE->getBase(), Before, Ctx, Visiting);
+                    }
+                    if (const auto* UO = dyn_cast<UnaryOperator>(E)) {
+                        if (UO->getOpcode() == UO_Deref) {
+                            return findAddressedVar(UO->getSubExpr(), Before,
+                                                    Ctx, Visiting);
+                        }
+                    }
+                    return nullptr;
+                }
+
+                const VarDecl* findAddressedVar(
+                    const Expr* E, SourceLocation Before, ASTContext& Ctx,
+                    llvm::SmallPtrSetImpl<const VarDecl*>& Visiting) {
+                    if (!E) return nullptr;
+                    E = E->IgnoreParens();
+
+                    if (const auto* ICE = dyn_cast<ImplicitCastExpr>(E)) {
+                        return findAddressedVar(ICE->getSubExpr(), Before, Ctx,
+                                                Visiting);
+                    }
+                    if (const auto* UO = dyn_cast<UnaryOperator>(E)) {
+                        if (UO->getOpcode() == UO_AddrOf) {
+                            return storageBase(UO->getSubExpr(), Before, Ctx,
+                                               Visiting);
+                        }
+                    }
+                    if (const auto* BO = dyn_cast<BinaryOperator>(E)) {
+                        if (BO->getOpcode() == BO_Add ||
+                            BO->getOpcode() == BO_Sub) {
+                            if (const VarDecl* VD = findAddressedVar(
+                                    BO->getLHS(), Before, Ctx, Visiting)) {
+                                return VD;
+                            }
+                            return findAddressedVar(BO->getRHS(), Before, Ctx,
+                                                    Visiting);
+                        }
+                    }
+                    if (const auto* DRE = dyn_cast<DeclRefExpr>(
+                            E->IgnoreParenImpCasts())) {
+                        const auto* VD = dyn_cast<VarDecl>(DRE->getDecl());
+                        if (!VD) return nullptr;
+                        if (VD->getType()->isArrayType()) return VD;
+                        if (VD->getType()->isPointerType() ||
+                            VD->getType()->isReferenceType()) {
+                            return resolveVar(VD, Before, Ctx, Visiting);
+                        }
+                    }
+                    if (isa<MemberExpr>(E->IgnoreParenImpCasts()) ||
+                        isa<ArraySubscriptExpr>(E->IgnoreParenImpCasts())) {
+                        return storageBase(E, Before, Ctx, Visiting);
                     }
 
                     // std::addressof(x)
@@ -77,29 +234,44 @@ namespace clang {
                         const FunctionDecl* FD = CE->getDirectCallee();
                         if (FD && FD->getIdentifier() &&
                             FD->getName() == "addressof") {
-                            // Be defensive: require the function to live in
-                            // namespace std (or one of its inline namespaces).
                             const DeclContext* DC = FD->getDeclContext();
-                            while (DC && DC->isInlineNamespace()) {
+                            while (DC && DC->isInlineNamespace())
                                 DC = DC->getParent();
-                            }
-                            if (DC && DC->isNamespace()) {
-                                const auto* NS = cast<NamespaceDecl>(DC);
+                            if (const auto* NS = dyn_cast_or_null<NamespaceDecl>(DC)) {
                                 if (NS->getIdentifier() &&
                                     NS->getName() == "std" &&
                                     NS->getParent() &&
-                                    NS->getParent()->isTranslationUnit()) {
-                                    if (CE->getNumArgs() >= 1) {
-                                        const Expr* Arg =
-                                            peelCasts(CE->getArg(0));
-                                        return addressedVarFromDeclRef(Arg);
-                                    }
+                                    NS->getParent()->isTranslationUnit() &&
+                                    CE->getNumArgs() >= 1) {
+                                    return storageBase(CE->getArg(0), Before,
+                                                       Ctx, Visiting);
                                 }
                             }
                         }
                     }
-
                     return nullptr;
+                }
+
+                // A subscript through a pointer (as opposed to an embedded
+                // array) or an arrow/dereference writes through storage whose
+                // lifetime is not bounded by the local base object.
+                bool targetHasPointerIndirection(const Expr* E) {
+                    if (!E) return false;
+                    E = E->IgnoreParenImpCasts();
+                    if (const auto* ME = dyn_cast<MemberExpr>(E)) {
+                        return ME->isArrow() ||
+                               targetHasPointerIndirection(ME->getBase());
+                    }
+                    if (const auto* ASE = dyn_cast<ArraySubscriptExpr>(E)) {
+                        const Expr* Base =
+                            ASE->getBase()->IgnoreParenImpCasts();
+                        if (!Base->getType()->isArrayType()) return true;
+                        return targetHasPointerIndirection(Base);
+                    }
+                    if (const auto* UO = dyn_cast<UnaryOperator>(E)) {
+                        return UO->getOpcode() == UO_Deref;
+                    }
+                    return false;
                 }
 
                 // From the LHS of an assignment, identify the VarDecl whose
@@ -230,7 +402,9 @@ namespace clang {
 
                 ASTContext& Ctx = *Result.Context;
 
-                const VarDecl* RHSVar = findAddressedVar(BO->getRHS());
+                llvm::SmallPtrSet<const VarDecl*, 16> Visiting;
+                const VarDecl* RHSVar = findAddressedVar(
+                    BO->getRHS(), BO->getOperatorLoc(), Ctx, Visiting);
                 if (!RHSVar) return;
                 if (classify(RHSVar) != LifetimeTier::Automatic) {
                     // RHS is &something_static / &something_global - rule
@@ -238,16 +412,19 @@ namespace clang {
                     return;
                 }
 
+                const bool IndirectTarget =
+                    targetHasPointerIndirection(BO->getLHS());
                 const VarDecl* LHSVar = findTargetBaseVar(BO->getLHS());
                 if (!LHSVar) {
-                    // E.g. `this->m = &local` - opaque, do not flag here.
+                    // E.g. `this->m = &local` - the complete object's
+                    // lifetime is not available at this assignment site.
                     return;
                 }
 
                 LifetimeTier LT = classify(LHSVar);
                 bool LongerLived = false;
 
-                if (LT == LifetimeTier::StaticStorage) {
+                if (IndirectTarget || LT == LifetimeTier::StaticStorage) {
                     LongerLived = true;
                 } else if (LT == LifetimeTier::Automatic) {
                     const CompoundStmt* LBlk = enclosingBlock(LHSVar, Ctx);

@@ -230,6 +230,10 @@ SdcVirtualPMFNullCompareCheck.cpp
 SdcVirtualPMFNullCompareCheck.h
 SdcVolatileAppropriateCheck.cpp
 SdcVolatileAppropriateCheck.h
+SdcBracesAroundStatementsCheck.cpp
+SdcBracesAroundStatementsCheck.h
+SdcIfIdentifierDefinedCheck.cpp
+SdcIfIdentifierDefinedCheck.h
 tidy_module_sdc.cpp
 {% endblock %}
 

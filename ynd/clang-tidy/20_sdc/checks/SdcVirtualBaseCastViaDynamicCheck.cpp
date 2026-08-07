@@ -29,6 +29,35 @@ namespace clang {
                     return T->getAsCXXRecordDecl();
                 }
 
+                // Return true when at least one inheritance path from Derived
+                // to Base crosses a virtual base-specifier.  This deliberately
+                // includes a non-virtual ancestor of a virtual base.  Casting
+                // from that ancestor back to the most-derived object has the
+                // same layout hazard, so the project applies the rule
+                // conservatively and requires dynamic_cast there too.
+                bool hasVirtualStepOnPath(const CXXRecordDecl* Derived,
+                                          const CXXRecordDecl* Base,
+                                          bool SeenVirtual = false) {
+                    if (!Derived || !Base) return false;
+                    for (const CXXBaseSpecifier& Spec : Derived->bases()) {
+                        const auto* DirectBase =
+                            Spec.getType()->getAsCXXRecordDecl();
+                        if (!DirectBase) continue;
+                        DirectBase = DirectBase->getDefinition();
+                        if (!DirectBase) continue;
+
+                        const bool PathIsVirtual =
+                            SeenVirtual || Spec.isVirtual();
+                        if (DirectBase->getCanonicalDecl() ==
+                                Base->getCanonicalDecl())
+                            if (PathIsVirtual) return true;
+                        if (hasVirtualStepOnPath(DirectBase, Base,
+                                                 PathIsVirtual))
+                            return true;
+                    }
+                    return false;
+                }
+
             } // namespace
 
             SdcVirtualBaseCastViaDynamicCheck::
@@ -69,11 +98,11 @@ namespace clang {
                 // We care only about downcasts: the destination must derive
                 // from the source.
                 if (!ToCls->isDerivedFrom(FromCls)) return;
-                if (!ToCls->isVirtuallyDerivedFrom(FromCls)) return;
+                if (!hasVirtualStepOnPath(ToCls, FromCls)) return;
 
                 diag(CE->getBeginLoc(),
-                     "cast from virtual base %0 to derived %1 must use "
-                     "dynamic_cast")
+                     "cast from base %0 to derived %1 across virtual "
+                     "inheritance must use dynamic_cast")
                     << FromCls << ToCls;
             }
 
