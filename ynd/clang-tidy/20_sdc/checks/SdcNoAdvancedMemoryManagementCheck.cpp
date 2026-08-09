@@ -36,7 +36,7 @@ namespace clang {
                 // align_val_t and nothrow_t parameters occur in the standard
                 // replaceable forms. Any other extra parameter denotes a
                 // placement or custom allocation function and is advanced
-                // memory management under Rule 21.6.3.
+                // memory management beyond the replaceable forms.
                 for (unsigned I = 1; I < FD->getNumParams(); ++I) {
                     QualType PT = FD->getParamDecl(I)->getType();
                     if (Context.hasSameType(PT.getUnqualifiedType(),
@@ -183,9 +183,12 @@ namespace clang {
                         SourceManager& SM = Result.Context->getSourceManager();
 
                         // Try multiple ways to get a valid source location
-                        SourceLocation Loc = OpFunc->getBeginLoc();
+                        // The declaration can place its return type on a
+                        // preceding line. Point at `operator new/delete`, the
+                        // token the developer needs to remove or redesign.
+                        SourceLocation Loc = OpFunc->getLocation();
                         if (!Loc.isValid()) {
-                            Loc = OpFunc->getLocation();
+                            Loc = OpFunc->getBeginLoc();
                         }
                         if (!Loc.isValid() && OpFunc->hasBody()) {
                             Loc = OpFunc->getBody()->getBeginLoc();

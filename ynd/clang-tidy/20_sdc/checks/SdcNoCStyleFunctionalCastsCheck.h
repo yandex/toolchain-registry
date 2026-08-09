@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bridge_header.h"
+#include "llvm/ADT/DenseSet.h"
 
 namespace clang {
     namespace tidy {
@@ -11,6 +12,13 @@ namespace clang {
                 SdcNoCStyleFunctionalCastsCheck(StringRef Name, ClangTidyContext* Context);
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;
                 void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
+
+            private:
+                bool getDiagnosticLocations(SourceLocation CastLocation,
+                                            const SourceManager& SM,
+                                            SourceLocation& PrimaryLocation,
+                                            SourceLocation& ExpansionLocation);
+                llvm::DenseSet<unsigned> ReportedMacroSpellingLocations;
             };
 
         } // namespace sdc

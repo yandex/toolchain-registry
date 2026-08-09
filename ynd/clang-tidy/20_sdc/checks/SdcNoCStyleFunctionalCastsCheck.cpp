@@ -35,6 +35,38 @@ namespace clang {
                     this);
             }
 
+            bool SdcNoCStyleFunctionalCastsCheck::getDiagnosticLocations(
+                SourceLocation CastLocation, const SourceManager& SM,
+                SourceLocation& PrimaryLocation,
+                SourceLocation& ExpansionLocation) {
+                PrimaryLocation = CastLocation;
+                ExpansionLocation = SourceLocation();
+                if (!CastLocation.isMacroID()) {
+                    return true;
+                }
+
+                // Point at the token the developer must edit. For a cast in a
+                // macro body this is the definition; for a cast written as a
+                // macro argument it remains the argument at the call site.
+                PrimaryLocation = SM.getSpellingLoc(CastLocation);
+                if (!PrimaryLocation.isValid() ||
+                    SM.isInSystemHeader(PrimaryLocation)) {
+                    return false;
+                }
+
+                // One macro definition or argument may produce several AST
+                // cast nodes through repeated or nested expansion. Emit one
+                // primary warning at the single user-written token.
+                if (!ReportedMacroSpellingLocations
+                         .insert(PrimaryLocation.getRawEncoding())
+                         .second) {
+                    return false;
+                }
+
+                ExpansionLocation = SM.getExpansionLoc(CastLocation);
+                return true;
+            }
+
             void SdcNoCStyleFunctionalCastsCheck::check(const MatchFinder::MatchResult& Result) {
                 if (const auto* Cast = Result.Nodes.getNodeAs<CStyleCastExpr>("cStyleCast")) {
                     if (Cast->getType()->isVoidType()) {
@@ -43,9 +75,20 @@ namespace clang {
 
                     QualType From = Cast->getSubExpr()->IgnoreParenImpCasts()->getType();
                     QualType To = Cast->getTypeAsWritten();
-                    diag(Cast->getBeginLoc(),
+                    SourceLocation Primary;
+                    SourceLocation Expansion;
+                    if (!getDiagnosticLocations(Cast->getBeginLoc(),
+                                                *Result.SourceManager,
+                                                Primary, Expansion)) {
+                        return;
+                    }
+                    diag(Primary,
                          "C-style cast from %0 to %1 shall not be used")
                         << From << To;
+                    if (Expansion.isValid() && Expansion != Primary) {
+                        diag(Expansion, "cast is produced by this macro expansion",
+                             DiagnosticIDs::Note);
+                    }
                     return;
                 }
 
@@ -84,6 +127,14 @@ namespace clang {
                     QualType From = Cast->getSubExpr()->IgnoreParenImpCasts()->getType();
                     QualType To = Cast->getTypeAsWritten();
 
+                    SourceLocation Primary;
+                    SourceLocation Expansion;
+                    if (!getDiagnosticLocations(Cast->getBeginLoc(),
+                                                *Result.SourceManager,
+                                                Primary, Expansion)) {
+                        return;
+                    }
+
                     // Discarding a value to void has a permitted spelling, but
                     // only via the C-style form `(void)expr` (or a named cast);
                     // the functional form `void(expr)` is not exempt. Point the
@@ -91,16 +142,25 @@ namespace clang {
                     // the one case where the fix is a C-style cast rather than
                     // a static_cast.
                     if (Cast->getType()->isVoidType()) {
-                        diag(Cast->getBeginLoc(),
+                        diag(Primary,
                              "functional-notation cast of %0 to void shall not be "
                              "used; use '(void)expr' to discard a value")
                             << From;
+                        if (Expansion.isValid() && Expansion != Primary) {
+                            diag(Expansion,
+                                 "cast is produced by this macro expansion",
+                                 DiagnosticIDs::Note);
+                        }
                         return;
                     }
 
-                    diag(Cast->getBeginLoc(),
+                    diag(Primary,
                          "functional-notation cast from %0 to %1 shall not be used")
                         << From << To;
+                    if (Expansion.isValid() && Expansion != Primary) {
+                        diag(Expansion, "cast is produced by this macro expansion",
+                             DiagnosticIDs::Note);
+                    }
                 }
             }
 

@@ -42,7 +42,7 @@ namespace clang {
                 "::std::system",
                 // Project/QM extension: this launcher has the same shell and
                 // environment-dependent command-resolution risks even though
-                // it is not the C library function named by Rule 21.2.3.
+                // it is not the prohibited C library function.
                 "::boost::process::system"
             };
 
@@ -64,9 +64,7 @@ namespace clang {
             }
 
             std::string SdcNoSystemCheck::getDiagnosticMessage(StringRef FunctionName) const {
-                return "shell-command launcher 'system' shall not be used "
-                       "(Rule 21.2.3 plus the project restriction on "
-                       "boost::process::system)";
+                return "shell-command launcher 'system' shall not be used";
             }
 
         } // namespace sdc

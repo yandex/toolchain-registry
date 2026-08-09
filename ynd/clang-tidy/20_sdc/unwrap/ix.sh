@@ -51,6 +51,8 @@ SdcBlockScopeFunctionDeclarationCheck.cpp
 SdcBlockScopeFunctionDeclarationCheck.h
 SdcBlockScopeRedundantParenthesesCheck.cpp
 SdcBlockScopeRedundantParenthesesCheck.h
+SdcBracesAroundStatementsCheck.cpp
+SdcBracesAroundStatementsCheck.h
 SdcCastUtils.cpp
 SdcCastUtils.h
 SdcConsistentTypeAliasCheck.cpp
@@ -89,6 +91,8 @@ SdcIfElseIfFinalElseCheck.cpp
 SdcIfElseIfFinalElseCheck.h
 SdcIfEndifSameFileCheck.cpp
 SdcIfEndifSameFileCheck.h
+SdcIfIdentifierDefinedCheck.cpp
+SdcIfIdentifierDefinedCheck.h
 SdcImplicitEnumConstantUniqueValueCheck.cpp
 SdcImplicitEnumConstantUniqueValueCheck.h
 SdcIncludeFilenameCharsCheck.cpp
@@ -127,8 +131,12 @@ SdcNoAsmCheck.cpp
 SdcNoAsmCheck.h
 SdcNoAtoFunctionsCheck.cpp
 SdcNoAtoFunctionsCheck.h
+SdcNoBitFieldsCheck.cpp
+SdcNoBitFieldsCheck.h
 SdcNoBoolConversionCheck.cpp
 SdcNoBoolConversionCheck.h
+SdcNoBuiltInUnaryPlusCheck.cpp
+SdcNoBuiltInUnaryPlusCheck.h
 SdcNoCStyleFunctionalCastsCheck.cpp
 SdcNoCStyleFunctionalCastsCheck.h
 SdcNoCharacterConversionCheck.cpp
@@ -155,6 +163,8 @@ SdcNoFunctionalCastStatementCheck.cpp
 SdcNoFunctionalCastStatementCheck.h
 SdcNoGlobalVariablesCheck.cpp
 SdcNoGlobalVariablesCheck.h
+SdcNoGotoCheck.cpp
+SdcNoGotoCheck.h
 SdcNoImplicitThisCaptureCheck.cpp
 SdcNoImplicitThisCaptureCheck.h
 SdcNoInheritedFunctionConcealingCheck.cpp
@@ -175,6 +185,8 @@ SdcNoOctalConstantsCheck.cpp
 SdcNoOctalConstantsCheck.h
 SdcNoOffsetofCheck.cpp
 SdcNoOffsetofCheck.h
+SdcNoPointerExceptionCheck.cpp
+SdcNoPointerExceptionCheck.h
 SdcNoReinterpretCastCheck.cpp
 SdcNoReinterpretCastCheck.h
 SdcNoReturnStackAddressCheck.cpp
@@ -195,8 +207,14 @@ SdcNoTypeidPolymorphicCheck.cpp
 SdcNoTypeidPolymorphicCheck.h
 SdcNoUnionCheck.cpp
 SdcNoUnionCheck.h
+SdcNoUnscopedEnumCheck.cpp
+SdcNoUnscopedEnumCheck.h
+SdcNoUnsignedUnaryMinusCheck.cpp
+SdcNoUnsignedUnaryMinusCheck.h
 SdcNoVariableShadowingCheck.cpp
 SdcNoVariableShadowingCheck.h
+SdcNoVirtualInheritanceCheck.cpp
+SdcNoVirtualInheritanceCheck.h
 SdcNumericAssignmentCheck.cpp
 SdcNumericAssignmentCheck.h
 SdcOverrideDefaultArgCheck.cpp
@@ -208,6 +226,10 @@ SdcReservedNamespaceDefinitionCheck.cpp
 SdcReservedNamespaceDefinitionCheck.h
 SdcReturnValueUsedCheck.cpp
 SdcReturnValueUsedCheck.h
+SdcSignedOneBitBitFieldCheck.cpp
+SdcSignedOneBitBitFieldCheck.h
+SdcSingleVariableDeclarationCheck.cpp
+SdcSingleVariableDeclarationCheck.h
 SdcSpecialMemberFunctionsCheck.cpp
 SdcSpecialMemberFunctionsCheck.h
 SdcStdMoveNonConstLvalueCheck.cpp
@@ -216,12 +238,18 @@ SdcStringLiteralConcatenationCheck.cpp
 SdcStringLiteralConcatenationCheck.h
 SdcSwitchStructureCheck.cpp
 SdcSwitchStructureCheck.h
+SdcTerminatedEscapeSequenceCheck.cpp
+SdcTerminatedEscapeSequenceCheck.h
+SdcUndefSameFileCheck.cpp
+SdcUndefSameFileCheck.h
 SdcUnreachableCodeCheck.cpp
 SdcUnreachableCodeCheck.h
 SdcUnscopedEnumNumericUseCheck.cpp
 SdcUnscopedEnumNumericUseCheck.h
 SdcUseNullptrCheck.cpp
 SdcUseNullptrCheck.h
+SdcVirtualAndNonVirtualBaseCheck.cpp
+SdcVirtualAndNonVirtualBaseCheck.h
 SdcVirtualBaseCastViaDynamicCheck.cpp
 SdcVirtualBaseCastViaDynamicCheck.h
 SdcVirtualFinalNonOverrideCheck.cpp
@@ -230,10 +258,6 @@ SdcVirtualPMFNullCompareCheck.cpp
 SdcVirtualPMFNullCompareCheck.h
 SdcVolatileAppropriateCheck.cpp
 SdcVolatileAppropriateCheck.h
-SdcBracesAroundStatementsCheck.cpp
-SdcBracesAroundStatementsCheck.h
-SdcIfIdentifierDefinedCheck.cpp
-SdcIfIdentifierDefinedCheck.h
 tidy_module_sdc.cpp
 {% endblock %}
 
