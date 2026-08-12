@@ -21,19 +21,37 @@ SdcForwardingReferenceCheck::SdcForwardingReferenceCheck(StringRef Name,
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-// Returns true for a QualType that is a forwarding reference (T&& / auto&&).
-static bool hasForwardingRefType(QualType T) {
+// Returns true when P is a T&& / auto&& parameter whose type is introduced by
+// the enclosing function template. A class-template parameter followed by &&
+// is an ordinary rvalue reference because it is not deduced by the call.
+static bool hasForwardingRefType(const ParmVarDecl* P) {
+    QualType T = P->getType();
+    if (const auto* Pack = T->getAs<PackExpansionType>()) T = Pack->getPattern();
     if (!T->isRValueReferenceType()) return false;
+
     QualType Pointee = T.getNonReferenceType();
-    return Pointee->getAs<TemplateTypeParmType>() != nullptr ||
-           Pointee->getAs<AutoType>() != nullptr;
+    const auto* FD = dyn_cast<FunctionDecl>(P->getDeclContext());
+    const FunctionTemplateDecl* FTD = FD ? FD->getDescribedFunctionTemplate() : nullptr;
+    if (!FTD && FD) FTD = FD->getPrimaryTemplate();
+    if (!FTD) return false;
+
+    if (Pointee->getAs<AutoType>()) return true;
+    const auto* TypeParam = Pointee->getAs<TemplateTypeParmType>();
+    if (!TypeParam) return false;
+    for (const NamedDecl* TemplateParam : *FTD->getTemplateParameters()) {
+        const auto* Candidate = dyn_cast<TemplateTypeParmDecl>(TemplateParam);
+        if (Candidate && Candidate->getDepth() == TypeParam->getDepth() &&
+            Candidate->getIndex() == TypeParam->getIndex())
+            return true;
+    }
+    return false;
 }
 
 // Returns true if P is a forwarding reference parameter.  Handles both:
 //   - Uninstantiated patterns: P's own type is T&& or auto&&
 //   - Instantiated code:       P's type is concrete; check the pattern param
 static bool isForwardingRef(const ParmVarDecl* P) {
-    if (hasForwardingRefType(P->getType())) return true;
+    if (hasForwardingRefType(P)) return true;
 
     // In a template instantiation the parameter type is substituted.
     // Walk to the primary template to check the original parameter type.
@@ -41,11 +59,15 @@ static bool isForwardingRef(const ParmVarDecl* P) {
     if (!FD) return false;
     const FunctionTemplateDecl* FTD = FD->getPrimaryTemplate();
     if (!FTD) return false;
-    unsigned Idx = P->getFunctionScopeIndex();
     const FunctionDecl* Pattern = FTD->getTemplatedDecl();
-    if (Idx >= Pattern->getNumParams()) return false;
-    const ParmVarDecl* PatP = Pattern->getParamDecl(Idx);
-    return PatP != P && hasForwardingRefType(PatP->getType());
+    // Instantiating a function parameter pack creates one ParmVarDecl per pack
+    // element and shifts the indices of any following parameters. The source
+    // identifier remains stable, so use it to map back to the pattern.
+    for (const ParmVarDecl* PatP : Pattern->parameters()) {
+        if (PatP->getIdentifier() == P->getIdentifier())
+            return PatP != P && hasForwardingRefType(PatP);
+    }
+    return false;
 }
 
 // Returns true if CE is a call to std::forward.
@@ -102,6 +124,7 @@ static bool isDecltypeOfParam(QualType ForwardT, const ParmVarDecl* P) {
 //                              or P's type (lvalue), or decltype(P)
 static bool isCorrectForwardType(QualType ForwardT, const ParmVarDecl* P) {
     QualType ParamT    = P->getType();
+    if (const auto* Pack = ParamT->getAs<PackExpansionType>()) ParamT = Pack->getPattern();
     QualType ParamNonRef = ParamT.getNonReferenceType();
 
     // ── Pattern (uninstantiated): T&& or auto&&  ──────────────────────────
@@ -159,8 +182,20 @@ static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check) {
 
 // ─── Part A: check each argument of a non-forward call ─────────────────────
 
+// CXXOperatorCallExpr stores the implicit object of a non-static member
+// operator as argument zero. It is the source-level object/callee expression,
+// not an argument passed by the caller. Explicit operands follow it.
+static unsigned firstExplicitArgument(const CallExpr* CE) {
+    const auto* OperatorCall = dyn_cast<CXXOperatorCallExpr>(CE);
+    if (!OperatorCall) return 0;
+
+    const auto* Method = dyn_cast_or_null<CXXMethodDecl>(OperatorCall->getDirectCallee());
+    if (!Method || Method->isStatic() || CE->getNumArgs() == 0) return 0;
+    return 1;
+}
+
 static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check) {
-    for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
+    for (unsigned I = firstExplicitArgument(CE); I < CE->getNumArgs(); ++I) {
         const Expr* Arg = CE->getArg(I)->IgnoreParenImpCasts();
         const auto* DRE = dyn_cast<DeclRefExpr>(Arg);
         if (!DRE) continue;

@@ -86,6 +86,28 @@ static bool hasSpecifiedMovedFromState(const VarDecl* VD) {
     return NS && NS->isStdNamespace();
 }
 
+// Whether control may continue elsewhere in the enclosing function after S.
+// Only a return is unconditionally terminal for this lightweight analysis.
+// Other control transfers need a CFG to route their state to the correct
+// destination, so retain their state conservatively rather than risk a miss.
+static bool canFallThrough(const Stmt* S) {
+    if (!S) return true;
+    if (isa<ReturnStmt>(S)) return false;
+
+    if (const auto* Compound = dyn_cast<CompoundStmt>(S)) {
+        if (Compound->body_empty()) return true;
+        return canFallThrough(Compound->body_back());
+    }
+
+    if (const auto* If = dyn_cast<IfStmt>(S)) {
+        if (!If->getElse()) return true;
+        return canFallThrough(If->getThen()) ||
+               canFallThrough(If->getElse());
+    }
+
+    return true;
+}
+
 // ─── Per-function visitor ────────────────────────────────────────────────────
 
 class MovedFromVisitor : public RecursiveASTVisitor<MovedFromVisitor> {
@@ -108,9 +130,6 @@ public:
     void run(const FunctionDecl* FD) {
         if (const Stmt* Body = FD->getBody())
             TraverseStmt(const_cast<Stmt*>(Body));
-
-        // End-of-function: lvalue-ref params still in moved-from state are violations.
-        reportLvalRefAtExit(FD);
     }
 
     // ── CallExpr: detect std::move/forward and use-of-moved-from ─────────────
@@ -162,6 +181,39 @@ public:
         if (OC->getOperator() != OO_Equal)
             for (const Expr* Arg : OC->arguments()) checkUse(Arg);
         return RecursiveASTVisitor::TraverseCXXOperatorCallExpr(OC);
+    }
+
+    // The branches of an if statement are mutually exclusive.  Traverse each
+    // from the state established by the condition, then conservatively join
+    // the two possible exit states.  A single linear AST traversal would make
+    // a move in the then branch visible while inspecting the else branch.
+    bool TraverseIfStmt(IfStmt* S) {
+        if (Stmt* Init = S->getInit())
+            if (!TraverseStmt(Init)) return false;
+        if (VarDecl* ConditionVar = S->getConditionVariable())
+            if (!TraverseDecl(ConditionVar)) return false;
+        if (!TraverseStmt(S->getCond())) return false;
+
+        const auto EntryState = MovedFrom;
+
+        if (!TraverseStmt(S->getThen())) return false;
+        const auto ThenState = MovedFrom;
+        const bool ThenFallsThrough = canFallThrough(S->getThen());
+
+        MovedFrom = EntryState;
+        if (Stmt* Else = S->getElse())
+            if (!TraverseStmt(Else)) return false;
+        const auto ElseState = MovedFrom;
+        const bool ElseFallsThrough = canFallThrough(S->getElse());
+
+        MovedFrom.clear();
+        if (ThenFallsThrough)
+            for (const auto& [VD, MoveLoc] : ThenState)
+                MovedFrom.try_emplace(VD, MoveLoc);
+        if (ElseFallsThrough)
+            for (const auto& [VD, MoveLoc] : ElseState)
+                MovedFrom.try_emplace(VD, MoveLoc);
+        return true;
     }
 
     // A value moved at the end of a loop body is still moved-from at the
@@ -246,16 +298,6 @@ public:
         return RecursiveASTVisitor::TraverseCXXConstructExpr(CE);
     }
 
-    // ── ReturnStmt: check lvalue-ref params ───────────────────────────────────
-    bool VisitReturnStmt(ReturnStmt*) {
-        for (const auto& [VD, MoveLoc] : MovedFrom) {
-            if (const auto* PD = dyn_cast<ParmVarDecl>(VD))
-                if (PD->getType()->isLValueReferenceType())
-                    emitLvalRefReturn(PD, MoveLoc);
-        }
-        return true;
-    }
-
 private:
     // Check if E refers to a moved-from variable and report a violation.
     void checkUse(const Expr* E) {
@@ -281,24 +323,6 @@ private:
                    DiagnosticIDs::Note);
     }
 
-    void emitLvalRefReturn(const ParmVarDecl* PD, SourceLocation MoveLoc) {
-        Check.diag(PD->getLocation(),
-                   "lvalue reference parameter %0 is in a potentially "
-                   "moved-from state when the function returns")
-            << PD;
-        Check.diag(MoveLoc, "move occurred here", DiagnosticIDs::Note);
-    }
-
-    void reportLvalRefAtExit(const FunctionDecl* FD) {
-        // Triggered when a void function (or last-statement function) exits
-        // without an explicit return but a param is still in moved-from state.
-        if (!FD->getReturnType()->isVoidType()) return;
-        for (const auto& [VD, MoveLoc] : MovedFrom) {
-            if (const auto* PD = dyn_cast<ParmVarDecl>(VD))
-                if (PD->getType()->isLValueReferenceType())
-                    emitLvalRefReturn(PD, MoveLoc);
-        }
-    }
 };
 
 // ─── Check registration ─────────────────────────────────────────────────────
