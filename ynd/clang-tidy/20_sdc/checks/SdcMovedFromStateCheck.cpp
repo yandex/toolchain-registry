@@ -86,6 +86,13 @@ static bool hasSpecifiedMovedFromState(const VarDecl* VD) {
     return NS && NS->isStdNamespace();
 }
 
+// Only source-level named objects can subsequently be referred to by user
+// code.  Compiler-generated and unnamed parameters otherwise produce blank,
+// unactionable diagnostics at their enclosing declaration.
+static bool isTrackableMovedObject(const VarDecl* VD) {
+    return VD && !VD->isImplicit() && VD->getIdentifier();
+}
+
 // Whether control may continue elsewhere in the enclosing function after S.
 // Only a return is unconditionally terminal for this lightweight analysis.
 // Other control transfers need a CFG to route their state to the correct
@@ -136,7 +143,7 @@ public:
     bool TraverseCallExpr(CallExpr* CE) {
         if (isStdMoveOrForward(CE)) {
             const VarDecl* VD = getMovedVarDecl(CE);
-            if (VD && !hasSpecifiedMovedFromState(VD)) {
+            if (isTrackableMovedObject(VD) && !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0 && CE->getNumArgs() != 0)
                     checkUse(CE->getArg(0));
                 MovedFrom[VD] = CE->getBeginLoc();
@@ -158,7 +165,7 @@ public:
     bool TraverseCXXStaticCastExpr(CXXStaticCastExpr* SC) {
         if (isRValueCast(SC)) {
             const VarDecl* VD = getMovedVarDecl(SC);
-            if (VD && !hasSpecifiedMovedFromState(VD)) {
+            if (isTrackableMovedObject(VD) && !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0)
                     checkUse(SC->getSubExpr());
                 MovedFrom[VD] = SC->getBeginLoc();
@@ -226,6 +233,10 @@ public:
 
     bool TraverseCXXForRangeStmt(CXXForRangeStmt* S) {
         if (!RecursiveASTVisitor::TraverseCXXForRangeStmt(S)) return false;
+        // The loop variable is rebound to the next element on every
+        // iteration.  It does not retain the moved-from state of the object
+        // denoted by the previous iteration's binding.
+        MovedFrom.erase(S->getLoopVariable());
         return TraverseStmt(S->getBody());
     }
 
@@ -279,7 +290,8 @@ public:
             // Direct variable bound to move ctor (e.g. T(rval_var)):
             if (const auto* DRE = dyn_cast<DeclRefExpr>(Arg)) {
                 if (const auto* VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-                    if (!hasSpecifiedMovedFromState(VD)) {
+                    if (isTrackableMovedObject(VD) &&
+                        !hasSpecifiedMovedFromState(VD)) {
                         MovedFrom[VD] = CE->getBeginLoc();
                         return true;
                     }
