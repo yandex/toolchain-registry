@@ -74,6 +74,47 @@ static const VarDecl* getMovedVarDecl(const Expr* MoveExpr) {
     return dyn_cast<VarDecl>(DRE->getDecl());
 }
 
+static const VarDecl* getDirectVarDecl(const Expr* E) {
+    if (!E) return nullptr;
+    const auto* DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
+    return DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+}
+
+// std::move/std::forward and an rvalue cast only change value category.  When
+// the result initializes a reference, no move operation consumes the object.
+static bool onlyBindsReference(const Expr* E, ASTContext& Ctx) {
+    const Expr* Current = E;
+    while (Current) {
+        const auto Parents = Ctx.getParents(*Current);
+        if (Parents.size() != 1) return false;
+
+        if (const auto* VD = Parents[0].get<VarDecl>())
+            return VD->getType()->isReferenceType();
+
+        const auto* Parent = Parents[0].get<Expr>();
+        if (!Parent) return false;
+        if (!isa<ParenExpr>(Parent) && !isa<ImplicitCastExpr>(Parent) &&
+            !isa<ExprWithCleanups>(Parent) &&
+            !isa<MaterializeTemporaryExpr>(Parent) &&
+            !isa<CXXBindTemporaryExpr>(Parent))
+            return false;
+        Current = Parent;
+    }
+    return false;
+}
+
+static bool isStdClearCall(const CXXMemberCallExpr* MCE) {
+    const auto* MD = MCE->getMethodDecl();
+    if (!MD || MD->getName() != "clear" || MD->getNumParams() != 0)
+        return false;
+
+    for (const DeclContext* DC = MD->getDeclContext(); DC;
+         DC = DC->getParent())
+        if (const auto* NS = dyn_cast<NamespaceDecl>(DC))
+            if (NS->isStdNamespace()) return true;
+    return false;
+}
+
 // Standard smart pointers have a specified empty/null state after move and
 // may be queried or moved again safely.
 static bool hasSpecifiedMovedFromState(const VarDecl* VD) {
@@ -105,6 +146,9 @@ static bool canFallThrough(const Stmt* S) {
         if (Compound->body_empty()) return true;
         return canFallThrough(Compound->body_back());
     }
+
+    if (const auto* Attributed = dyn_cast<AttributedStmt>(S))
+        return canFallThrough(Attributed->getSubStmt());
 
     if (const auto* If = dyn_cast<IfStmt>(S)) {
         if (!If->getElse()) return true;
@@ -143,7 +187,9 @@ public:
     bool TraverseCallExpr(CallExpr* CE) {
         if (isStdMoveOrForward(CE)) {
             const VarDecl* VD = getMovedVarDecl(CE);
-            if (isTrackableMovedObject(VD) && !hasSpecifiedMovedFromState(VD)) {
+            if (!onlyBindsReference(CE, Ctx) &&
+                isTrackableMovedObject(VD) &&
+                !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0 && CE->getNumArgs() != 0)
                     checkUse(CE->getArg(0));
                 MovedFrom[VD] = CE->getBeginLoc();
@@ -165,7 +211,9 @@ public:
     bool TraverseCXXStaticCastExpr(CXXStaticCastExpr* SC) {
         if (isRValueCast(SC)) {
             const VarDecl* VD = getMovedVarDecl(SC);
-            if (isTrackableMovedObject(VD) && !hasSpecifiedMovedFromState(VD)) {
+            if (!onlyBindsReference(SC, Ctx) &&
+                isTrackableMovedObject(VD) &&
+                !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0)
                     checkUse(SC->getSubExpr());
                 MovedFrom[VD] = SC->getBeginLoc();
@@ -177,7 +225,10 @@ public:
 
     // ── Member calls: check implicit object for moved-from state ─────────────
     bool TraverseCXXMemberCallExpr(CXXMemberCallExpr* MCE) {
-        checkUse(MCE->getImplicitObjectArgument());
+        if (isStdClearCall(MCE))
+            MovedFrom.erase(getDirectVarDecl(MCE->getImplicitObjectArgument()));
+        else
+            checkUse(MCE->getImplicitObjectArgument());
         return RecursiveASTVisitor::TraverseCXXMemberCallExpr(MCE);
     }
 
