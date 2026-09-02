@@ -64,7 +64,8 @@ void SdcAlgorithmResultUsedCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
         callExpr(
             callee(functionDecl(hasAnyName("remove", "remove_if", "unique"))),
-            unless(isExpansionInSystemHeader())
+            unless(isExpansionInSystemHeader()),
+            unless(cxxMemberCallExpr())
         ).bind("algo"),
         this
     );

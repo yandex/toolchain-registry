@@ -390,7 +390,9 @@ namespace clang {
                 Finder->addMatcher(
                     binaryOperator(
                         unless(isExpansionInSystemHeader()),
-                        hasOperatorName("="))
+                        hasOperatorName("="),
+                        hasLHS(expr(hasType(pointerType()))),
+                        hasRHS(expr(hasType(pointerType()))))
                         .bind("assign"),
                     this);
             }
