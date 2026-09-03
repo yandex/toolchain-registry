@@ -65,15 +65,28 @@ namespace clang {
                     // Check the exception: single zero with optional suffix is allowed
                     // (e.g., 0L, 0U, 0UL, 0LL, etc.)
                     // But NOT octal notation like 00, 000, etc.
-                    // Find where the numeric part ends (before any suffix like L, U, LL, ULL)
+                    // Check whether the numeric part contains another digit,
+                    // ignoring digit separators. Stop at the suffix so digits
+                    // in a user-defined suffix do not affect classification.
+                    bool HasAdditionalDigit = false;
                     size_t numericEnd = 1; // Start after the first '0'
-                    while (numericEnd < SourceText.size() &&
-                           SourceText[numericEnd] >= '0' && SourceText[numericEnd] <= '9') {
-                        numericEnd++;
+                    while (numericEnd < SourceText.size()) {
+                        const char Ch = SourceText[numericEnd];
+                        if (Ch >= '0' && Ch <= '9') {
+                            HasAdditionalDigit = true;
+                            ++numericEnd;
+                            continue;
+                        }
+                        if (Ch == '\'') {
+                            ++numericEnd;
+                            continue;
+                        }
+                        break;
                     }
 
-                    // If the numeric part is just "0" (no additional digits), it's allowed
-                    if (numericEnd == 1) {
+                    // If the numeric part is just "0" (no additional digits), it's allowed.
+                    // A standard integer suffix does not change the numeric part.
+                    if (!HasAdditionalDigit) {
                         return; // Just "0" followed by optional suffix
                     }
 
