@@ -467,5 +467,6 @@
   "ynd/lib/llvm/22/tblgen/ix.sh":"toolchains/ynd/lib/llvm/22/tblgen/ix.sh",
   "ynd/lib/llvm/22/ver.sh":"toolchains/ynd/lib/llvm/22/ver.sh",
   "ynd/lib/xml2/0.diff":"toolchains/ynd/lib/xml2/0.diff",
-  "ynd/lib/xml2/ix.sh":"toolchains/ynd/lib/xml2/ix.sh"
+  "ynd/lib/xml2/ix.sh":"toolchains/ynd/lib/xml2/ix.sh",
+  "ynd/sfs/cache/ix.sh":"toolchains/ynd/sfs/cache/ix.sh"
 }
