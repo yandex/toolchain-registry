@@ -15,6 +15,12 @@ clang-resource-headers
 bridge_header.h
 ascii_compare_ignore_case_check.cpp
 ascii_compare_ignore_case_check.h
+insurance_enum_usage_check.cpp
+insurance_enum_usage_check.h
+insurance_optional_usage_check.cpp
+insurance_optional_usage_check.h
+insurance_type_based_naming_check.cpp
+insurance_type_based_naming_check.h
 taxi_async_use_after_free_check.cpp
 taxi_async_use_after_free_check.h
 taxi_coroutine_unsafe_check.cpp
@@ -131,7 +137,6 @@ rm -rf bin
 mv bin1 bin
 EOF
 {% endblock %}
-
 
 
 

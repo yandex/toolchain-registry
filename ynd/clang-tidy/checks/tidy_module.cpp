@@ -5,6 +5,9 @@
 #include "taxi_dangling_config_ref_check.h"
 
 #include "ascii_compare_ignore_case_check.h"
+#include "insurance_enum_usage_check.h"
+#include "insurance_optional_usage_check.h"
+#include "insurance_type_based_naming_check.h"
 #include "uneeded_temporary_string_check.h"
 #include "usage_restriction_checks.h"
 #include "using_namespace_in_header_check.h"
@@ -19,6 +22,10 @@ public:
         CheckFactories.registerCheck<misc::TaxiCoroutineUnsafeCheck>("arcadia-taxi-coroutine-unsafe");
         CheckFactories.registerCheck<misc::TaxiDanglingConfigRefCheck>("arcadia-taxi-dangling-config-ref");
         CheckFactories.registerCheck<bugprone::TaxiAsyncUseAfterFreeCheck>("arcadia-taxi-async-use-after-free");
+
+        CheckFactories.registerCheck<InsuranceEnumUsageCheck>("insurance-enum-usage");
+        CheckFactories.registerCheck<InsuranceOptionalUsageCheck>("insurance-optional-usage");
+        CheckFactories.registerCheck<InsuranceTypeBasedNamingCheck>("insurance-type-based-naming");
 
         // IGNF-1863
         CheckFactories.registerCheck<TypeidNameRestrictionCheck>("arcadia-typeid-name-restriction");
