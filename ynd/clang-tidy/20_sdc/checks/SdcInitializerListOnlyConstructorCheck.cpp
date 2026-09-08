@@ -1,4 +1,5 @@
 #include "SdcInitializerListOnlyConstructorCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
@@ -70,13 +71,7 @@ void SdcInitializerListOnlyConstructorCheck::check(
     const auto* RD = Result.Nodes.getNodeAs<CXXRecordDecl>("cls");
     if (!RD) return;
 
-    // Check class-template patterns as well: an initializer-list constructor
-    // is syntactically identifiable even with dependent element type
-    // (std::initializer_list<T>). Skip implicit instantiations to avoid
-    // duplicate diagnostics; explicit specializations are checked as normal
-    // class definitions by Clang's AST representation.
-    if (!RD->getDescribedClassTemplate() &&
-        RD->getTemplateSpecializationKind() != TSK_Undeclared) return;
+    if (!isInAnalyzedCode(*RD, RD->getLocation(), *Result.Context)) return;
 
     ASTContext& Ctx = *Result.Context;
 
@@ -100,15 +95,19 @@ void SdcInitializerListOnlyConstructorCheck::check(
 
     // Violation: initializer-list constructor coexists with other constructors.
     for (const CXXConstructorDecl* Other : OtherCtors) {
-        diag(Other->getLocation(),
-             "constructor '%0' cannot coexist with an initializer-list "
-             "constructor in the same class; only copy and move constructors "
-             "are permitted alongside an initializer-list constructor")
-            << Other->getNameAsString();
-        for (const CXXConstructorDecl* IL : InitListCtors)
-            diag(IL->getLocation(),
-                 "initializer-list constructor defined here",
-                 DiagnosticIDs::Note);
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *RD, Other->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(Other->getLocation(),
+                 "constructor '%0' cannot coexist with an initializer-list "
+                 "constructor in the same class; only copy and move constructors "
+                 "are permitted alongside an initializer-list constructor")
+                << Other->getNameAsString();
+            for (const CXXConstructorDecl* IL : InitListCtors)
+                diag(IL->getLocation(),
+                     "initializer-list constructor defined here",
+                     DiagnosticIDs::Note);
+        }
     }
 }
 

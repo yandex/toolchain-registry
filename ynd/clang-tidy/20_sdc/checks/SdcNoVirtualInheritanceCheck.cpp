@@ -1,4 +1,5 @@
 #include "SdcNoVirtualInheritanceCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -25,8 +26,7 @@ void SdcNoVirtualInheritanceCheck::registerMatchers(MatchFinder* Finder) {
 void SdcNoVirtualInheritanceCheck::check(
     const MatchFinder::MatchResult& Result) {
     const auto* Record = Result.Nodes.getNodeAs<CXXRecordDecl>("record");
-    if (!Record ||
-        Record->getTemplateSpecializationKind() == TSK_ImplicitInstantiation) {
+    if (!Record) {
         return;
     }
 
@@ -37,19 +37,23 @@ void SdcNoVirtualInheritanceCheck::check(
         }
 
         SourceLocation Location = SM.getSpellingLoc(Base.getBeginLoc());
-        if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-            !ReportedLocations.insert(Location.getRawEncoding()).second) {
+        if (!isInAnalyzedCode(*Record, Base.getBeginLoc(), *Result.Context)) {
             continue;
         }
 
         const CXXRecordDecl* BaseRecord = Base.getType()->getAsCXXRecordDecl();
         StringRef BaseName = BaseRecord ? BaseRecord->getName() : StringRef();
-        if (BaseName.empty()) {
-            diag(Location, "class '%0' should not use virtual inheritance")
-                << Record->getName();
-        } else {
-            diag(Location, "class '%0' should not inherit virtually from '%1'")
-                << Record->getName() << BaseName;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *Record, Base.getBeginLoc(), *Result.Context)) {
+            (void)Instance;
+            if (BaseName.empty()) {
+                diag(Location, "class '%0' should not use virtual inheritance")
+                    << Record->getName();
+            } else {
+                diag(Location,
+                     "class '%0' should not inherit virtually from '%1'")
+                    << Record->getName() << BaseName;
+            }
         }
     }
 }

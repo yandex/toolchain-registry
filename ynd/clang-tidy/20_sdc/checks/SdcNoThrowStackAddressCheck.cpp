@@ -1,4 +1,5 @@
 #include "SdcNoThrowStackAddressCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
@@ -52,19 +53,27 @@ namespace clang {
                 if (!Throw || !AddrOf || !Var) {
                     return;
                 }
+                if (!isInAnalyzedCode(*Throw, Throw->getThrowLoc(),
+                                      *Result.Context)) {
+                    return;
+                }
 
                 // The matcher pinpoints the inner `&x`; report at the throw
                 // keyword so the diagnostic is anchored to the offending
                 // statement, with a note at the address-of subexpression.
-                diag(Throw->getThrowLoc(),
-                     "throw expression carries the address of an automatic "
-                     "local variable; the address becomes dangling once the "
-                     "exception leaves the function")
-                    << Throw->getSourceRange();
-                diag(AddrOf->getOperatorLoc(),
-                     "address-of automatic variable %0 captured here",
-                     DiagnosticIDs::Note)
-                    << Var;
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *Throw, Throw->getThrowLoc(), *Result.Context)) {
+                    (void)Instance;
+                    diag(Throw->getThrowLoc(),
+                         "throw expression carries the address of an automatic "
+                         "local variable; the address becomes dangling once the "
+                         "exception leaves the function")
+                        << Throw->getSourceRange();
+                    diag(AddrOf->getOperatorLoc(),
+                         "address-of automatic variable %0 captured here",
+                         DiagnosticIDs::Note)
+                        << Var;
+                }
             }
 
         } // namespace sdc

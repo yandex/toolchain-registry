@@ -1,4 +1,5 @@
 #include "SdcNoCStyleFunctionalCastsCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExprCXX.h"
@@ -54,21 +55,14 @@ namespace clang {
                     return false;
                 }
 
-                // One macro definition or argument may produce several AST
-                // cast nodes through repeated or nested expansion. Emit one
-                // primary warning at the single user-written token.
-                if (!ReportedMacroSpellingLocations
-                         .insert(PrimaryLocation.getRawEncoding())
-                         .second) {
-                    return false;
-                }
-
                 ExpansionLocation = SM.getExpansionLoc(CastLocation);
                 return true;
             }
 
             void SdcNoCStyleFunctionalCastsCheck::check(const MatchFinder::MatchResult& Result) {
                 if (const auto* Cast = Result.Nodes.getNodeAs<CStyleCastExpr>("cStyleCast")) {
+                    if (!isInAnalyzedCode(*Cast, Cast->getBeginLoc(),
+                                          *Result.Context)) return;
                     if (Cast->getType()->isVoidType()) {
                         return;
                     }
@@ -82,17 +76,24 @@ namespace clang {
                                                 Primary, Expansion)) {
                         return;
                     }
-                    diag(Primary,
-                         "C-style cast from %0 to %1 shall not be used")
-                        << From << To;
-                    if (Expansion.isValid() && Expansion != Primary) {
-                        diag(Expansion, "cast is produced by this macro expansion",
-                             DiagnosticIDs::Note);
+                    for (const Decl* Instance : AnalysisInstances.claim(
+                             *Cast, Cast->getBeginLoc(), *Result.Context)) {
+                        (void)Instance;
+                        diag(Primary,
+                             "C-style cast from %0 to %1 shall not be used")
+                            << From << To;
+                        if (Expansion.isValid() && Expansion != Primary) {
+                            diag(Expansion,
+                                 "cast is produced by this macro expansion",
+                                 DiagnosticIDs::Note);
+                        }
                     }
                     return;
                 }
 
                 if (const auto* Cast = Result.Nodes.getNodeAs<CXXFunctionalCastExpr>("functionalCast")) {
+                    if (!isInAnalyzedCode(*Cast, Cast->getBeginLoc(),
+                                          *Result.Context)) return;
                     if (Cast->getCastKind() == CK_ConstructorConversion) {
                         return;
                     }
@@ -142,24 +143,33 @@ namespace clang {
                     // the one case where the fix is a C-style cast rather than
                     // a static_cast.
                     if (Cast->getType()->isVoidType()) {
+                        for (const Decl* Instance : AnalysisInstances.claim(
+                                 *Cast, Cast->getBeginLoc(), *Result.Context)) {
+                            (void)Instance;
+                            diag(Primary,
+                                 "functional-notation cast of %0 to void shall not be "
+                                 "used; use '(void)expr' to discard a value")
+                                << From;
+                            if (Expansion.isValid() && Expansion != Primary) {
+                                diag(Expansion,
+                                     "cast is produced by this macro expansion",
+                                     DiagnosticIDs::Note);
+                            }
+                        }
+                        return;
+                    }
+
+                    for (const Decl* Instance : AnalysisInstances.claim(
+                             *Cast, Cast->getBeginLoc(), *Result.Context)) {
+                        (void)Instance;
                         diag(Primary,
-                             "functional-notation cast of %0 to void shall not be "
-                             "used; use '(void)expr' to discard a value")
-                            << From;
+                             "functional-notation cast from %0 to %1 shall not be used")
+                            << From << To;
                         if (Expansion.isValid() && Expansion != Primary) {
                             diag(Expansion,
                                  "cast is produced by this macro expansion",
                                  DiagnosticIDs::Note);
                         }
-                        return;
-                    }
-
-                    diag(Primary,
-                         "functional-notation cast from %0 to %1 shall not be used")
-                        << From << To;
-                    if (Expansion.isValid() && Expansion != Primary) {
-                        diag(Expansion, "cast is produced by this macro expansion",
-                             DiagnosticIDs::Note);
                     }
                 }
             }

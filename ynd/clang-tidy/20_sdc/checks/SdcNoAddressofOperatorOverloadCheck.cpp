@@ -1,4 +1,5 @@
 #include "SdcNoAddressofOperatorOverloadCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -35,11 +36,6 @@ void SdcNoAddressofOperatorOverloadCheck::check(const MatchFinder::MatchResult& 
     if (!FD)
         return;
 
-    // Skip the template pattern itself — only instantiations (actual usage)
-    // are flagged. An uninstantiated template declaration is not a violation.
-    if (FD->getDescribedFunctionTemplate())
-        return;
-
     // Clang synthesises internal prototype declarations for some template
     // specialisations; these have no valid source location. Skip them.
     if (!FD->getLocation().isValid())
@@ -49,10 +45,15 @@ void SdcNoAddressofOperatorOverloadCheck::check(const MatchFinder::MatchResult& 
     // diagnostic when an out-of-line definition is also present.
     if (FD != FD->getCanonicalDecl())
         return;
+    if (!isInAnalyzedCode(*FD, FD->getLocation(), *Result.Context)) return;
 
-    diag(FD->getLocation(),
-         "overloading 'operator&' (address-of) is prohibited; "
-         "use 'std::addressof' to obtain the address of an object");
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *FD, FD->getLocation(), *Result.Context)) {
+        (void)Instance;
+        diag(FD->getLocation(),
+             "overloading 'operator&' (address-of) is prohibited; "
+             "use 'std::addressof' to obtain the address of an object");
+    }
 }
 
 } // namespace sdc

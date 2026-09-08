@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 #include "clang/AST/DeclCXX.h"
 #include <map>
@@ -125,6 +126,7 @@ namespace clang {
 
                 // Storage for all analyzed classes (for cross-class analysis)
                 std::map<const CXXRecordDecl*, SpecialMemberInfo> AnalyzedClasses;
+                AnalysisInstanceTracker AnalysisInstances;
 
                 // Callback after all AST traversal is done
                 void onEndOfTranslationUnit() override;

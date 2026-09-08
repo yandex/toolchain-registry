@@ -1,4 +1,5 @@
 #include "SdcNoUnscopedEnumCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -29,23 +30,26 @@ void SdcNoUnscopedEnumCheck::check(
     if (!Enumeration || isa<CXXRecordDecl>(Enumeration->getDeclContext())) {
         return;
     }
-
-    const SourceManager& SM = *Result.SourceManager;
-    SourceLocation Location = SM.getSpellingLoc(Enumeration->getBeginLoc());
-    if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-        !ReportedLocations.insert(Location.getRawEncoding()).second) {
+    if (!isInAnalyzedCode(*Enumeration, Enumeration->getBeginLoc(),
+                          *Result.Context)) {
         return;
     }
 
-    if (Enumeration->getIdentifier()) {
-        diag(Location,
-             "unscoped enumeration '%0' should not be declared outside a "
-             "class or struct")
-            << Enumeration->getName();
-    } else {
-        diag(Location,
-             "unnamed unscoped enumeration should not be declared outside a "
-             "class or struct");
+    const SourceManager& SM = *Result.SourceManager;
+    SourceLocation Location = SM.getSpellingLoc(Enumeration->getBeginLoc());
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *Enumeration, Enumeration->getBeginLoc(), *Result.Context)) {
+        (void)Instance;
+        if (Enumeration->getIdentifier()) {
+            diag(Location,
+                 "unscoped enumeration '%0' should not be declared outside a "
+                 "class or struct")
+                << Enumeration->getName();
+        } else {
+            diag(Location,
+                 "unnamed unscoped enumeration should not be declared outside a "
+                 "class or struct");
+        }
     }
 }
 

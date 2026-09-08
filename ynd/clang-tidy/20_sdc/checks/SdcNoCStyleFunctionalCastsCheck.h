@@ -1,7 +1,7 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
-#include "llvm/ADT/DenseSet.h"
 
 namespace clang {
     namespace tidy {
@@ -18,7 +18,7 @@ namespace clang {
                                             const SourceManager& SM,
                                             SourceLocation& PrimaryLocation,
                                             SourceLocation& ExpansionLocation);
-                llvm::DenseSet<unsigned> ReportedMacroSpellingLocations;
+                AnalysisInstanceTracker AnalysisInstances;
             };
 
         } // namespace sdc

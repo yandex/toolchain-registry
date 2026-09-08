@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -14,10 +15,11 @@ public:
     void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
 private:
-    void checkLiteralToken(SourceLocation TokenLocation,
+    void checkLiteralToken(const DynTypedNode& Node,
+                           SourceLocation TokenLocation,
                            SourceLocation DiagnosticLocation,
-                           const SourceManager& SM,
-                           const LangOptions& LangOpts);
+                           ASTContext& Context);
+    AnalysisInstanceTracker AnalysisInstances;
 };
 
 } // namespace sdc

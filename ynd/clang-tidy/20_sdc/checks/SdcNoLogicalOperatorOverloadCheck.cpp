@@ -1,4 +1,5 @@
 #include "SdcNoLogicalOperatorOverloadCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -30,11 +31,6 @@ void SdcNoLogicalOperatorOverloadCheck::check(const MatchFinder::MatchResult& Re
     if (!FD)
         return;
 
-    // Skip the template pattern itself — only instantiations (actual usage)
-    // are flagged. An uninstantiated template declaration is not a violation.
-    if (FD->getDescribedFunctionTemplate())
-        return;
-
     // Clang synthesises internal prototype declarations for some template
     // specialisations; these have no valid source location. Skip them.
     if (!FD->getLocation().isValid())
@@ -44,13 +40,18 @@ void SdcNoLogicalOperatorOverloadCheck::check(const MatchFinder::MatchResult& Re
     // to avoid a duplicate diagnostic when an out-of-line definition is present.
     if (FD != FD->getCanonicalDecl())
         return;
+    if (!isInAnalyzedCode(*FD, FD->getLocation(), *Result.Context)) return;
 
     StringRef OpName =
         FD->getOverloadedOperator() == OO_AmpAmp ? "operator&&" : "operator||";
 
-    diag(FD->getLocation(),
-         "overloading '%0' is prohibited; it breaks short-circuit evaluation semantics")
-        << OpName;
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *FD, FD->getLocation(), *Result.Context)) {
+        (void)Instance;
+        diag(FD->getLocation(),
+             "overloading '%0' is prohibited; it breaks short-circuit evaluation semantics")
+            << OpName;
+    }
 }
 
 } // namespace sdc

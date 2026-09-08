@@ -1,4 +1,5 @@
 #include "SdcNoReturnStackAddressCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -193,7 +194,6 @@ namespace clang {
                 Finder->addMatcher(
                     returnStmt(
                         unless(isExpansionInSystemHeader()),
-                        unless(isInTemplateInstantiation()),
                         hasAncestor(functionDecl().bind("function")),
                         hasReturnValue(expr().bind("ret")))
                         .bind("return"),
@@ -205,30 +205,38 @@ namespace clang {
                 const auto* Ret = Result.Nodes.getNodeAs<ReturnStmt>("return");
                 const auto* E = Result.Nodes.getNodeAs<Expr>("ret");
                 if (!Ret || !E) return;
+                if (!isInAnalyzedCode(*Ret, Ret->getReturnLoc(),
+                                      *Result.Context)) {
+                    return;
+                }
 
                 const auto* FD = Result.Nodes.getNodeAs<FunctionDecl>("function");
                 QualType FuncRetTy = FD ? FD->getReturnType() : QualType{};
 
-                if (!FuncRetTy.isNull() && FuncRetTy->isPointerType()) {
-                    if (const VarDecl* VD = findAddressedAutomaticObject(E)) {
-                        diagnoseAddressReturn(*this, Ret, VD);
-                        // Continue below: the same return can also construct a
-                        // wrapper from a bad lambda, and both facts are useful.
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *Ret, Ret->getReturnLoc(), *Result.Context)) {
+                    (void)Instance;
+                    if (!FuncRetTy.isNull() && FuncRetTy->isPointerType()) {
+                        if (const VarDecl* VD = findAddressedAutomaticObject(E)) {
+                            diagnoseAddressReturn(*this, Ret, VD);
+                            // Continue below: the same return can also construct a
+                            // wrapper from a bad lambda, and both facts are useful.
+                        }
                     }
-                }
 
-                // Reference return: returning `x` or `x.member` where the base
-                // object has automatic storage duration.  Restrict this to
-                // functions that actually return by reference so that return
-                // statements inside a returned lambda body are not mistaken for
-                // an outer dangling-reference return.
-                if (!FuncRetTy.isNull() && FuncRetTy->isReferenceType()) {
-                    if (const VarDecl* VD = findBaseAutomaticObject(E)) {
-                        diagnoseReferenceReturn(*this, Ret, VD);
+                    // Reference return: returning `x` or `x.member` where the base
+                    // object has automatic storage duration.  Restrict this to
+                    // functions that actually return by reference so that return
+                    // statements inside a returned lambda body are not mistaken for
+                    // an outer dangling-reference return.
+                    if (!FuncRetTy.isNull() && FuncRetTy->isReferenceType()) {
+                        if (const VarDecl* VD = findBaseAutomaticObject(E)) {
+                            diagnoseReferenceReturn(*this, Ret, VD);
+                        }
                     }
-                }
 
-                findReturnedLambdas(*this, Ret, E);
+                    findReturnedLambdas(*this, Ret, E);
+                }
             }
 
         } // namespace sdc

@@ -43,6 +43,13 @@ namespace clang {
                     return;
                 }
 
+                if (AnalysisInstances
+                        .claim(*ClassDecl, ClassDecl->getLocation(),
+                               *Result.Context)
+                        .empty()) {
+                    return;
+                }
+
                 // Analyze the class
                 SpecialMemberInfo Info = analyzeClass(ClassDecl);
 
@@ -56,15 +63,6 @@ namespace clang {
                 checkCustomizedDestructorIsNonEmpty(Info);
                 checkManagerTypeRequirements(Info);
                 checkFileLocations(Info);
-
-                // Check immediate inheritance requirement: public virtual dtor must be unmovable
-                if (Info.DtorDecl && Info.DtorDecl->getAccess() == AS_public &&
-                    Info.DtorDecl->isVirtual()) {
-                    if (Info.Category != ClassCategory::Unmovable) {
-                        diag(Info.ClassDecl->getLocation(),
-                             "class with public virtual destructor must be unmovable");
-                    }
-                }
 
                 // Note: Inheritance checking for "used as public base" will be done in onEndOfTranslationUnit
                 // after all classes have been analyzed
@@ -119,8 +117,7 @@ namespace clang {
                     return MemberState::Implicit;
                 }
 
-                // If the destructor is implicit (not declared by user), it's implicit
-                if (!Dtor->isUserProvided() && !Dtor->isDefaulted() && !Dtor->isDeleted()) {
+                if (Dtor->isImplicit()) {
                     return MemberState::Implicit;
                 }
 
@@ -156,8 +153,7 @@ namespace clang {
                     return MemberState::Implicit;
                 }
 
-                // Check if it's implicit (compiler-generated)
-                if (!CopyCtor->isUserProvided() && !CopyCtor->isDefaulted() && !CopyCtor->isDeleted()) {
+                if (CopyCtor->isImplicit()) {
                     return MemberState::Implicit;
                 }
 
@@ -192,8 +188,7 @@ namespace clang {
                     return MemberState::Implicit;
                 }
 
-                // Check if it's implicit (compiler-generated)
-                if (!CopyAssign->isUserProvided() && !CopyAssign->isDefaulted() && !CopyAssign->isDeleted()) {
+                if (CopyAssign->isImplicit()) {
                     return MemberState::Implicit;
                 }
 
@@ -228,8 +223,7 @@ namespace clang {
                     return MemberState::Implicit;
                 }
 
-                // Check if it's implicit (compiler-generated)
-                if (!MoveCtor->isUserProvided() && !MoveCtor->isDefaulted() && !MoveCtor->isDeleted()) {
+                if (MoveCtor->isImplicit()) {
                     return MemberState::Implicit;
                 }
 
@@ -264,8 +258,7 @@ namespace clang {
                     return MemberState::Implicit;
                 }
 
-                // Check if it's implicit (compiler-generated)
-                if (!MoveAssign->isUserProvided() && !MoveAssign->isDefaulted() && !MoveAssign->isDeleted()) {
+                if (MoveAssign->isImplicit()) {
                     return MemberState::Implicit;
                 }
 
@@ -282,65 +275,68 @@ namespace clang {
 
             bool SdcSpecialMemberFunctionsCheck::isCopyConstructible(
                 const SpecialMemberInfo& Info) {
-                // Copy-constructible if copy constructor is not deleted
-                return Info.CopyConstructor != MemberState::Deleted;
+                if (Info.ClassDecl->isAbstract())
+                    return false;
+                const CXXDestructorDecl* Destructor =
+                    Info.ClassDecl->getDestructor();
+                if (!Destructor || Destructor->isDeleted() ||
+                    Destructor->getAccess() != AS_public) {
+                    return false;
+                }
+                for (const CXXConstructorDecl* Constructor :
+                     Info.ClassDecl->ctors()) {
+                    unsigned TypeQualifiers = 0;
+                    if (Constructor->isCopyConstructor(TypeQualifiers) &&
+                        (TypeQualifiers & Qualifiers::Const) != 0 &&
+                        !Constructor->isDeleted() &&
+                        Constructor->getAccess() == AS_public) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             bool SdcSpecialMemberFunctionsCheck::isMoveConstructible(
                 const SpecialMemberInfo& Info) {
-                // Move-constructible if move constructor exists and is not deleted
-                // OR if copy constructor exists and move is implicit/deleted (falls back to copy)
-
-                // If move is explicitly available (customized or defaulted), use it
-                if (Info.MoveConstructor == MemberState::Customized ||
-                    Info.MoveConstructor == MemberState::Defaulted) {
-                    return true;
-                }
-
-                // If move is implicit, check if copy is available as fallback
-                // (C++ allows using copy constructor when move is not explicitly deleted)
-                if (Info.MoveConstructor == MemberState::Implicit) {
-                    return isCopyConstructible(Info);
-                }
-
-                // If move is explicitly deleted, the class is not move-constructible
-                // even if copy constructor exists
-                if (Info.MoveConstructor == MemberState::Deleted) {
+                if (Info.ClassDecl->isAbstract())
+                    return false;
+                const CXXDestructorDecl* Destructor =
+                    Info.ClassDecl->getDestructor();
+                if (!Destructor || Destructor->isDeleted() ||
+                    Destructor->getAccess() != AS_public) {
                     return false;
                 }
-
-                return false;
+                if (Info.MoveCtorDecl) {
+                    return !Info.MoveCtorDecl->isDeleted() &&
+                           Info.MoveCtorDecl->getAccess() == AS_public;
+                }
+                return isCopyConstructible(Info);
             }
 
             bool SdcSpecialMemberFunctionsCheck::isCopyAssignable(
                 const SpecialMemberInfo& Info) {
-                return Info.CopyAssignment != MemberState::Deleted;
+                for (const CXXMethodDecl* Method : Info.ClassDecl->methods()) {
+                    if (!Method->isCopyAssignmentOperator() ||
+                        Method->getNumParams() == 0)
+                        continue;
+                    QualType Parameter = Method->getParamDecl(0)->getType();
+                    if (Parameter->isReferenceType())
+                        Parameter = Parameter->getPointeeType();
+                    if (Parameter.isConstQualified() && !Method->isDeleted() &&
+                        Method->getAccess() == AS_public) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             bool SdcSpecialMemberFunctionsCheck::isMoveAssignable(
                 const SpecialMemberInfo& Info) {
-                // Move-assignable if move assignment exists and is not deleted
-                // OR if copy assignment exists and move is implicit/deleted (falls back to copy)
-
-                // If move is explicitly available (customized or defaulted), use it
-                if (Info.MoveAssignment == MemberState::Customized ||
-                    Info.MoveAssignment == MemberState::Defaulted) {
-                    return true;
+                if (Info.MoveAssignDecl) {
+                    return !Info.MoveAssignDecl->isDeleted() &&
+                           Info.MoveAssignDecl->getAccess() == AS_public;
                 }
-
-                // If move is implicit, check if copy is available as fallback
-                // (C++ allows using copy assignment when move is not explicitly deleted)
-                if (Info.MoveAssignment == MemberState::Implicit) {
-                    return isCopyAssignable(Info);
-                }
-
-                // If move is explicitly deleted, the class is not move-assignable
-                // even if copy assignment exists
-                if (Info.MoveAssignment == MemberState::Deleted) {
-                    return false;
-                }
-
-                return false;
+                return isCopyAssignable(Info);
             }
 
             SdcSpecialMemberFunctionsCheck::ClassCategory
@@ -371,12 +367,6 @@ namespace clang {
                     if ((copyAssign && moveAssign) || (!copyAssign && !moveAssign)) {
                         return ClassCategory::CopyEnabled;
                     }
-                }
-
-                // Special case: classes with customized destructors that are copy-constructible
-                // but not move-constructible are allowed (valid resource management pattern)
-                if (Info.Destructor == MemberState::Customized && copyCtor && !moveCtor) {
-                    return ClassCategory::CopyEnabled;
                 }
 
                 // All other combinations are invalid
@@ -419,18 +409,21 @@ namespace clang {
                     return true;
                 }
 
-                // Check if body is empty or contains only null statements
-                for (const Stmt* S : CompoundBody->body()) {
-                    if (!S) {
+                // Compound and null statements do not satisfy the requirement,
+                // but a substantive statement nested inside a compound does.
+                std::vector<const Stmt*> Worklist(CompoundBody->body_begin(),
+                                                  CompoundBody->body_end());
+                while (!Worklist.empty()) {
+                    const Stmt* S = Worklist.back();
+                    Worklist.pop_back();
+                    if (!S || isa<NullStmt>(S))
+                        continue;
+                    if (const auto* Compound = dyn_cast<CompoundStmt>(S)) {
+                        Worklist.insert(Worklist.end(),
+                                        Compound->body_begin(),
+                                        Compound->body_end());
                         continue;
                     }
-
-                    // Null statement is just a semicolon
-                    if (isa<NullStmt>(S)) {
-                        continue;
-                    }
-
-                    // Found a non-null statement
                     return true;
                 }
 
@@ -559,7 +552,8 @@ namespace clang {
                         }
 
                         // Move constructor must be either customized or not declared
-                        if (Info.MoveConstructor == MemberState::Defaulted) {
+                        if (Info.MoveConstructor != MemberState::Customized &&
+                            Info.MoveConstructor != MemberState::Implicit) {
                             diag(Info.ClassDecl->getLocation(),
                                  "general manager move constructor must be either customized or not declared "
                                  "(not defaulted)");
@@ -747,14 +741,12 @@ namespace clang {
                     return false;
                 }
 
-                // Check if the function has a body (is defined)
-                if (!Decl->hasBody()) {
+                const FunctionDecl* Definition = Decl->getDefinition();
+                if (!Definition) {
                     return false;
                 }
 
-                // Check if it's defined inline (definition is in the class body)
-                // A function is out-of-class if it's not defined inline
-                return !Decl->isInlined() || Decl->isOutOfLine();
+                return Definition->isOutOfLine();
             }
 
             std::string SdcSpecialMemberFunctionsCheck::getDefinitionFile(

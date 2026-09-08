@@ -1,7 +1,7 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
-#include "llvm/ADT/DenseSet.h"
 
 namespace clang {
 namespace tidy {
@@ -16,7 +16,7 @@ public:
     void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
 private:
-    llvm::DenseSet<unsigned> ReportedLocations;
+    AnalysisInstanceTracker AnalysisInstances;
 };
 
 } // namespace sdc

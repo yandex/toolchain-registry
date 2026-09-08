@@ -1,4 +1,5 @@
 #include "SdcNoUnionCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -27,20 +28,15 @@ void SdcNoUnionCheck::check(const MatchFinder::MatchResult& Result) {
     if (!RD)
         return;
 
-    // Implicit instantiations and explicit instantiation definitions/declarations
-    // are compiler-generated from a template definition that is already reported.
-    // Explicit specialisations (TSK_ExplicitSpecialization) are user-written and
-    // must still be reported.
-    if (const auto* CRD = dyn_cast<CXXRecordDecl>(RD)) {
-        auto Kind = CRD->getTemplateSpecializationKind();
-        if (Kind == TSK_ImplicitInstantiation ||
-            Kind == TSK_ExplicitInstantiationDefinition ||
-            Kind == TSK_ExplicitInstantiationDeclaration)
-            return;
-    }
+    if (!isInAnalyzedCode(*RD, RD->getBeginLoc(), *Result.Context))
+        return;
 
-    diag(RD->getBeginLoc(),
-         "use of 'union' is prohibited; use 'std::variant' instead");
+    for (const Decl* Instance :
+         AnalysisInstances.claim(*RD, RD->getBeginLoc(), *Result.Context)) {
+        (void)Instance;
+        diag(RD->getBeginLoc(),
+             "use of 'union' is prohibited; use 'std::variant' instead");
+    }
 }
 
 } // namespace sdc

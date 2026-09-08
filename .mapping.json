@@ -139,6 +139,8 @@
   "ynd/clang-tidy/20_sdc/checks/SdcBracesAroundStatementsCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcBracesAroundStatementsCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcCastUtils.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcCastUtils.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcCastUtils.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcCastUtils.h",
+  "ynd/clang-tidy/20_sdc/checks/SdcCodeSelection.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcCodeSelection.cpp",
+  "ynd/clang-tidy/20_sdc/checks/SdcCodeSelection.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcCodeSelection.h",
   "ynd/clang-tidy/20_sdc/checks/SdcConsistentTypeAliasCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcConsistentTypeAliasCheck.cpp",
   "ynd/clang-tidy/20_sdc/checks/SdcConsistentTypeAliasCheck.h":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcConsistentTypeAliasCheck.h",
   "ynd/clang-tidy/20_sdc/checks/SdcDeleteIncompletePtrCheck.cpp":"toolchains/ynd/clang-tidy/20_sdc/checks/SdcDeleteIncompletePtrCheck.cpp",

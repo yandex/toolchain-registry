@@ -1,4 +1,5 @@
 #include "SdcVirtualAndNonVirtualBaseCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -96,7 +97,7 @@ void SdcVirtualAndNonVirtualBaseCheck::check(
     const MatchFinder::MatchResult& Result) {
     const auto* Record = Result.Nodes.getNodeAs<CXXRecordDecl>("record");
     if (!Record || Record->bases().empty() ||
-        Record->getTemplateSpecializationKind() == TSK_ImplicitInstantiation) {
+        !isInAnalyzedCode(*Record, Record->getLocation(), *Result.Context)) {
         return;
     }
 
@@ -115,10 +116,14 @@ void SdcVirtualAndNonVirtualBaseCheck::check(
             continue;
         }
 
-        diag(Record->getLocation(),
-             "class '%0' has accessible base class '%1' through both virtual "
-             "and non-virtual derivations")
-            << Record->getName() << Base->getName();
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *Record, Record->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(Record->getLocation(),
+                 "class '%0' has accessible base class '%1' through both virtual "
+                 "and non-virtual derivations")
+                << Record->getName() << Base->getName();
+        }
         return; // One diagnostic is sufficient to identify this hierarchy.
     }
 }

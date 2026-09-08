@@ -16,6 +16,86 @@ namespace clang {
     namespace tidy {
         namespace sdc {
 
+            namespace {
+
+            enum class SensitiveFunctionKind {
+                None,
+                Getenv,
+                Localeconv,
+                Setlocale,
+                Strerror,
+            };
+
+            bool isCharPointer(QualType Type, bool RequireConstPointee) {
+                const auto* Pointer = Type->getAs<PointerType>();
+                if (!Pointer)
+                    return false;
+                const QualType Pointee = Pointer->getPointeeType();
+                return Pointee->isCharType() &&
+                       (!RequireConstPointee || Pointee.isConstQualified());
+            }
+
+            bool isLconvPointer(QualType Type) {
+                const auto* Pointer = Type->getAs<PointerType>();
+                if (!Pointer)
+                    return false;
+                const auto* Record =
+                    Pointer->getPointeeType()->getAs<RecordType>();
+                if (!Record)
+                    return false;
+                const std::string Name =
+                    Record->getDecl()->getQualifiedNameAsString();
+                return Name == "lconv" || Name == "std::lconv";
+            }
+
+            SensitiveFunctionKind classifySensitiveFunction(
+                const FunctionDecl* Function) {
+                if (!Function)
+                    return SensitiveFunctionKind::None;
+
+                const ASTContext& Context = Function->getASTContext();
+                const std::string Name = Function->getQualifiedNameAsString();
+                const bool IsGlobalOrStd =
+                    Name.find("::") == std::string::npos ||
+                    StringRef(Name).starts_with("std::");
+                if (!IsGlobalOrStd)
+                    return SensitiveFunctionKind::None;
+
+                if ((Name == "getenv" || Name == "std::getenv") &&
+                    Function->getNumParams() == 1 &&
+                    isCharPointer(Function->getReturnType(), false) &&
+                    isCharPointer(Function->getParamDecl(0)->getType(), true)) {
+                    return SensitiveFunctionKind::Getenv;
+                }
+                if ((Name == "localeconv" || Name == "std::localeconv") &&
+                    Function->getNumParams() == 0 &&
+                    isLconvPointer(Function->getReturnType())) {
+                    return SensitiveFunctionKind::Localeconv;
+                }
+                if ((Name == "setlocale" || Name == "std::setlocale") &&
+                    Function->getNumParams() == 2 &&
+                    isCharPointer(Function->getReturnType(), false) &&
+                    Context.hasSameType(
+                        Function->getParamDecl(0)->getType()
+                            .getUnqualifiedType(),
+                        Context.IntTy) &&
+                    isCharPointer(Function->getParamDecl(1)->getType(), true)) {
+                    return SensitiveFunctionKind::Setlocale;
+                }
+                if ((Name == "strerror" || Name == "std::strerror") &&
+                    Function->getNumParams() == 1 &&
+                    isCharPointer(Function->getReturnType(), false) &&
+                    Context.hasSameType(
+                        Function->getParamDecl(0)->getType()
+                            .getUnqualifiedType(),
+                        Context.IntTy)) {
+                    return SensitiveFunctionKind::Strerror;
+                }
+                return SensitiveFunctionKind::None;
+            }
+
+            } // namespace
+
             SdcGetenvPointerConstQualifiedCheck::SdcGetenvPointerConstQualifiedCheck(
                 StringRef Name, ClangTidyContext* Context)
                 : ClangTidyCheck(Name, Context)
@@ -79,37 +159,68 @@ namespace clang {
                 };
 
                 if (const auto* DRE = Result.Nodes.getNodeAs<clang::DeclRefExpr>("sensitive_func_ref")) {
-                    checkAddressTaken(DRE, DRE->getDecl()->getName());
+                    const auto* Function =
+                        dyn_cast<FunctionDecl>(DRE->getDecl());
+                    if (classifySensitiveFunction(Function) !=
+                        SensitiveFunctionKind::None) {
+                        for (const Decl* Instance : AddressInstances.claim(
+                                 *DRE, DRE->getBeginLoc(), *Result.Context)) {
+                            (void)Instance;
+                            checkAddressTaken(DRE,
+                                              DRE->getDecl()->getName());
+                        }
+                    }
                 }
 
                 if (const auto* ULE = Result.Nodes.getNodeAs<clang::UnresolvedLookupExpr>("unresolved_sensitive_func_ref")) {
                     llvm::StringRef FuncName;
                     for (const clang::NamedDecl* ND : ULE->decls()) {
-                        llvm::StringRef Name = ND->getName();
-                        if (Name == "getenv" || Name == "localeconv" ||
-                            Name == "setlocale" || Name == "strerror") {
-                            FuncName = Name;
+                        const auto* Function = dyn_cast<FunctionDecl>(ND);
+                        if (classifySensitiveFunction(Function) !=
+                            SensitiveFunctionKind::None) {
+                            FuncName = ND->getName();
                             break;
                         }
                     }
                     if (!FuncName.empty()) {
-                        checkAddressTaken(ULE, FuncName);
+                        for (const Decl* Instance : AddressInstances.claim(
+                                 *ULE, ULE->getBeginLoc(), *Result.Context)) {
+                            (void)Instance;
+                            checkAddressTaken(ULE, FuncName);
+                        }
                     }
                 }
 
                 // Check for direct calls to sensitive functions
                 if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("sensitive_call")) {
-                    checkFunctionCall(Call, Result);
+                    if (classifySensitiveFunction(Call->getDirectCallee()) !=
+                        SensitiveFunctionKind::None) {
+                        for (const Decl* Instance : CallInstances.claim(
+                                 *Call, Call->getBeginLoc(), *Result.Context)) {
+                            (void)Instance;
+                            checkFunctionCall(Call, Result);
+                        }
+                    }
                 }
 
                 // Check for variable declarations that use sensitive function results
                 if (const auto* DeclStmt = Result.Nodes.getNodeAs<clang::DeclStmt>("decl_with_call")) {
-                    checkVariableDeclaration(DeclStmt, Result);
+                    for (const Decl* Instance : DeclarationInstances.claim(
+                             *DeclStmt, DeclStmt->getBeginLoc(),
+                             *Result.Context)) {
+                        (void)Instance;
+                        checkVariableDeclaration(DeclStmt, Result);
+                    }
                 }
 
                 // Check for member access expressions (for lconv struct fields)
                 if (const auto* MemberExpr = Result.Nodes.getNodeAs<clang::MemberExpr>("member_access")) {
-                    checkLconvMemberModification(MemberExpr, Result);
+                    for (const Decl* Instance : MemberInstances.claim(
+                             *MemberExpr, MemberExpr->getMemberLoc(),
+                             *Result.Context)) {
+                        (void)Instance;
+                        checkLconvMemberModification(MemberExpr, Result);
+                    }
                 }
             }
 
@@ -198,9 +309,8 @@ namespace clang {
 
                 if (const auto* Call = llvm::dyn_cast<clang::CallExpr>(E)) {
                     if (const clang::FunctionDecl* Func = Call->getDirectCallee()) {
-                        llvm::StringRef Name = Func->getName();
-                        if (Name == "getenv" || Name == "localeconv" ||
-                            Name == "setlocale" || Name == "strerror") {
+                        if (classifySensitiveFunction(Func) !=
+                            SensitiveFunctionKind::None) {
                             return Call;
                         }
                     }
@@ -496,7 +606,12 @@ namespace clang {
 
                 // Check if the field is in the lconv struct
                 const clang::RecordDecl* ParentRecord = Field->getParent();
-                if (!ParentRecord || ParentRecord->getName() != "lconv") {
+                if (!ParentRecord) {
+                    return false;
+                }
+                const std::string RecordName =
+                    ParentRecord->getQualifiedNameAsString();
+                if (RecordName != "lconv" && RecordName != "std::lconv") {
                     return false;
                 }
 
@@ -521,7 +636,8 @@ namespace clang {
                 // Direct call to localeconv()
                 if (const auto* Call = llvm::dyn_cast<clang::CallExpr>(E)) {
                     if (const clang::FunctionDecl* Func = Call->getDirectCallee()) {
-                        if (Func->getName() == "localeconv") {
+                        if (classifySensitiveFunction(Func) ==
+                            SensitiveFunctionKind::Localeconv) {
                             return true;
                         }
                     }
@@ -550,9 +666,8 @@ namespace clang {
                 // Check if this is a call to a sensitive function
                 if (const auto* Call = llvm::dyn_cast<clang::CallExpr>(E)) {
                     if (const clang::FunctionDecl* Func = Call->getDirectCallee()) {
-                        llvm::StringRef FuncName = Func->getName();
-                        if (FuncName == "getenv" || FuncName == "localeconv" ||
-                            FuncName == "setlocale" || FuncName == "strerror") {
+                        if (classifySensitiveFunction(Func) !=
+                            SensitiveFunctionKind::None) {
                             return Call;
                         }
                     }

@@ -1,4 +1,5 @@
 #include "SdcNoGotoCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Stmt.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -23,15 +24,17 @@ void SdcNoGotoCheck::check(const MatchFinder::MatchResult& Result) {
     if (!Goto) {
         return;
     }
-
-    const SourceManager& SM = *Result.SourceManager;
-    SourceLocation Location = SM.getSpellingLoc(Goto->getGotoLoc());
-    if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-        !ReportedLocations.insert(Location.getRawEncoding()).second) {
+    if (!isInAnalyzedCode(*Goto, Goto->getGotoLoc(), *Result.Context)) {
         return;
     }
 
-    diag(Location, "goto statement should not be used");
+    const SourceManager& SM = *Result.SourceManager;
+    SourceLocation Location = SM.getSpellingLoc(Goto->getGotoLoc());
+    for (const Decl* Instance :
+         AnalysisInstances.claim(*Goto, Goto->getGotoLoc(), *Result.Context)) {
+        (void)Instance;
+        diag(Location, "goto statement should not be used");
+    }
 }
 
 } // namespace sdc

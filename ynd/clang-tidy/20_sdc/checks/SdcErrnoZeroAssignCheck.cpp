@@ -30,17 +30,37 @@ void SdcErrnoZeroAssignCheck::registerMatchers(MatchFinder* Finder) {
     );
 }
 
+static bool hasSystemDeclaration(const VarDecl& Variable,
+                                 const SourceManager& SM) {
+    for (const VarDecl* Redeclaration : Variable.redecls()) {
+        if (SM.isInSystemHeader(
+                SM.getSpellingLoc(Redeclaration->getLocation())))
+            return true;
+    }
+    return false;
+}
+
 static bool isErrnoExpr(const Expr* E, const SourceManager& SM,
-                         const LangOptions& LO) {
+                        const LangOptions& LO) {
     // Case 1: errno is a plain extern variable — direct DeclRefExpr.
-    if (const auto* DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenCasts()))
-        if (DRE->getDecl()->getName() == "errno") return true;
+    if (const auto* DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenCasts())) {
+        if (const auto* Variable = dyn_cast<VarDecl>(DRE->getDecl())) {
+            if (Variable->getQualifiedNameAsString() == "errno" &&
+                hasSystemDeclaration(*Variable, SM)) {
+                return true;
+            }
+        }
+    }
 
     // Case 2: errno is a macro (e.g. (*__errno_location())) — the begin
     // location of the expanded expression lies inside the errno macro body.
+    // Requiring the ultimately written token to be in a system header avoids
+    // confusing a project-defined macro with the Standard Library facility.
     SourceLocation Loc = E->getBeginLoc();
-    if (Loc.isMacroID())
-        return Lexer::getImmediateMacroName(Loc, SM, LO) == "errno";
+    if (Loc.isMacroID() &&
+        Lexer::getImmediateMacroName(Loc, SM, LO) == "errno") {
+        return SM.isInSystemHeader(SM.getSpellingLoc(Loc));
+    }
 
     return false;
 }
@@ -52,10 +72,19 @@ void SdcErrnoZeroAssignCheck::check(const MatchFinder::MatchResult& Result) {
                      Result.Context->getLangOpts()))
         return;
 
+    const auto Instances = AnalysisInstances.claim(
+        *BO, BO->getOperatorLoc(), *Result.Context);
+    if (Instances.empty()) {
+        return;
+    }
+
     if (BO->getOpcode() != BO_Assign) {
-        diag(BO->getOperatorLoc(),
-             "compound assignment to 'errno' is not allowed; only the "
-             "literal value zero may be assigned to 'errno'");
+        for (const Decl* Instance : Instances) {
+            (void)Instance;
+            diag(BO->getOperatorLoc(),
+                 "compound assignment to 'errno' is not allowed; only the "
+                 "literal value zero may be assigned to 'errno'");
+        }
         return;
     }
 
@@ -67,8 +96,11 @@ void SdcErrnoZeroAssignCheck::check(const MatchFinder::MatchResult& Result) {
     if (const auto* IL = dyn_cast<IntegerLiteral>(RHS))
         if (IL->getValue().isZero()) return;
 
-    diag(BO->getOperatorLoc(),
-         "only the literal value zero may be assigned to 'errno'");
+    for (const Decl* Instance : Instances) {
+        (void)Instance;
+        diag(BO->getOperatorLoc(),
+             "only the literal value zero may be assigned to 'errno'");
+    }
 }
 
 } // namespace sdc

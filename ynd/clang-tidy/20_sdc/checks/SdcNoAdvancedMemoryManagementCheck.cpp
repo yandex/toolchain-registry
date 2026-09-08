@@ -11,17 +11,34 @@ namespace clang {
 
             namespace {
 
-            bool hasQualifiedTagName(QualType Type, StringRef Name) {
-                Type = Type.getNonReferenceType().getUnqualifiedType();
+            bool hasQualifiedRecordName(QualType Type, StringRef Name) {
+                Type = Type.getUnqualifiedType();
                 if (const auto* RT = Type->getAs<RecordType>())
                     return RT->getDecl()->getQualifiedNameAsString() == Name;
-                if (const auto* ET = Type->getAs<EnumType>())
-                    return ET->getDecl()->getQualifiedNameAsString() == Name;
                 return false;
             }
 
-            bool isAdvancedOperator(const FunctionDecl* FD,
-                                    const ASTContext& Context) {
+            bool isVoidPointer(QualType Type, const ASTContext& Context) {
+                Type = Type.getUnqualifiedType();
+                const auto* Pointer = Type->getAs<PointerType>();
+                return Pointer &&
+                       Context.hasSameType(
+                           Pointer->getPointeeType().getUnqualifiedType(),
+                           Context.VoidTy);
+            }
+
+            bool isConstNothrowReference(QualType Type) {
+                const auto* Reference = Type->getAs<LValueReferenceType>();
+                if (!Reference)
+                    return false;
+                const QualType Pointee = Reference->getPointeeType();
+                return Pointee.isConstQualified() &&
+                       !Pointee.isVolatileQualified() &&
+                       hasQualifiedRecordName(Pointee, "std::nothrow_t");
+            }
+
+            bool hasExactAllowedSignature(const FunctionDecl* FD,
+                                          const ASTContext& Context) {
                 if (!FD) return false;
                 DeclarationName Name = FD->getDeclName();
                 if (Name.getNameKind() != DeclarationName::CXXOperatorName)
@@ -31,23 +48,48 @@ namespace clang {
                     Op != OO_Delete && Op != OO_Array_Delete)
                     return false;
 
-                // The leading size_t (new) or void* (delete) parameter is part
-                // of every allocation/deallocation signature. Extra size_t,
-                // align_val_t and nothrow_t parameters occur in the standard
-                // replaceable forms. Any other extra parameter denotes a
-                // placement or custom allocation function and is advanced
-                // memory management beyond the replaceable forms.
-                for (unsigned I = 1; I < FD->getNumParams(); ++I) {
-                    QualType PT = FD->getParamDecl(I)->getType();
-                    if (Context.hasSameType(PT.getUnqualifiedType(),
-                                            Context.getSizeType()) ||
-                        hasQualifiedTagName(PT, "std::align_val_t") ||
-                        hasQualifiedTagName(PT, "std::nothrow_t")) {
-                        continue;
+                if (Op == OO_New || Op == OO_Array_New) {
+                    if (!isVoidPointer(FD->getReturnType(), Context) ||
+                        (FD->getNumParams() != 1 &&
+                         FD->getNumParams() != 2) ||
+                        !Context.hasSameType(
+                            FD->getParamDecl(0)->getType().getUnqualifiedType(),
+                            Context.getSizeType())) {
+                        return false;
                     }
-                    return true;
+                    return FD->getNumParams() == 1 ||
+                           isConstNothrowReference(
+                               FD->getParamDecl(1)->getType());
                 }
-                return false;
+
+                if (!Context.hasSameType(
+                        FD->getReturnType().getUnqualifiedType(),
+                        Context.VoidTy) ||
+                    (FD->getNumParams() != 1 && FD->getNumParams() != 2) ||
+                    !isVoidPointer(FD->getParamDecl(0)->getType(), Context)) {
+                    return false;
+                }
+
+                const auto* FunctionType =
+                    FD->getType()->getAs<FunctionProtoType>();
+                if (!FunctionType ||
+                    !FunctionType->isNothrow(
+                        /*ResultIfDependent=*/false)) {
+                    return false;
+                }
+
+                if (FD->getNumParams() == 1)
+                    return true;
+
+                const QualType Second = FD->getParamDecl(1)->getType();
+                return Context.hasSameType(Second.getUnqualifiedType(),
+                                           Context.getSizeType()) ||
+                       isConstNothrowReference(Second);
+            }
+
+            bool isAdvancedOperator(const FunctionDecl* FD,
+                                    const ASTContext& Context) {
+                return FD && !hasExactAllowedSignature(FD, Context);
             }
 
             } // namespace
@@ -100,9 +142,9 @@ namespace clang {
                         .bind("explicit_destructor"),
                     this);
 
-                // Match user-declared operator new/delete
-                // Note: We don't exclude system headers here because we want to catch
-                // third-party libraries that declare these operators
+                // Match user-declared operator new/delete. Applicability is
+                // decided from the declaration token's ultimate source origin
+                // in check(), including macro-body origin.
                 Finder->addMatcher(
                     functionDecl(
                         anyOf(hasName("operator new"), hasName("operator new[]"),
@@ -115,6 +157,11 @@ namespace clang {
                 Finder->addMatcher(
                     cxxNewExpr(unless(isExpansionInSystemHeader()))
                         .bind("advanced_new_expression"),
+                    this);
+
+                Finder->addMatcher(
+                    cxxDeleteExpr(unless(isExpansionInSystemHeader()))
+                        .bind("advanced_delete_expression"),
                     this);
 
                 // Taking the address of an overloaded operator resolves to a
@@ -142,12 +189,35 @@ namespace clang {
                 if (const auto* New =
                         Result.Nodes.getNodeAs<CXXNewExpr>(
                             "advanced_new_expression")) {
+                    const SourceLocation Loc = New->getBeginLoc();
                     if (isAdvancedOperator(New->getOperatorNew(),
                                            *Result.Context)) {
-                        diag(New->getBeginLoc(),
-                             "call to a placement or custom allocation function "
-                             "is not allowed; advanced memory management shall "
-                             "not be used");
+                        for (const Decl* Instance : AnalysisInstances.claim(
+                                 *New, Loc, *Result.Context)) {
+                            (void)Instance;
+                            diag(New->getBeginLoc(),
+                                 "call to an advanced allocation function "
+                                 "is not allowed; advanced memory management "
+                                 "shall not be used");
+                        }
+                    }
+                    return;
+                }
+
+                if (const auto* Delete =
+                        Result.Nodes.getNodeAs<CXXDeleteExpr>(
+                            "advanced_delete_expression")) {
+                    const SourceLocation Loc = Delete->getBeginLoc();
+                    if (isAdvancedOperator(Delete->getOperatorDelete(),
+                                           *Result.Context)) {
+                        for (const Decl* Instance : AnalysisInstances.claim(
+                                 *Delete, Loc, *Result.Context)) {
+                            (void)Instance;
+                            diag(Loc,
+                                 "call to an advanced deallocation function is "
+                                 "not allowed; advanced memory management shall "
+                                 "not be used");
+                        }
                     }
                     return;
                 }
@@ -156,11 +226,16 @@ namespace clang {
                         Result.Nodes.getNodeAs<DeclRefExpr>(
                             "advanced_operator_reference")) {
                     const auto* FD = dyn_cast<FunctionDecl>(Ref->getDecl());
+                    const SourceLocation Loc = Ref->getBeginLoc();
                     if (isAdvancedOperator(FD, *Result.Context)) {
-                        diag(Ref->getBeginLoc(),
-                             "taking the address of a placement or custom "
-                             "allocation function is not allowed; advanced "
-                             "memory management shall not be used");
+                        for (const Decl* Instance : AnalysisInstances.claim(
+                                 *Ref, Loc, *Result.Context)) {
+                            (void)Instance;
+                            diag(Ref->getBeginLoc(),
+                                 "use of an advanced allocation or deallocation "
+                                 "function is not allowed; advanced memory "
+                                 "management shall not be used");
+                        }
                     }
                     return;
                 }
@@ -169,10 +244,15 @@ namespace clang {
                 if (const auto* DestructorCall = Result.Nodes.getNodeAs<CXXMemberCallExpr>("explicit_destructor")) {
                     // Check if this is an explicit destructor call
                     // Implicit destructor calls won't match this pattern in the AST
-                    if (DestructorCall->getExprLoc().isValid()) {
-                        diag(DestructorCall->getExprLoc(),
-                             "explicit destructor call is not allowed; "
-                             "advanced memory management shall not be used");
+                    const SourceLocation Loc = DestructorCall->getExprLoc();
+                    if (Loc.isValid()) {
+                        for (const Decl* Instance : AnalysisInstances.claim(
+                                 *DestructorCall, Loc, *Result.Context)) {
+                            (void)Instance;
+                            diag(DestructorCall->getExprLoc(),
+                                 "explicit destructor call is not allowed; "
+                                 "advanced memory management shall not be used");
+                        }
                     }
                     return;
                 }
@@ -194,43 +274,42 @@ namespace clang {
                             Loc = OpFunc->getBody()->getBeginLoc();
                         }
 
-                        // If location is in a macro, get the spelling location
-                        if (Loc.isValid() && Loc.isMacroID()) {
-                            Loc = SM.getSpellingLoc(Loc);
-                        }
-
-                        // Skip if this is from the compiler's builtin definitions
-                        if (Loc.isValid() && SM.isWrittenInBuiltinFile(Loc)) {
+                        const auto Instances = AnalysisInstances.claim(
+                            *OpFunc, Loc, *Result.Context);
+                        if (Instances.empty()) {
                             return;
                         }
 
                         // Get the presumed location which handles #line directives correctly
                         PresumedLoc PLoc = SM.getPresumedLoc(Loc);
 
-                        // If we have a valid presumed location, use it
-                        if (PLoc.isValid()) {
-                            diag(Loc,
-                                 "user-declared %0 is not allowed; "
-                                 "advanced memory management shall not be used "
-                                 "[in %1:%2]")
-                                << OpFunc->getDeclName() << PLoc.getFilename() << PLoc.getLine();
-                        } else if (Loc.isValid()) {
-                            // Fallback: just use what we have
-                            StringRef Filename = SM.getFilename(Loc);
-                            diag(Loc,
-                                 "user-declared %0 is not allowed; "
-                                 "advanced memory management shall not be used "
-                                 "[in %1]")
-                                << OpFunc->getDeclName() << (Filename.empty() ? "<unknown>" : Filename);
-                        } else {
-                            // Last resort: no location at all, report at main file start
-                            FileID MainFileID = SM.getMainFileID();
-                            Loc = SM.getLocForStartOfFile(MainFileID);
-                            diag(Loc,
-                                 "user-declared %0 is not allowed; "
-                                 "advanced memory management shall not be used "
-                                 "[location unavailable]")
-                                << OpFunc->getDeclName();
+                        for (const Decl* Instance : Instances) {
+                            (void)Instance;
+                            if (PLoc.isValid()) {
+                                diag(Loc,
+                                     "user-declared %0 is not allowed; "
+                                     "advanced memory management shall not be "
+                                     "used [in %1:%2]")
+                                    << OpFunc->getDeclName()
+                                    << PLoc.getFilename() << PLoc.getLine();
+                            } else if (Loc.isValid()) {
+                                StringRef Filename = SM.getFilename(Loc);
+                                diag(Loc,
+                                     "user-declared %0 is not allowed; "
+                                     "advanced memory management shall not be "
+                                     "used [in %1]")
+                                    << OpFunc->getDeclName()
+                                    << (Filename.empty() ? "<unknown>"
+                                                         : Filename);
+                            } else {
+                                FileID MainFileID = SM.getMainFileID();
+                                Loc = SM.getLocForStartOfFile(MainFileID);
+                                diag(Loc,
+                                     "user-declared %0 is not allowed; "
+                                     "advanced memory management shall not be "
+                                     "used [location unavailable]")
+                                    << OpFunc->getDeclName();
+                            }
                         }
                         return;
                     }
@@ -269,15 +348,6 @@ namespace clang {
 
                 // Skip builtin functions
                 if (FD->getBuiltinID() != 0) {
-                    return false;
-                }
-
-                // Skip `= delete`d declarations. The user is explicitly forbidding
-                // the operator, which aligns with the rule rather than violating it
-                // (e.g. `void* operator new[](size_t) = delete;` to ban heap allocation
-                // of a class). Note: clang reports `isThisDeclarationADefinition()` as
-                // true for deleted functions, so this must come before that check.
-                if (FD->isDeleted()) {
                     return false;
                 }
 

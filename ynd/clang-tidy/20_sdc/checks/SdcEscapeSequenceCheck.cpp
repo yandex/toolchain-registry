@@ -139,18 +139,17 @@ void SdcEscapeSequenceCheck::registerMatchers(MatchFinder* Finder) {
 }
 
 void SdcEscapeSequenceCheck::checkLiteralToken(
-    SourceLocation Loc, const SourceManager& SM, const LangOptions& LO) {
-    if (Loc.isInvalid() || Loc.isMacroID()) {
-        // Macro-expanded literals (e.g. __FILE__, stringification) are out
-        // of scope: user source for the literal lives in the macro
-        // definition. Lexing the spelling reliably across macro
-        // boundaries is fragile, and the rule targets literals the user
-        // wrote, not ones the preprocessor synthesised.
+    const DynTypedNode& Node, SourceLocation Loc, ASTContext& Context) {
+    const SourceManager& SM = Context.getSourceManager();
+    const LangOptions& LO = Context.getLangOpts();
+    if (Loc.isInvalid() || !isWrittenInAnalyzedSource(Loc, SM)) {
         return;
     }
+    const SourceLocation WrittenLoc = getUltimateWrittenLocation(Loc, SM);
     SmallString<128> Buffer;
     bool Invalid = false;
-    StringRef Spelling = Lexer::getSpelling(Loc, Buffer, SM, LO, &Invalid);
+    StringRef Spelling =
+        Lexer::getSpelling(WrittenLoc, Buffer, SM, LO, &Invalid);
     if (Invalid || Spelling.empty()) {
         return;
     }
@@ -171,29 +170,38 @@ void SdcEscapeSequenceCheck::checkLiteralToken(
     const size_t PrefixLen =
         Spelling.size() - dropEncodingPrefix(Spelling).size();
     const size_t BackslashOffset = PrefixLen + 1 + V->Offset;
-    SourceLocation EscapeLoc = Loc.getLocWithOffset(BackslashOffset);
+    const SourceLocation WrittenEscapeLoc =
+        WrittenLoc.getLocWithOffset(BackslashOffset);
+    const SourceLocation DiagnosticLoc =
+        Loc.isMacroID() ? SM.getExpansionLoc(Loc) : WrittenEscapeLoc;
 
-    diag(EscapeLoc,
-         "%0 in character/string literal; `\\` shall only form a defined "
-         "escape sequence or universal character name")
-        << V->What;
+    for (const Decl* Instance : AnalysisInstances.claim(Node, Loc, Context)) {
+        (void)Instance;
+        diag(DiagnosticLoc,
+             "%0 in character/string literal; `\\` shall only form a "
+             "defined escape sequence or universal character name")
+            << V->What;
+        if (Loc.isMacroID() && WrittenEscapeLoc != DiagnosticLoc) {
+            diag(WrittenEscapeLoc, "escape sequence is written here",
+                 DiagnosticIDs::Note);
+        }
+    }
 }
 
 void SdcEscapeSequenceCheck::check(const MatchFinder::MatchResult& Result) {
-    const SourceManager& SM = *Result.SourceManager;
-    const LangOptions& LO = Result.Context->getLangOpts();
-
     if (const auto* SL = Result.Nodes.getNodeAs<StringLiteral>("str")) {
         // Concatenated literals ("foo" "bar") are a single AST node but
         // multiple source tokens; check each piece independently so a bad
         // escape lands on the correct piece's line.
         for (unsigned i = 0; i < SL->getNumConcatenated(); ++i) {
-            checkLiteralToken(SL->getStrTokenLoc(i), SM, LO);
+            checkLiteralToken(DynTypedNode::create(*SL),
+                              SL->getStrTokenLoc(i), *Result.Context);
         }
         return;
     }
     if (const auto* CL = Result.Nodes.getNodeAs<CharacterLiteral>("ch")) {
-        checkLiteralToken(CL->getLocation(), SM, LO);
+        checkLiteralToken(DynTypedNode::create(*CL), CL->getLocation(),
+                          *Result.Context);
     }
 }
 

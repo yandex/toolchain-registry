@@ -1,4 +1,5 @@
 #include "SdcProhibitedFunctionsCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/AST/Decl.h"
@@ -69,6 +70,8 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
     // namespace or class scope. Re-verify the resolved declaration's full
     // qualified name against the prohibited list explicitly.
     if (const auto* DRE = Result.Nodes.getNodeAs<DeclRefExpr>("funcUse")) {
+        if (!isInAnalyzedCode(*DRE, DRE->getBeginLoc(), *Result.Context))
+            return;
         const NamedDecl* ND = DRE->getDecl();
         if (!isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString()))
             return;
@@ -79,6 +82,8 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
         FunctionName = ExtractedName;
         Loc = DRE->getBeginLoc();
     } else if (const auto* ULE = Result.Nodes.getNodeAs<UnresolvedLookupExpr>("unresolvedFuncUse")) {
+        if (!isInAnalyzedCode(*ULE, ULE->getBeginLoc(), *Result.Context))
+            return;
         Loc = ULE->getBeginLoc();
         for (const NamedDecl* ND : ULE->decls()) {
             if (isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString())) {
@@ -97,7 +102,18 @@ void SdcProhibitedFunctionsCheck::check(const MatchFinder::MatchResult& Result) 
         return;
     }
 
-    diag(Loc, getDiagnosticMessage(FunctionName));
+    const DynTypedNode Node =
+        Result.Nodes.getNodeAs<DeclRefExpr>("funcUse")
+            ? DynTypedNode::create(
+                  *Result.Nodes.getNodeAs<DeclRefExpr>("funcUse"))
+            : DynTypedNode::create(
+                  *Result.Nodes.getNodeAs<UnresolvedLookupExpr>(
+                      "unresolvedFuncUse"));
+    for (const Decl* Instance :
+         AnalysisInstances.claim(Node, Loc, *Result.Context)) {
+        (void)Instance;
+        diag(Loc, getDiagnosticMessage(FunctionName));
+    }
 }
 
 } // namespace sdc

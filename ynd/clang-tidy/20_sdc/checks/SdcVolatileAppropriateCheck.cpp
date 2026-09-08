@@ -1,4 +1,5 @@
 #include "SdcVolatileAppropriateCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
@@ -15,22 +16,6 @@ namespace sdc {
 SdcVolatileAppropriateCheck::SdcVolatileAppropriateCheck(StringRef Name,
                                                           ClangTidyContext* Context)
     : ClangTidyCheck(Name, Context) {}
-
-// Returns true for implicit template instantiations — we only warn on the
-// pattern so the user sees one diagnostic instead of one per instantiation.
-static bool isImplicitInstantiation(const FunctionDecl* FD) {
-    auto TSK = FD->getTemplateSpecializationKind();
-    return TSK == TSK_ImplicitInstantiation ||
-           TSK == TSK_ExplicitInstantiationDeclaration ||
-           TSK == TSK_ExplicitInstantiationDefinition;
-}
-
-static bool isImplicitInstantiation(const VarDecl* VD) {
-    auto TSK = VD->getTemplateSpecializationKind();
-    return TSK == TSK_ImplicitInstantiation ||
-           TSK == TSK_ExplicitInstantiationDeclaration ||
-           TSK == TSK_ExplicitInstantiationDefinition;
-}
 
 void SdcVolatileAppropriateCheck::registerMatchers(MatchFinder* Finder) {
     // Case 1 + 5: volatile local variables and volatile structured bindings.
@@ -73,15 +58,20 @@ void SdcVolatileAppropriateCheck::registerMatchers(MatchFinder* Finder) {
 void SdcVolatileAppropriateCheck::check(const MatchFinder::MatchResult& Result) {
     // ── Case 1 + 5: local variable (including structured bindings) ──────────
     if (const auto* VD = Result.Nodes.getNodeAs<VarDecl>("local")) {
-        if (isImplicitInstantiation(VD)) return;
+        if (!isInAnalyzedCode(*VD, VD->getLocation(), *Result.Context)) return;
 
         // The structured-binding prohibition is independent of storage
         // duration.  Handle it before the ordinary-local-variable filter so a
         // namespace-scope decomposition cannot escape the rule.
         if (isa<DecompositionDecl>(VD)) {
-            if (VD->getType().isVolatileQualified())
-                diag(VD->getLocation(),
-                     "structured binding shall not be declared volatile");
+            if (VD->getType().isVolatileQualified()) {
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *VD, VD->getLocation(), *Result.Context)) {
+                    (void)Instance;
+                    diag(VD->getLocation(),
+                         "structured binding shall not be declared volatile");
+                }
+            }
             return;
         }
 
@@ -91,51 +81,68 @@ void SdcVolatileAppropriateCheck::check(const MatchFinder::MatchResult& Result) 
         if (VD->hasExternalStorage()) return;
         if (!VD->getType().isVolatileQualified()) return;
 
-        diag(VD->getLocation(),
-             "local variable %0 shall not be declared volatile")
-            << VD;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *VD, VD->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(VD->getLocation(),
+                 "local variable %0 shall not be declared volatile")
+                << VD;
+        }
         return;
     }
 
     // ── Case 2: function parameter ──────────────────────────────────────────
     if (const auto* PD = Result.Nodes.getNodeAs<ParmVarDecl>("param")) {
         if (!PD->getType().isVolatileQualified()) return;
-        // Suppress on instantiations — warn on the template pattern only.
-        if (const auto* FD = dyn_cast_or_null<FunctionDecl>(PD->getDeclContext()))
-            if (isImplicitInstantiation(FD)) return;
-
-        diag(PD->getLocation(),
-             "function parameter %0 shall not be declared volatile")
-            << PD;
+        if (!isInAnalyzedCode(*PD, PD->getLocation(), *Result.Context)) return;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *PD, PD->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(PD->getLocation(),
+                 "function parameter %0 shall not be declared volatile")
+                << PD;
+        }
         return;
     }
 
     // ── Case 3: free function volatile return type ───────────────────────────
     if (const auto* FD = Result.Nodes.getNodeAs<FunctionDecl>("func")) {
         if (!FD->isFirstDecl()) return;
-        if (isImplicitInstantiation(FD)) return;
         if (!FD->getReturnType().isVolatileQualified()) return;
+        if (!isInAnalyzedCode(*FD, FD->getLocation(), *Result.Context)) return;
 
-        diag(FD->getLocation(),
-             "function %0 shall not have a volatile return type")
-            << FD;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *FD, FD->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(FD->getLocation(),
+                 "function %0 shall not have a volatile return type")
+                << FD;
+        }
         return;
     }
 
     // ── Case 3 + 4: method volatile return type / volatile qualifier ─────────
     if (const auto* MD = Result.Nodes.getNodeAs<CXXMethodDecl>("method")) {
         if (!MD->isFirstDecl()) return;
-        if (isImplicitInstantiation(MD)) return;
+        if (!isInAnalyzedCode(*MD, MD->getLocation(), *Result.Context)) return;
 
-        if (MD->getReturnType().isVolatileQualified())
-            diag(MD->getLocation(),
-                 "method %0 shall not have a volatile return type")
-                << MD;
-
-        if (MD->isVolatile())
-            diag(MD->getLocation(),
-                 "method %0 shall not be declared with a volatile qualifier")
-                << MD;
+        const bool BadReturn = MD->getReturnType().isVolatileQualified();
+        const bool BadQualifier = MD->isVolatile();
+        if (!BadReturn && !BadQualifier) return;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *MD, MD->getLocation(), *Result.Context)) {
+            (void)Instance;
+            if (BadReturn) {
+                diag(MD->getLocation(),
+                     "method %0 shall not have a volatile return type")
+                    << MD;
+            }
+            if (BadQualifier) {
+                diag(MD->getLocation(),
+                     "method %0 shall not be declared with a volatile qualifier")
+                    << MD;
+            }
+        }
     }
 }
 

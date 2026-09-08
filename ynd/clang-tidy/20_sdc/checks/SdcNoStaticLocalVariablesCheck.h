@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -17,6 +18,7 @@ namespace clang {
             private:
                 bool isLocalVariable(const clang::VarDecl* VarDecl,
                                      const ast_matchers::MatchFinder::MatchResult& Result);
+                AnalysisInstanceTracker AnalysisInstances;
             };
 
         } // namespace sdc

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -58,6 +59,11 @@ namespace clang {
                                                        const ast_matchers::MatchFinder::MatchResult& Result);
                 bool isFromLocaleconvCall(const clang::Expr* E,
                                           const ast_matchers::MatchFinder::MatchResult& Result);
+
+                AnalysisInstanceTracker AddressInstances;
+                AnalysisInstanceTracker CallInstances;
+                AnalysisInstanceTracker DeclarationInstances;
+                AnalysisInstanceTracker MemberInstances;
             };
 
         } // namespace sdc

@@ -1,4 +1,5 @@
 #include "SdcNoStaticLocalVariablesCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/AST/Decl.h"
@@ -36,6 +37,10 @@ namespace clang {
                 if (!VarDecl) {
                     return;
                 }
+                if (!isInAnalyzedCode(*VarDecl, VarDecl->getBeginLoc(),
+                                      *Result.Context)) {
+                    return;
+                }
 
                 // Check if this is a local variable (not a global, class member, or namespace variable)
                 if (!isLocalVariable(VarDecl, Result)) {
@@ -54,8 +59,12 @@ namespace clang {
                 }
 
                 // If we get here, it's a static local variable that is not const or constexpr
-                diag(VarDecl->getBeginLoc(),
-                     "local variables shall not have static storage duration");
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *VarDecl, VarDecl->getBeginLoc(), *Result.Context)) {
+                    (void)Instance;
+                    diag(VarDecl->getBeginLoc(),
+                         "local variables shall not have static storage duration");
+                }
             }
 
             bool SdcNoStaticLocalVariablesCheck::isLocalVariable(

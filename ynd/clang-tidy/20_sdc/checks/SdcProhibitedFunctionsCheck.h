@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -30,6 +31,9 @@ protected:
     // function (e.g. the 2-argument locale variant). Return true to suppress
     // the diagnostic for this declaration.
     virtual bool isAllowedDecl(const FunctionDecl* FD) const { return false; }
+
+private:
+    AnalysisInstanceTracker AnalysisInstances;
 };
 
 } // namespace sdc

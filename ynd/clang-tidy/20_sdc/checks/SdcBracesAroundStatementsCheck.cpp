@@ -1,4 +1,5 @@
 #include "SdcBracesAroundStatementsCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Stmt.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -25,38 +26,56 @@ void SdcBracesAroundStatementsCheck::registerMatchers(MatchFinder* Finder) {
 
 void SdcBracesAroundStatementsCheck::check(
     const MatchFinder::MatchResult& Result) {
-    auto Diagnose = [this](SourceLocation Loc, StringRef Kind) {
-        diag(Loc, "body of %0 statement shall be a compound statement") << Kind;
+    auto Diagnose = [this, &Result](const Stmt& Node, SourceLocation Loc,
+                                    StringRef Kind) {
+        for (const Decl* Instance :
+             AnalysisInstances.claim(Node, Loc, *Result.Context)) {
+            (void)Instance;
+            diag(Loc, "body of %0 statement shall be a compound statement")
+                << Kind;
+        }
     };
 
     if (const auto* S = Result.Nodes.getNodeAs<IfStmt>("if")) {
+        if (!isInAnalyzedCode(*S, S->getIfLoc(), *Result.Context)) return;
         if (!isa<CompoundStmt>(S->getThen()))
-            Diagnose(S->getIfLoc(), "if");
+            Diagnose(*S, S->getIfLoc(), "if");
         // Preserve the conventional else-if chain.  The nested IfStmt is
         // checked separately and its own body must still be compound.
         if (const Stmt* Else = S->getElse())
             if (!isa<CompoundStmt>(Else) && !isa<IfStmt>(Else))
-                Diagnose(S->getElseLoc(), "else");
+                Diagnose(*S, S->getElseLoc(), "else");
         return;
     }
     if (const auto* S = Result.Nodes.getNodeAs<ForStmt>("for")) {
-        if (!isa<CompoundStmt>(S->getBody())) Diagnose(S->getForLoc(), "for");
+        if (!isInAnalyzedCode(*S, S->getForLoc(), *Result.Context)) return;
+        if (!isa<CompoundStmt>(S->getBody()))
+            Diagnose(*S, S->getForLoc(), "for");
         return;
     }
     if (const auto* S = Result.Nodes.getNodeAs<CXXForRangeStmt>("range_for")) {
-        if (!isa<CompoundStmt>(S->getBody())) Diagnose(S->getForLoc(), "for");
+        if (!isInAnalyzedCode(*S, S->getForLoc(), *Result.Context)) return;
+        if (!isa<CompoundStmt>(S->getBody()))
+            Diagnose(*S, S->getForLoc(), "for");
         return;
     }
     if (const auto* S = Result.Nodes.getNodeAs<WhileStmt>("while")) {
-        if (!isa<CompoundStmt>(S->getBody())) Diagnose(S->getWhileLoc(), "while");
+        if (!isInAnalyzedCode(*S, S->getWhileLoc(), *Result.Context)) return;
+        if (!isa<CompoundStmt>(S->getBody()))
+            Diagnose(*S, S->getWhileLoc(), "while");
         return;
     }
     if (const auto* S = Result.Nodes.getNodeAs<DoStmt>("do")) {
-        if (!isa<CompoundStmt>(S->getBody())) Diagnose(S->getDoLoc(), "do");
+        if (!isInAnalyzedCode(*S, S->getDoLoc(), *Result.Context)) return;
+        if (!isa<CompoundStmt>(S->getBody()))
+            Diagnose(*S, S->getDoLoc(), "do");
         return;
     }
-    if (const auto* S = Result.Nodes.getNodeAs<SwitchStmt>("switch"))
-        if (!isa<CompoundStmt>(S->getBody())) Diagnose(S->getSwitchLoc(), "switch");
+    if (const auto* S = Result.Nodes.getNodeAs<SwitchStmt>("switch")) {
+        if (!isInAnalyzedCode(*S, S->getSwitchLoc(), *Result.Context)) return;
+        if (!isa<CompoundStmt>(S->getBody()))
+            Diagnose(*S, S->getSwitchLoc(), "switch");
+    }
 }
 
 } // namespace sdc

@@ -1,4 +1,5 @@
 #include "SdcNoStackAddressAssignCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
@@ -403,6 +404,7 @@ namespace clang {
                 if (!BO) return;
 
                 ASTContext& Ctx = *Result.Context;
+                if (!isInAnalyzedCode(*BO, BO->getOperatorLoc(), Ctx)) return;
 
                 llvm::SmallPtrSet<const VarDecl*, 16> Visiting;
                 const VarDecl* RHSVar = findAddressedVar(
@@ -439,11 +441,15 @@ namespace clang {
 
                 if (!LongerLived) return;
 
-                diag(BO->getOperatorLoc(),
-                     "assigning the address of automatic variable %0 to %1, "
-                     "which has a longer lifetime")
-                    << RHSVar << LHSVar
-                    << BO->getSourceRange();
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *BO, BO->getOperatorLoc(), Ctx)) {
+                    (void)Instance;
+                    diag(BO->getOperatorLoc(),
+                         "assigning the address of automatic variable %0 to %1, "
+                         "which has a longer lifetime")
+                        << RHSVar << LHSVar
+                        << BO->getSourceRange();
+                }
             }
 
         } // namespace sdc

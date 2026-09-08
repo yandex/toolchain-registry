@@ -1,4 +1,5 @@
 #include "SdcNoBuiltInUnaryPlusCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Expr.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -34,12 +35,16 @@ void SdcNoBuiltInUnaryPlusCheck::check(
 
     const SourceManager& SM = *Result.SourceManager;
     SourceLocation Location = SM.getSpellingLoc(Operator->getOperatorLoc());
-    if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-        !ReportedLocations.insert(Location.getRawEncoding()).second) {
+    if (!isInAnalyzedCode(*Operator, Operator->getOperatorLoc(),
+                          *Result.Context)) {
         return;
     }
 
-    diag(Location, "built-in unary '+' operator should not be used");
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *Operator, Operator->getOperatorLoc(), *Result.Context)) {
+        (void)Instance;
+        diag(Location, "built-in unary '+' operator should not be used");
+    }
 }
 
 } // namespace sdc

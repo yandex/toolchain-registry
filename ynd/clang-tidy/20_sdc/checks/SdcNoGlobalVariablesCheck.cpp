@@ -1,4 +1,5 @@
 #include "SdcNoGlobalVariablesCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -60,40 +61,6 @@ namespace clang {
                     return DC->isTranslationUnit() || DC->isNamespace();
                 }
 
-                // True if VD is itself an instantiation of a templated entity,
-                // or if it is a static data member of a class-template
-                // instantiation. We report only at the template pattern so
-                // every instantiation does not re-trigger the diagnostic.
-                bool isFromTemplateInstantiation(const VarDecl* VD) {
-                    // For the templated VarDecl inside a class/variable
-                    // template pattern, TSK_Undeclared is reported and we want
-                    // to diagnose it. Implicit / explicit instantiations carry
-                    // a non-Undeclared TSK and should be skipped (the pattern
-                    // is visited separately).
-                    TemplateSpecializationKind TSK =
-                        VD->getTemplateSpecializationKind();
-                    if (TSK == TSK_ImplicitInstantiation ||
-                        TSK == TSK_ExplicitInstantiationDeclaration ||
-                        TSK == TSK_ExplicitInstantiationDefinition ||
-                        TSK == TSK_ExplicitSpecialization) {
-                        return true;
-                    }
-                    if (VD->isStaticDataMember()) {
-                        const auto* RD =
-                            dyn_cast<CXXRecordDecl>(VD->getDeclContext());
-                        if (RD) {
-                            TemplateSpecializationKind RTSK =
-                                RD->getTemplateSpecializationKind();
-                            if (RTSK == TSK_ImplicitInstantiation ||
-                                RTSK == TSK_ExplicitInstantiationDeclaration ||
-                                RTSK == TSK_ExplicitInstantiationDefinition) {
-                                return true;
-                            }
-                        }
-                    }
-                    return false;
-                }
-
                 // True if the variable's type is const-qualified.
                 bool isConstQualified(const VarDecl* VD) {
                     return VD->getType().isConstQualified();
@@ -133,7 +100,19 @@ namespace clang {
                     return;
                 }
 
-                if (isFromTemplateInstantiation(VD)) {
+                // The exemptions can change after substitution (for example,
+                // T may itself be const and T{} may become constant
+                // initialization). Evaluate those facts only on a concrete
+                // specialization.
+                if (VD->getType()->isDependentType()) return;
+                if (const Expr* Init = VD->getInit()) {
+                    if (Init->isTypeDependent() || Init->isValueDependent()) {
+                        return;
+                    }
+                }
+
+                if (!isInAnalyzedCode(*VD, VD->getLocation(),
+                                      *Result.Context)) {
                     return;
                 }
 
@@ -158,10 +137,14 @@ namespace clang {
                     return;
                 }
 
-                diag(VD->getLocation(),
-                     "global variable is not allowed; declare it as constexpr, "
-                     "or as const with constant initialization, or move it to "
-                     "function scope");
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *VD, VD->getLocation(), *Result.Context)) {
+                    (void)Instance;
+                    diag(VD->getLocation(),
+                         "global variable is not allowed; declare it as constexpr, "
+                         "or as const with constant initialization, or move it to "
+                         "function scope");
+                }
             }
 
         } // namespace sdc

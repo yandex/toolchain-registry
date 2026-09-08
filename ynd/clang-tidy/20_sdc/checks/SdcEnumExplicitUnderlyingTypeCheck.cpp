@@ -1,4 +1,5 @@
 #include "SdcEnumExplicitUnderlyingTypeCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
@@ -72,16 +73,15 @@ void SdcEnumExplicitUnderlyingTypeCheck::check(
     if (isInExternCBlock(ED))
         return;
 
-    // Skip enum definitions that are members of a class-template instantiation;
-    // the warning fires on the template definition itself.
-    if (const auto* RD = dyn_cast<CXXRecordDecl>(ED->getDeclContext())) {
-        if (RD->getTemplateSpecializationKind() != TSK_Undeclared)
-            return;
-    }
+    if (!isInAnalyzedCode(*ED, ED->getLocation(), *Result.Context)) return;
 
-    diag(ED->getLocation(),
-         "enumeration '%0' shall have an explicit underlying type")
-        << ED->getName();
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *ED, ED->getLocation(), *Result.Context)) {
+        (void)Instance;
+        diag(ED->getLocation(),
+             "enumeration '%0' shall have an explicit underlying type")
+            << ED->getName();
+    }
 }
 
 } // namespace sdc

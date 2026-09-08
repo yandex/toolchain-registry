@@ -55,6 +55,8 @@ SdcBracesAroundStatementsCheck.cpp
 SdcBracesAroundStatementsCheck.h
 SdcCastUtils.cpp
 SdcCastUtils.h
+SdcCodeSelection.cpp
+SdcCodeSelection.h
 SdcConsistentTypeAliasCheck.cpp
 SdcConsistentTypeAliasCheck.h
 SdcDeleteIncompletePtrCheck.cpp
@@ -369,7 +371,6 @@ rm -rf bin
 mv bin1 bin
 EOF
 {% endblock %}
-
 
 
 

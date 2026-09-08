@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -24,6 +25,7 @@ namespace clang {
                                         const ast_matchers::MatchFinder::MatchResult& Result);
                 void checkCharacterLiteral(const clang::CharacterLiteral* Literal,
                                            const ast_matchers::MatchFinder::MatchResult& Result);
+                AnalysisInstanceTracker AnalysisInstances;
             };
 
         } // namespace sdc

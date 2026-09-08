@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -12,12 +13,15 @@ namespace clang {
             class SdcNoOctalConstantsCheck: public ClangTidyCheck {
             public:
                 SdcNoOctalConstantsCheck(StringRef Name, ClangTidyContext* Context);
+                void registerPPCallbacks(const SourceManager& SM, Preprocessor* PP,
+                                         Preprocessor* ModuleExpanderPP) override;
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;
                 void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
             private:
                 void checkIntegerLiteral(const clang::IntegerLiteral* Literal,
                                          const ast_matchers::MatchFinder::MatchResult& Result);
+                AnalysisInstanceTracker AnalysisInstances;
             };
 
         } // namespace sdc

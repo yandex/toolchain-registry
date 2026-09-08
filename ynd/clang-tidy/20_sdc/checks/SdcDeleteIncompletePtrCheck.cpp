@@ -2,6 +2,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -20,29 +21,42 @@ SdcDeleteIncompletePtrCheck::SdcDeleteIncompletePtrCheck(
 
 namespace {
 
-// An instantiated template body keeps the source locations of its primary
-// template.  A source-order comparison against a concrete type's definition
-// therefore does not describe the point at which the delete is checked.
-static bool isInTemplateInstantiation(const Stmt* S, ASTContext& Context) {
-    DynTypedNode Node = DynTypedNode::create(*S);
-    while (true) {
-        auto Parents = Context.getParents(Node);
-        if (Parents.empty()) return false;
-
-        Node = Parents[0];
-        if (const auto* D = Node.get<FunctionDecl>()) {
-            if (::clang::isTemplateInstantiation(
-                    D->getTemplateSpecializationKind())) {
-                return true;
-            }
-        }
-        if (const auto* D = Node.get<CXXRecordDecl>()) {
-            if (::clang::isTemplateInstantiation(
-                    D->getTemplateSpecializationKind())) {
-                return true;
-            }
-        }
+SourceLocation getCompletenessPoint(const Decl* Instance,
+                                    const CXXDeleteExpr& Delete) {
+    if (const auto* FD = dyn_cast_or_null<FunctionDecl>(Instance)) {
+        const SourceLocation Point = FD->getPointOfInstantiation();
+        if (Point.isValid())
+            return Point;
     }
+    if (const auto* CTSD =
+            dyn_cast_or_null<ClassTemplateSpecializationDecl>(Instance)) {
+        const SourceLocation Point = CTSD->getPointOfInstantiation();
+        if (Point.isValid())
+            return Point;
+    }
+    if (const auto* VTSD =
+            dyn_cast_or_null<VarTemplateSpecializationDecl>(Instance)) {
+        const SourceLocation Point = VTSD->getPointOfInstantiation();
+        if (Point.isValid())
+            return Point;
+    }
+    return Delete.getBeginLoc();
+}
+
+bool isCompleteAt(const RecordDecl& Record, SourceLocation Point,
+                  const SourceManager& SM) {
+    const RecordDecl* Definition = Record.getDefinition();
+    if (!Definition)
+        return false;
+
+    Point = SM.getExpansionLoc(Point);
+    SourceLocation DefinitionLoc =
+        SM.getExpansionLoc(Definition->getBeginLoc());
+    if (Point.isInvalid() || DefinitionLoc.isInvalid())
+        return false;
+
+    return DefinitionLoc == Point ||
+           SM.isBeforeInTranslationUnit(DefinitionLoc, Point);
 }
 
 } // namespace
@@ -68,26 +82,15 @@ void SdcDeleteIncompletePtrCheck::check(const MatchFinder::MatchResult& Result) 
     if (!RT) return;  // scalar, enum, or other non-class type — not our rule
 
     const RecordDecl* RD = RT->getDecl();
-    const RecordDecl* Def = RD->getDefinition();
-
-    bool incomplete;
-    if (Def == nullptr) {
-        // No definition anywhere in this TU.
-        incomplete = true;
-    } else {
-        if (isInTemplateInstantiation(DE, *Result.Context)) return;
-
-        // clang-tidy sees the fully-built AST, so even a type defined *after*
-        // the delete site appears complete.  Use source locations to detect the
-        // "defined later" case: the delete precedes the definition in the file.
-        incomplete = Result.SourceManager->isBeforeInTranslationUnit(
-            DE->getBeginLoc(), Def->getBeginLoc());
+    for (const Decl* Instance :
+         AnalysisInstances.claim(*DE, DE->getBeginLoc(), *Result.Context)) {
+        const SourceLocation Point = getCompletenessPoint(Instance, *DE);
+        if (!isCompleteAt(*RD, Point, *Result.SourceManager)) {
+            diag(DE->getBeginLoc(),
+                 "deleting pointer to incomplete type '%0'")
+                << T.getUnqualifiedType();
+        }
     }
-
-    if (incomplete)
-        diag(DE->getBeginLoc(),
-             "deleting pointer to incomplete type '%0'")
-            << T.getUnqualifiedType();
 }
 
 } // namespace sdc

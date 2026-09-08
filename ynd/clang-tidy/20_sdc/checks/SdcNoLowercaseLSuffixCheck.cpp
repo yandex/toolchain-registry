@@ -1,4 +1,5 @@
 #include "SdcNoLowercaseLSuffixCheck.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/AST/Stmt.h"
@@ -42,21 +43,29 @@ namespace clang {
                 const MatchFinder::MatchResult& Result) {
                 // Check integer literals
                 if (const auto* Literal = Result.Nodes.getNodeAs<IntegerLiteral>("integer_literal")) {
+                    if (!isInAnalyzedCode(*Literal, Literal->getBeginLoc(),
+                                          *Result.Context)) return;
                     checkIntegerLiteral(Literal, Result);
                 }
 
                 // Check floating literals
                 if (const auto* Literal = Result.Nodes.getNodeAs<FloatingLiteral>("float_literal")) {
+                    if (!isInAnalyzedCode(*Literal, Literal->getBeginLoc(),
+                                          *Result.Context)) return;
                     checkFloatingLiteral(Literal, Result);
                 }
 
                 // Check string literals (though they typically don't have numeric suffixes)
                 if (const auto* Literal = Result.Nodes.getNodeAs<StringLiteral>("string_literal")) {
+                    if (!isInAnalyzedCode(*Literal, Literal->getBeginLoc(),
+                                          *Result.Context)) return;
                     checkStringLiteral(Literal, Result);
                 }
 
                 // Check character literals (though they typically don't have numeric suffixes)
                 if (const auto* Literal = Result.Nodes.getNodeAs<CharacterLiteral>("character_literal")) {
+                    if (!isInAnalyzedCode(*Literal, Literal->getBeginLoc(),
+                                          *Result.Context)) return;
                     checkCharacterLiteral(Literal, Result);
                 }
             }
@@ -122,8 +131,12 @@ namespace clang {
                 // Check if the first character of the suffix is lowercase 'l'
                 if (CleanSourceText[pos] == 'l') {
                     // Found lowercase 'l' as first character in suffix
-                    diag(Literal->getBeginLoc(),
-                         "the lowercase form of L shall not be used as the first character in a literal suffix");
+                    for (const Decl* Instance : AnalysisInstances.claim(
+                             *Literal, Literal->getBeginLoc(), *Result.Context)) {
+                        (void)Instance;
+                        diag(Literal->getBeginLoc(),
+                             "the lowercase form of L shall not be used as the first character in a literal suffix");
+                    }
                 }
             }
 
@@ -210,8 +223,12 @@ namespace clang {
                 // Check if the first character of the suffix is lowercase 'l'
                 if (CleanSourceText[pos] == 'l') {
                     // Found lowercase 'l' as first character in suffix
-                    diag(Literal->getBeginLoc(),
-                         "the lowercase form of L shall not be used as the first character in a literal suffix");
+                    for (const Decl* Instance : AnalysisInstances.claim(
+                             *Literal, Literal->getBeginLoc(), *Result.Context)) {
+                        (void)Instance;
+                        diag(Literal->getBeginLoc(),
+                             "the lowercase form of L shall not be used as the first character in a literal suffix");
+                    }
                 }
             }
 

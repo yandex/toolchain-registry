@@ -1,4 +1,5 @@
 #include "SdcSingleVariableDeclarationCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/AST/Stmt.h"
@@ -36,6 +37,10 @@ void SdcSingleVariableDeclarationCheck::check(
 
     if (const auto* Group =
             Result.Nodes.getNodeAs<DeclStmt>("localGroup")) {
+        if (!isInAnalyzedCode(*Group, Group->getBeginLoc(),
+                              *Result.Context)) {
+            return;
+        }
         unsigned VariableCount = 0;
         for (const Decl* Declaration : Group->decls()) {
             if (isa<VarDecl>(Declaration) && ++VariableCount > 1) {
@@ -47,12 +52,12 @@ void SdcSingleVariableDeclarationCheck::check(
         }
 
         SourceLocation Location = SM.getSpellingLoc(Group->getBeginLoc());
-        if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-            !ReportedGroups.insert(Location.getRawEncoding()).second) {
-            return;
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *Group, Group->getBeginLoc(), *Result.Context)) {
+            (void)Instance;
+            diag(Location,
+                 "a declaration should not declare more than one variable");
         }
-        diag(Location,
-             "a declaration should not declare more than one variable");
         return;
     }
 
@@ -62,6 +67,10 @@ void SdcSingleVariableDeclarationCheck::check(
         Declaration = Result.Nodes.getNodeAs<FieldDecl>("field");
     }
     if (!Declaration) {
+        return;
+    }
+    if (!isInAnalyzedCode(*Declaration, Declaration->getBeginLoc(),
+                          *Result.Context)) {
         return;
     }
 
@@ -82,13 +91,17 @@ void SdcSingleVariableDeclarationCheck::check(
     const unsigned GroupKey = GroupLocation.getRawEncoding();
     llvm::DenseSet<unsigned>& Members = GroupMembers[GroupKey];
     if (!Members.insert(MemberLocation.getRawEncoding()).second ||
-        Members.size() < 2 || !ReportedGroups.insert(GroupKey).second) {
+        Members.size() < 2) {
         return;
     }
 
-    diag(SpellingBegin,
-         "a declaration should not declare more than one variable or member "
-         "variable");
+    for (const Decl* Instance : AnalysisInstances.claim(
+             *Declaration, SpellingBegin, *Result.Context)) {
+        (void)Instance;
+        diag(SpellingBegin,
+             "a declaration should not declare more than one variable or member "
+             "variable");
+    }
 }
 
 } // namespace sdc

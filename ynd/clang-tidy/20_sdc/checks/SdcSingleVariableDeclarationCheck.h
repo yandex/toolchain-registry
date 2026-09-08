@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "bridge_header.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -18,7 +19,7 @@ public:
 
 private:
     llvm::DenseMap<unsigned, llvm::DenseSet<unsigned>> GroupMembers;
-    llvm::DenseSet<unsigned> ReportedGroups;
+    AnalysisInstanceTracker AnalysisInstances;
 };
 
 } // namespace sdc

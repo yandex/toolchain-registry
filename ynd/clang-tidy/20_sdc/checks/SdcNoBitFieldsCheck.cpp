@@ -1,4 +1,5 @@
 #include "SdcNoBitFieldsCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -27,7 +28,6 @@ void SdcNoBitFieldsCheck::check(
     if (!Field) {
         return;
     }
-
     const SourceManager& SM = *Result.SourceManager;
     // Anchor the construct rather than its name. In a macro-generated field,
     // the name may be a call-site argument while the bit-field syntax lives in
@@ -35,17 +35,20 @@ void SdcNoBitFieldsCheck::check(
     const Expr* Width = Field->getBitWidth();
     SourceLocation Anchor = Width ? Width->getBeginLoc()
                                   : Field->getSourceRange().getEnd();
-    SourceLocation Location = SM.getSpellingLoc(Anchor);
-    if (Location.isInvalid() || SM.isInSystemHeader(Location) ||
-        !ReportedLocations.insert(Location.getRawEncoding()).second) {
+    if (!isInAnalyzedCode(*Field, Anchor, *Result.Context)) {
         return;
     }
+    SourceLocation Location = SM.getSpellingLoc(Anchor);
 
-    if (Field->getIdentifier()) {
-        diag(Location, "bit-field '%0' should not be declared")
-            << Field->getName();
-    } else {
-        diag(Location, "unnamed bit-field should not be declared");
+    for (const Decl* Instance :
+         AnalysisInstances.claim(*Field, Anchor, *Result.Context)) {
+        (void)Instance;
+        if (Field->getIdentifier()) {
+            diag(Location, "bit-field '%0' should not be declared")
+                << Field->getName();
+        } else {
+            diag(Location, "unnamed bit-field should not be declared");
+        }
     }
 }
 

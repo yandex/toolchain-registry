@@ -1,4 +1,5 @@
 #include "SdcForwardingReferenceCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
@@ -149,7 +150,9 @@ static bool isCorrectForwardType(QualType ForwardT, const ParmVarDecl* P) {
 
 // ─── Part B: validate std::forward call ────────────────────────────────────
 
-static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check) {
+static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check,
+                             AnalysisInstanceTracker& Instances,
+                             ASTContext& Context) {
     if (CE->getNumArgs() == 0) return;
 
     QualType ForwardT = getForwardTemplateArg(CE);
@@ -159,25 +162,38 @@ static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check) {
     const auto* ArgDRE = dyn_cast<DeclRefExpr>(Arg);
 
     if (!ArgDRE) {
-        Check->diag(CE->getBeginLoc(),
-                    "std::forward shall only be used to forward a forwarding reference");
+        for (const Decl* Instance :
+             Instances.claim(*CE, CE->getBeginLoc(), Context)) {
+            (void)Instance;
+            Check->diag(CE->getBeginLoc(),
+                        "std::forward shall only be used to forward a forwarding reference");
+        }
         return;
     }
 
     const auto* P = dyn_cast<ParmVarDecl>(ArgDRE->getDecl());
     if (!P || !isForwardingRef(P)) {
-        Check->diag(CE->getBeginLoc(),
-                    "std::forward shall only be used to forward a forwarding reference; "
-                    "%0 is not a forwarding reference parameter")
-            << ArgDRE->getDecl();
+        for (const Decl* Instance :
+             Instances.claim(*CE, CE->getBeginLoc(), Context)) {
+            (void)Instance;
+            Check->diag(CE->getBeginLoc(),
+                        "std::forward shall only be used to forward a forwarding reference; "
+                        "%0 is not a forwarding reference parameter")
+                << ArgDRE->getDecl();
+        }
         return;
     }
 
-    if (!isCorrectForwardType(ForwardT, P))
-        Check->diag(CE->getBeginLoc(),
-                    "std::forward template argument does not match the type of "
-                    "forwarding reference parameter %0")
-            << P;
+    if (!isCorrectForwardType(ForwardT, P)) {
+        for (const Decl* Instance :
+             Instances.claim(*CE, CE->getBeginLoc(), Context)) {
+            (void)Instance;
+            Check->diag(CE->getBeginLoc(),
+                        "std::forward template argument does not match the type of "
+                        "forwarding reference parameter %0")
+                << P;
+        }
+    }
 }
 
 // ─── Part A: check each argument of a non-forward call ─────────────────────
@@ -194,7 +210,9 @@ static unsigned firstExplicitArgument(const CallExpr* CE) {
     return 1;
 }
 
-static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check) {
+static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check,
+                               AnalysisInstanceTracker& Instances,
+                               ASTContext& Context) {
     for (unsigned I = firstExplicitArgument(CE); I < CE->getNumArgs(); ++I) {
         const Expr* Arg = CE->getArg(I)->IgnoreParenImpCasts();
         const auto* DRE = dyn_cast<DeclRefExpr>(Arg);
@@ -203,10 +221,14 @@ static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check) {
         const auto* P = dyn_cast<ParmVarDecl>(DRE->getDecl());
         if (!P || !isForwardingRef(P)) continue;
 
-        Check->diag(DRE->getBeginLoc(),
-                    "forwarding reference parameter %0 shall be passed using "
-                    "std::forward")
-            << P;
+        for (const Decl* Instance :
+             Instances.claim(*DRE, DRE->getBeginLoc(), Context)) {
+            (void)Instance;
+            Check->diag(DRE->getBeginLoc(),
+                        "forwarding reference parameter %0 shall be passed using "
+                        "std::forward")
+                << P;
+        }
     }
 }
 
@@ -221,11 +243,14 @@ void SdcForwardingReferenceCheck::registerMatchers(MatchFinder* Finder) {
 
 void SdcForwardingReferenceCheck::check(const MatchFinder::MatchResult& Result) {
     const auto* CE = Result.Nodes.getNodeAs<CallExpr>("call");
+    if (!CE || !isInAnalyzedCode(*CE, CE->getBeginLoc(), *Result.Context)) {
+        return;
+    }
 
     if (isStdForward(CE))
-        checkForwardCall(CE, this);
+        checkForwardCall(CE, this, AnalysisInstances, *Result.Context);
     else
-        checkCallArguments(CE, this);
+        checkCallArguments(CE, this, AnalysisInstances, *Result.Context);
 }
 
 } // namespace sdc

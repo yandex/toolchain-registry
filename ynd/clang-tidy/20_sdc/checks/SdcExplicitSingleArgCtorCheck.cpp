@@ -1,4 +1,5 @@
 #include "SdcExplicitSingleArgCtorCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -40,25 +41,29 @@ void SdcExplicitSingleArgCtorCheck::registerMatchers(MatchFinder* Finder) {
 
 void SdcExplicitSingleArgCtorCheck::check(const MatchFinder::MatchResult& Result) {
     if (const auto* CD = Result.Nodes.getNodeAs<CXXConstructorDecl>("ctor")) {
-        // Skip implicit instantiations — warn only on the template pattern
-        if (CD->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-            return;
-
         // "callable with a single argument": has ≥1 param and ≤1 required param
         if (CD->getNumParams() == 0) return;
         if (CD->getMinRequiredArguments() > 1) return;
+        if (!isInAnalyzedCode(*CD, CD->getLocation(), *Result.Context)) return;
 
-        diag(CD->getLocation(),
-             "constructor callable with a single argument shall be declared explicit");
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *CD, CD->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(CD->getLocation(),
+                 "constructor callable with a single argument shall be declared explicit");
+        }
         return;
     }
 
     if (const auto* Conv = Result.Nodes.getNodeAs<CXXConversionDecl>("conv")) {
-        if (Conv->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-            return;
+        if (!isInAnalyzedCode(*Conv, Conv->getLocation(), *Result.Context)) return;
 
-        diag(Conv->getLocation(),
-             "conversion operator shall be declared explicit");
+        for (const Decl* Instance : AnalysisInstances.claim(
+                 *Conv, Conv->getLocation(), *Result.Context)) {
+            (void)Instance;
+            diag(Conv->getLocation(),
+                 "conversion operator shall be declared explicit");
+        }
     }
 }
 

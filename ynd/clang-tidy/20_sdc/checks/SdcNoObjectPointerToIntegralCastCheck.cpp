@@ -1,6 +1,7 @@
 #include "SdcNoObjectPointerToIntegralCastCheck.h"
 
 #include "SdcCastUtils.h"
+#include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/TypeLoc.h"
@@ -83,6 +84,10 @@ namespace clang {
                 if (!Cast) {
                     return;
                 }
+                if (!isInAnalyzedCode(*Cast, Cast->getBeginLoc(),
+                                      *Result.Context)) {
+                    return;
+                }
 
                 QualType From = Cast->getSubExpr()->IgnoreParenImpCasts()->getType();
                 QualType To = Cast->getTypeAsWritten();
@@ -95,11 +100,15 @@ namespace clang {
                     return;
                 }
 
-                diag(Cast->getBeginLoc(),
-                     "cast from object pointer %0 to integral type %1 is not "
-                     "permitted; use an explicit cast to std::uintptr_t or "
-                     "std::intptr_t instead")
-                    << From << To;
+                for (const Decl* Instance : AnalysisInstances.claim(
+                         *Cast, Cast->getBeginLoc(), *Result.Context)) {
+                    (void)Instance;
+                    diag(Cast->getBeginLoc(),
+                         "cast from object pointer %0 to integral type %1 is not "
+                         "permitted; use an explicit cast to std::uintptr_t or "
+                         "std::intptr_t instead")
+                        << From << To;
+                }
             }
 
         } // namespace sdc

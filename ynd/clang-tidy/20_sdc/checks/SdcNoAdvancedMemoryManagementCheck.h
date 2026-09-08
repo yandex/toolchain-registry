@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SdcCodeSelection.h"
 #include "SdcProhibitedFunctionsCheck.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -32,6 +33,7 @@ namespace clang {
 
             private:
                 bool isUserDeclaredOperatorNewDelete(const FunctionDecl* FD);
+                AnalysisInstanceTracker AnalysisInstances;
             };
 
         } // namespace sdc

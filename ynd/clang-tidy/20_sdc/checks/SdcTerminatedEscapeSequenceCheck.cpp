@@ -109,17 +109,21 @@ void SdcTerminatedEscapeSequenceCheck::registerMatchers(MatchFinder* Finder) {
 }
 
 void SdcTerminatedEscapeSequenceCheck::checkLiteralToken(
-    SourceLocation TokenLocation, SourceLocation DiagnosticLocation,
-    const SourceManager& SM,
-    const LangOptions& LangOpts) {
-    if (TokenLocation.isInvalid() || TokenLocation.isMacroID()) {
+    const DynTypedNode& Node, SourceLocation TokenLocation,
+    SourceLocation DiagnosticLocation, ASTContext& Context) {
+    const SourceManager& SM = Context.getSourceManager();
+    const LangOptions& LangOpts = Context.getLangOpts();
+    if (TokenLocation.isInvalid() ||
+        !isWrittenInAnalyzedSource(TokenLocation, SM)) {
         return;
     }
+    const SourceLocation WrittenLocation =
+        getUltimateWrittenLocation(TokenLocation, SM);
 
     SmallString<128> Buffer;
     bool Invalid = false;
     StringRef Spelling =
-        Lexer::getSpelling(TokenLocation, Buffer, SM, LangOpts, &Invalid);
+        Lexer::getSpelling(WrittenLocation, Buffer, SM, LangOpts, &Invalid);
     if (Invalid) {
         return;
     }
@@ -133,28 +137,37 @@ void SdcTerminatedEscapeSequenceCheck::checkLiteralToken(
         return;
     }
 
-    // A concatenated string literal is one semantic literal. Anchor every
-    // offending token at the first token, matching that source-level unit;
-    // separate violations still produce separate diagnostics there.
-    diag(DiagnosticLocation,
-         "%0 is not terminated; end the literal token or start another "
-         "escape immediately after it")
-        << Violation->Kind;
+    if (TokenLocation.isMacroID()) {
+        DiagnosticLocation = SM.getExpansionLoc(TokenLocation);
+    }
+    for (const Decl* Instance :
+         AnalysisInstances.claim(Node, TokenLocation, Context)) {
+        (void)Instance;
+        diag(DiagnosticLocation,
+             "%0 is not terminated; end the literal token or start another "
+             "escape immediately after it")
+            << Violation->Kind;
+        if (TokenLocation.isMacroID() &&
+            WrittenLocation != DiagnosticLocation) {
+            diag(WrittenLocation, "escape sequence is written here",
+                 DiagnosticIDs::Note);
+        }
+    }
 }
 
 void SdcTerminatedEscapeSequenceCheck::check(
     const MatchFinder::MatchResult& Result) {
-    const SourceManager& SM = *Result.SourceManager;
-    const LangOptions& LangOpts = Result.Context->getLangOpts();
     if (const auto* String = Result.Nodes.getNodeAs<StringLiteral>("string")) {
         for (unsigned Index = 0; Index < String->getNumConcatenated(); ++Index) {
-            checkLiteralToken(String->getStrTokenLoc(Index),
-                              String->getStrTokenLoc(0), SM, LangOpts);
+            checkLiteralToken(DynTypedNode::create(*String),
+                              String->getStrTokenLoc(Index),
+                              String->getStrTokenLoc(0), *Result.Context);
         }
     } else if (const auto* Character =
                    Result.Nodes.getNodeAs<CharacterLiteral>("character")) {
-        checkLiteralToken(Character->getLocation(), Character->getLocation(),
-                          SM, LangOpts);
+        checkLiteralToken(DynTypedNode::create(*Character),
+                          Character->getLocation(),
+                          Character->getLocation(), *Result.Context);
     }
 }
 

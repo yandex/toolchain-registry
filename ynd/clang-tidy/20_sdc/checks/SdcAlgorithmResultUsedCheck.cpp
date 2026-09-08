@@ -1,4 +1,5 @@
 #include "SdcAlgorithmResultUsedCheck.h"
+#include "SdcCodeSelection.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
@@ -94,37 +95,55 @@ void SdcAlgorithmResultUsedCheck::check(const MatchFinder::MatchResult& Result) 
     ASTContext* Ctx = Result.Context;
 
     if (const auto* CE = Result.Nodes.getNodeAs<CallExpr>("algo")) {
+        if (!isInAnalyzedCode(*CE, CE->getBeginLoc(), *Ctx)) return;
         const FunctionDecl* FD = CE->getDirectCallee();
         if (!FD || !isInStdNamespace(FD)) return;
         // Exclude <cstdio> remove(const char*): it has no primary template.
         // Algorithm remove/remove_if/unique are function templates.
         if (!FD->getPrimaryTemplate()) return;
 
-        if (isResultDiscarded(CE, *Ctx))
-            diag(CE->getBeginLoc(),
-                 "the result of '%0' shall be used")
-                << FD->getName();
+        if (isResultDiscarded(CE, *Ctx)) {
+            for (const Decl* Instance :
+                 AnalysisInstances.claim(*CE, CE->getBeginLoc(), *Ctx)) {
+                (void)Instance;
+                diag(CE->getBeginLoc(),
+                     "the result of '%0' shall be used")
+                    << FD->getName();
+            }
+        }
         return;
     }
 
     if (const auto* MCE = Result.Nodes.getNodeAs<CXXMemberCallExpr>("empty")) {
+        if (!isInAnalyzedCode(*MCE, MCE->getBeginLoc(), *Ctx)) return;
         // Only flag std library empty() per the rule.
         const CXXMethodDecl* MD = MCE->getMethodDecl();
         if (!MD || !isInStdNamespace(MD)) return;
 
-        if (isResultDiscarded(MCE, *Ctx))
-            diag(MCE->getBeginLoc(),
-                 "the result of 'empty' shall be used");
+        if (isResultDiscarded(MCE, *Ctx)) {
+            for (const Decl* Instance :
+                 AnalysisInstances.claim(*MCE, MCE->getBeginLoc(), *Ctx)) {
+                (void)Instance;
+                diag(MCE->getBeginLoc(),
+                     "the result of 'empty' shall be used");
+            }
+        }
         return;
     }
 
     if (const auto* CE = Result.Nodes.getNodeAs<CallExpr>("empty")) {
+        if (!isInAnalyzedCode(*CE, CE->getBeginLoc(), *Ctx)) return;
         const FunctionDecl* FD = CE->getDirectCallee();
         if (!FD || !isInStdNamespace(FD)) return;
 
-        if (isResultDiscarded(CE, *Ctx))
-            diag(CE->getBeginLoc(),
-                 "the result of 'std::empty' shall be used");
+        if (isResultDiscarded(CE, *Ctx)) {
+            for (const Decl* Instance :
+                 AnalysisInstances.claim(*CE, CE->getBeginLoc(), *Ctx)) {
+                (void)Instance;
+                diag(CE->getBeginLoc(),
+                     "the result of 'std::empty' shall be used");
+            }
+        }
     }
 }
 

@@ -39,7 +39,7 @@ static bool isStdMoveOrForward(const CallExpr* CE) {
         return (nameIs(D, "move") || nameIs(D, "forward")) && inStd(D);
     }
     if (const auto* ULE = dyn_cast<UnresolvedLookupExpr>(Callee)) {
-        StringRef N = ULE->getName().getAsString();
+        const std::string N = ULE->getName().getAsString();
         if (N != "move" && N != "forward") return false;
         for (const NamedDecl* D : ULE->decls())
             if (inStd(D)) return true;
@@ -404,13 +404,7 @@ void SdcMovedFromStateCheck::registerMatchers(MatchFinder* Finder) {
 
 void SdcMovedFromStateCheck::check(const MatchFinder::MatchResult& Result) {
     const auto* FD = Result.Nodes.getNodeAs<FunctionDecl>("func");
-
-    // Skip implicit instantiations — warn on the template pattern only.
-    auto TSK = FD->getTemplateSpecializationKind();
-    if (TSK == TSK_ImplicitInstantiation ||
-        TSK == TSK_ExplicitInstantiationDefinition ||
-        TSK == TSK_ExplicitInstantiationDeclaration)
-        return;
+    if (!FD || FD->isDependentContext()) return;
 
     MovedFromVisitor V(*Result.Context, *this);
     V.run(FD);

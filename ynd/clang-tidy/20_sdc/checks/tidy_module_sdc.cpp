@@ -85,6 +85,7 @@
 #include "SdcNoOffsetofCheck.h"
 #include "SdcNoPointerExceptionCheck.h"
 #include "SdcNoReinterpretCastCheck.h"
+#include "SdcNoReturnStackAddressCheck.h"
 #include "SdcNoSetlocaleGlobalCheck.h"
 #include "SdcNoStackAddressAssignCheck.h"
 #include "SdcNoStaticLocalVariablesCheck.h"
@@ -212,6 +213,7 @@ public:
         CheckFactories.registerCheck<sdc::SdcNoOffsetofCheck>("sdc-no-offsetof");
         CheckFactories.registerCheck<sdc::SdcNoPointerExceptionCheck>("sdc-no-pointer-exception");
         CheckFactories.registerCheck<sdc::SdcNoReinterpretCastCheck>("sdc-no-reinterpret-cast");
+        CheckFactories.registerCheck<sdc::SdcNoReturnStackAddressCheck>("sdc-no-return-stack-address");
         CheckFactories.registerCheck<sdc::SdcNoSetlocaleGlobalCheck>("sdc-no-setlocale-global");
         CheckFactories.registerCheck<sdc::SdcNoStackAddressAssignCheck>("sdc-no-stack-address-assign");
         CheckFactories.registerCheck<sdc::SdcNoStaticLocalVariablesCheck>("sdc-no-static-local-variables");
