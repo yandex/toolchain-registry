@@ -51,6 +51,7 @@ vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 backport-objcopy-macho.patch
 fix-objcopy-elf.patch
+fix-wasm-frexp-libcall-signatures.patch
 {% endblock %}
 
 {% block patch %}

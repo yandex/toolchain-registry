@@ -46,6 +46,7 @@ Wmissing-designated-field-initializers.patch
 spgo-unit32-overflow-fix.patch
 vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
+fix-wasm-frexp-libcall-signatures.patch
 {% endblock %}
 
 {% block patch %}
