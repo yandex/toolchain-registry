@@ -64,6 +64,15 @@
 #include "SdcMacroHashHashCheck.h"
 #include "SdcMacroMixedUseCheck.h"
 #include "SdcMacroParensCheck.h"
+#include "SdcConsistentParameterNamesCheck.h"
+#include "SdcConsistentNoreturnCheck.h"
+#include "SdcSpecializationLocationCheck.h"
+#include "SdcNoLocalRecursionCheck.h"
+#include "SdcNoCtorDtorDynamicTypeCheck.h"
+#include "SdcPredicateSideEffectsCheck.h"
+#include "SdcShortCircuitSideEffectsCheck.h"
+#include "SdcInvariantConditionCheck.h"
+#include "SdcMainCatchAllCheck.h"
 #include "SdcMemberAccessCheck.h"
 #include "SdcMovedFromStateCheck.h"
 #include "SdcNoAddressofOperatorOverloadCheck.h"
@@ -225,6 +234,15 @@ public:
         CheckFactories.registerCheck<sdc::SdcMacroHashHashCheck>("sdc-macro-hash-hash");
         CheckFactories.registerCheck<sdc::SdcMacroMixedUseCheck>("sdc-macro-mixed-use");
         CheckFactories.registerCheck<sdc::SdcMacroParensCheck>("sdc-macro-parens");
+        CheckFactories.registerCheck<sdc::SdcConsistentParameterNamesCheck>("sdc-consistent-parameter-names");
+        CheckFactories.registerCheck<sdc::SdcConsistentNoreturnCheck>("sdc-consistent-noreturn");
+        CheckFactories.registerCheck<sdc::SdcSpecializationLocationCheck>("sdc-specialization-location");
+        CheckFactories.registerCheck<sdc::SdcNoLocalRecursionCheck>("sdc-no-local-recursion");
+        CheckFactories.registerCheck<sdc::SdcNoCtorDtorDynamicTypeCheck>("sdc-no-ctor-dtor-dynamic-type");
+        CheckFactories.registerCheck<sdc::SdcPredicateSideEffectsCheck>("sdc-predicate-side-effects");
+        CheckFactories.registerCheck<sdc::SdcShortCircuitSideEffectsCheck>("sdc-short-circuit-side-effects");
+        CheckFactories.registerCheck<sdc::SdcInvariantConditionCheck>("sdc-invariant-condition");
+        CheckFactories.registerCheck<sdc::SdcMainCatchAllCheck>("sdc-main-catch-all");
         CheckFactories.registerCheck<sdc::SdcMemberAccessCheck>("sdc-member-access");
         CheckFactories.registerCheck<sdc::SdcMovedFromStateCheck>("sdc-moved-from-state");
         CheckFactories.registerCheck<sdc::SdcNoAddressofOperatorOverloadCheck>("sdc-no-addressof-operator-overload");
