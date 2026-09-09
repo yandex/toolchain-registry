@@ -71,7 +71,9 @@ bool isInMaterializedCode(const DynTypedNode& Node, ASTContext& Context);
 
 // POL-SRC-001/POL-MAC-001: determine scope from the ultimate location where
 // the relevant token was written. For a macro argument this is the argument;
-// for a macro-body token this is the macro definition.
+// for a macro-body token this is the macro definition. Scratch-backed tokens
+// produced by ## are traced to their macro caller. Compiler-created scratch
+// and built-in locations without source provenance are outside analyzed code.
 SourceLocation getUltimateWrittenLocation(SourceLocation Location,
                                           const SourceManager& SM);
 bool isWrittenInAnalyzedSource(SourceLocation Location,

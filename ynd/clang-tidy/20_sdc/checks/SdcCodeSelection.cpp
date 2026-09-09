@@ -176,13 +176,43 @@ SourceLocation getUltimateWrittenLocation(SourceLocation Location,
     if (Location.isInvalid()) {
         return Location;
     }
+
+    // Tokens produced by ## are spelled in Clang's scratch buffer.  When the
+    // token still has macro expansion information, walk towards the caller
+    // until its spelling identifies the source that supplied the paste.  A
+    // direct scratch-buffer location has no such provenance and is left for
+    // isWrittenInAnalyzedSource() to reject.
+    while (Location.isMacroID() &&
+           SM.isWrittenInScratchSpace(SM.getSpellingLoc(Location))) {
+        const SourceLocation Caller = SM.getImmediateMacroCallerLoc(Location);
+        if (Caller.isInvalid() || Caller == Location) {
+            break;
+        }
+        Location = Caller;
+    }
     return SM.getSpellingLoc(Location);
 }
 
 bool isWrittenInAnalyzedSource(SourceLocation Location,
                                const SourceManager& SM) {
+    // SourceManager knows how to look through scratch buffers created by ##.
+    // This rejects a pasted macro-body token from a system header while still
+    // allowing a user-written argument passed through a system macro.
+    if (SM.isInSystemMacro(Location)) {
+        return false;
+    }
+
     const SourceLocation Written = getUltimateWrittenLocation(Location, SM);
-    return Written.isValid() && !SM.isInSystemHeader(Written);
+    if (Written.isInvalid() || SM.isWrittenInBuiltinFile(Written) ||
+        SM.isWrittenInScratchSpace(Written) || SM.isInSystemHeader(Written)) {
+        return false;
+    }
+
+    // A valid raw SourceLocation is not necessarily a printable source
+    // location: compiler-created buffers can lack a presumed file identity.
+    // Such nodes cannot identify a violation in targeted source code.
+    const PresumedLoc Presumed = SM.getPresumedLoc(Written);
+    return Presumed.isValid() && Presumed.getFilename()[0] != '\0';
 }
 
 bool isInAnalyzedCode(const DynTypedNode& Node, SourceLocation Anchor,
