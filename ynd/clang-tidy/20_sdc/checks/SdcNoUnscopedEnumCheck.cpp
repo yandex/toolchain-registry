@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoUnscopedEnumCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -39,14 +40,13 @@ void SdcNoUnscopedEnumCheck::check(
     SourceLocation Location = SM.getSpellingLoc(Enumeration->getBeginLoc());
     for (const Decl* Instance : AnalysisInstances.claim(
              *Enumeration, Enumeration->getBeginLoc(), *Result.Context)) {
-        (void)Instance;
+
         if (Enumeration->getIdentifier()) {
-            diag(Location,
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location,
                  "unscoped enumeration '%0' should not be declared outside a "
-                 "class or struct")
-                << Enumeration->getName();
+                 "class or struct", Enumeration->getName());
         } else {
-            diag(Location,
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location,
                  "unnamed unscoped enumeration should not be declared outside a "
                  "class or struct");
         }

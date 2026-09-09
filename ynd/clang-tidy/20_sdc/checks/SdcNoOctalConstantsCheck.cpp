@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoOctalConstantsCheck.h"
 #include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
@@ -85,7 +86,7 @@ namespace clang {
                             const std::string Spelling =
                                 Lexer::getSpelling(Tok, SM, LangOpts);
                             if (isProhibitedOctalSpelling(Spelling)) {
-                                Check.diag(Tok.getLocation(),
+                                Check.diag( Tok.getLocation(),
                                            "octal constants shall not be used");
                             }
                         }
@@ -152,8 +153,8 @@ namespace clang {
                 if (isProhibitedOctalSpelling(SourceText)) {
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *Literal, Literal->getBeginLoc(), *Result.Context)) {
-                        (void)Instance;
-                        diag(Literal->getBeginLoc(),
+
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Literal->getBeginLoc(),
                              "octal constants shall not be used");
                     }
                 }

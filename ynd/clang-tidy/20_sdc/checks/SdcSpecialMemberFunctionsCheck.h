@@ -127,6 +127,7 @@ namespace clang {
                 // Storage for all analyzed classes (for cross-class analysis)
                 std::map<const CXXRecordDecl*, SpecialMemberInfo> AnalyzedClasses;
                 AnalysisInstanceTracker AnalysisInstances;
+                ASTContext *CheckContext = nullptr;
 
                 // Callback after all AST traversal is done
                 void onEndOfTranslationUnit() override;

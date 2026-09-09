@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bridge_header.h"
+#include "SdcCodeSelection.h"
 #include <set>
 
 namespace clang {
@@ -34,6 +35,7 @@ private:
     const Stmt* getParentIgnoreParensAndCasts(const Stmt* S, ASTContext* Context);
 
     std::set<const CallExpr*> CtorInitCalls;
+    AnalysisInstanceTracker AnalysisInstances;
 };
 
 } // namespace sdc

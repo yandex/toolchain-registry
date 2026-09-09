@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcReturnValueUsedCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -100,8 +101,8 @@ void SdcReturnValueUsedCheck::checkUnusedFunctionCall(
 
     // FIX: Removed the trap that bailed out if Parent was not a Stmt.
     if (!isReturnValueUsed(Call, Result)) {
-        diag(Call->getBeginLoc(),
-             "return value of function call is not used; if intended to discard, cast to void");
+        emitPolicyDiagnostic(*this, DynTypedNode::create(*Call), Call->getBeginLoc(),
+             "return value of function call is not used; if intended to discard, cast to void", *Result.Context, AnalysisInstances);
     }
 }
 
@@ -116,8 +117,8 @@ void SdcReturnValueUsedCheck::checkUnusedLambdaCall(
             if (!Method->getReturnType()->isVoidType()) {
                 // FIX: Removed the Stmt cast trap
                 if (!isReturnValueUsed(OperatorCall, Result)) {
-                    diag(OperatorCall->getBeginLoc(),
-                         "return value of lambda call is not used; if intended to discard, cast to void");
+                    emitPolicyDiagnostic(*this, DynTypedNode::create(*OperatorCall), OperatorCall->getBeginLoc(),
+                         "return value of lambda call is not used; if intended to discard, cast to void", *Result.Context, AnalysisInstances);
                 }
             }
         }
@@ -133,8 +134,8 @@ void SdcReturnValueUsedCheck::checkUnusedMemberCall(
 
     // FIX: Removed the Stmt cast trap
     if (!isReturnValueUsed(MemberCall, Result)) {
-        diag(MemberCall->getBeginLoc(),
-             "return value of member function call is not used; if intended to discard, cast to void");
+        emitPolicyDiagnostic(*this, DynTypedNode::create(*MemberCall), MemberCall->getBeginLoc(),
+             "return value of member function call is not used; if intended to discard, cast to void", *Result.Context, AnalysisInstances);
     }
 }
 

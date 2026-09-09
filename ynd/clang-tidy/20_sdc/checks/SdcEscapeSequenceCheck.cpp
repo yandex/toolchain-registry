@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcEscapeSequenceCheck.h"
 
 #include "clang/AST/Expr.h"
@@ -176,11 +177,10 @@ void SdcEscapeSequenceCheck::checkLiteralToken(
         Loc.isMacroID() ? SM.getExpansionLoc(Loc) : WrittenEscapeLoc;
 
     for (const Decl* Instance : AnalysisInstances.claim(Node, Loc, Context)) {
-        (void)Instance;
-        diag(DiagnosticLoc,
+
+        diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLoc,
              "%0 in character/string literal; `\\` shall only form a "
-             "defined escape sequence or universal character name")
-            << V->What;
+             "defined escape sequence or universal character name", V->What);
         if (Loc.isMacroID() && WrittenEscapeLoc != DiagnosticLoc) {
             diag(WrittenEscapeLoc, "escape sequence is written here",
                  DiagnosticIDs::Note);

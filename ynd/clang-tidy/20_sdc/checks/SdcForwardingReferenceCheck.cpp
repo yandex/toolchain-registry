@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcForwardingReferenceCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -164,8 +165,8 @@ static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check,
     if (!ArgDRE) {
         for (const Decl* Instance :
              Instances.claim(*CE, CE->getBeginLoc(), Context)) {
-            (void)Instance;
-            Check->diag(CE->getBeginLoc(),
+
+            diagnoseAnalysisInstance(*Check, Instance, Context, CE->getBeginLoc(),
                         "std::forward shall only be used to forward a forwarding reference");
         }
         return;
@@ -175,11 +176,10 @@ static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check,
     if (!P || !isForwardingRef(P)) {
         for (const Decl* Instance :
              Instances.claim(*CE, CE->getBeginLoc(), Context)) {
-            (void)Instance;
-            Check->diag(CE->getBeginLoc(),
+
+            diagnoseAnalysisInstance(*Check, Instance, Context, CE->getBeginLoc(),
                         "std::forward shall only be used to forward a forwarding reference; "
-                        "%0 is not a forwarding reference parameter")
-                << ArgDRE->getDecl();
+                        "%0 is not a forwarding reference parameter", ArgDRE->getDecl());
         }
         return;
     }
@@ -187,11 +187,10 @@ static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check,
     if (!isCorrectForwardType(ForwardT, P)) {
         for (const Decl* Instance :
              Instances.claim(*CE, CE->getBeginLoc(), Context)) {
-            (void)Instance;
-            Check->diag(CE->getBeginLoc(),
+
+            diagnoseAnalysisInstance(*Check, Instance, Context, CE->getBeginLoc(),
                         "std::forward template argument does not match the type of "
-                        "forwarding reference parameter %0")
-                << P;
+                        "forwarding reference parameter %0", P);
         }
     }
 }
@@ -223,11 +222,10 @@ static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check,
 
         for (const Decl* Instance :
              Instances.claim(*DRE, DRE->getBeginLoc(), Context)) {
-            (void)Instance;
-            Check->diag(DRE->getBeginLoc(),
+
+            diagnoseAnalysisInstance(*Check, Instance, Context, DRE->getBeginLoc(),
                         "forwarding reference parameter %0 shall be passed using "
-                        "std::forward")
-                << P;
+                        "std::forward", P);
         }
     }
 }

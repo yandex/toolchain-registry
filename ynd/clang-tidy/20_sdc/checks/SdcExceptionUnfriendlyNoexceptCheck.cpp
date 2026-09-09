@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcExceptionUnfriendlyNoexceptCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -152,11 +153,14 @@ const FunctionDecl* callableFunction(const Expr* E) {
     return nullptr;
 }
 
-bool isExitOrTerminateRegistration(const FunctionDecl* FD) {
+bool isExitOrTerminateRegistration(const FunctionDecl* FD, const SourceManager &SM) {
     if (!FD) return false;
-    const std::string Name = FD->getQualifiedNameAsString();
-    return Name == "std::atexit" || Name == "std::at_quick_exit" ||
-           Name == "std::set_terminate";
+    if (!FD->getIdentifier()) return false;
+    const StringRef Name = FD->getName();
+    if (Name != "atexit" && Name != "at_quick_exit" && Name != "set_terminate") return false;
+    return FD->isInStdNamespace() ||
+           (FD->getDeclContext()->getRedeclContext()->isTranslationUnit() &&
+            SM.isInSystemHeader(FD->getLocation()));
 }
 
 } // namespace
@@ -172,10 +176,9 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (!isEffectivelyNoexcept(Dtor)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *Dtor, Dtor->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(Dtor->getLocation(),
-                     "destructor '%0' shall be noexcept")
-                    << Dtor->getQualifiedNameAsString();
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, Dtor->getLocation(),
+                     "destructor '%0' shall be noexcept", Dtor->getQualifiedNameAsString());
             }
         }
         return;
@@ -187,10 +190,9 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (!isEffectivelyNoexcept(CC)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *CC, CC->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(CC->getLocation(),
-                     "copy constructor of exception class '%0' shall be noexcept")
-                    << CC->getParent()->getQualifiedNameAsString();
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, CC->getLocation(),
+                     "copy constructor of exception class '%0' shall be noexcept", CC->getParent()->getQualifiedNameAsString());
             }
         }
         return;
@@ -202,10 +204,9 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (!isEffectivelyNoexcept(MC)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *MC, MC->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(MC->getLocation(),
-                     "move constructor '%0' shall be noexcept")
-                    << MC->getQualifiedNameAsString();
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, MC->getLocation(),
+                     "move constructor '%0' shall be noexcept", MC->getQualifiedNameAsString());
             }
         }
         return;
@@ -217,10 +218,9 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (!isEffectivelyNoexcept(MA)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *MA, MA->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(MA->getLocation(),
-                     "move assignment operator '%0' shall be noexcept")
-                    << MA->getQualifiedNameAsString();
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, MA->getLocation(),
+                     "move assignment operator '%0' shall be noexcept", MA->getQualifiedNameAsString());
             }
         }
         return;
@@ -232,10 +232,9 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (!isEffectivelyNoexcept(SW)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *SW, SW->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(SW->getLocation(),
-                     "function '%0' named 'swap' shall be noexcept")
-                    << SW->getQualifiedNameAsString();
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, SW->getLocation(),
+                     "function '%0' named 'swap' shall be noexcept", SW->getQualifiedNameAsString());
             }
         }
         return;
@@ -248,7 +247,7 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         const FunctionDecl* Callee = Call->getDirectCallee();
         if (!Callee) return;
         const bool CBoundary = Callee->isExternC();
-        const bool Registration = isExitOrTerminateRegistration(Callee);
+        const bool Registration = isExitOrTerminateRegistration(Callee, *Result.SourceManager);
         if (!CBoundary && !Registration) return;
 
         for (const Expr* Arg : Call->arguments()) {
@@ -256,12 +255,11 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
             if (!Callback || isEffectivelyNoexcept(Callback)) continue;
             for (const Decl* Instance : AnalysisInstances.claim(
                      *Call, Arg->getExprLoc(), *Result.Context)) {
-                (void)Instance;
-                diag(Arg->getExprLoc(),
-                     "function '%0' passed to %1 shall be noexcept")
-                    << Callback->getQualifiedNameAsString()
-                    << (Registration ? "an exit or terminate handler"
-                                     : "an extern C function");
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, Arg->getExprLoc(),
+                     "function '%0' passed to %1 shall be noexcept", Callback->getQualifiedNameAsString()
+                    ,  (Registration ? "an exit or terminate handler"
+                                     : "an extern C function"));
             }
         }
         return;
@@ -297,11 +295,10 @@ void SdcExceptionUnfriendlyNoexceptCheck::check(
         if (Throwing && !isEffectivelyNoexcept(Throwing)) {
             for (const Decl* Instance : AnalysisInstances.claim(
                      *VD, VD->getLocation(), *Result.Context)) {
-                (void)Instance;
-                diag(VD->getLocation(),
+
+                diagnoseAnalysisInstance(*this, Instance, *Result.Context, VD->getLocation(),
                      "function '%0' used to initialize variable '%1' with static "
-                     "or thread storage duration shall be noexcept")
-                    << Throwing->getQualifiedNameAsString() << VD->getName();
+                     "or thread storage duration shall be noexcept", Throwing->getQualifiedNameAsString() ,  VD->getName());
             }
         }
         return;

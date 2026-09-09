@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcEnumExplicitUnderlyingTypeCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -77,10 +78,9 @@ void SdcEnumExplicitUnderlyingTypeCheck::check(
 
     for (const Decl* Instance : AnalysisInstances.claim(
              *ED, ED->getLocation(), *Result.Context)) {
-        (void)Instance;
-        diag(ED->getLocation(),
-             "enumeration '%0' shall have an explicit underlying type")
-            << ED->getName();
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, ED->getLocation(),
+             "enumeration '%0' shall have an explicit underlying type", ED->getName());
     }
 }
 

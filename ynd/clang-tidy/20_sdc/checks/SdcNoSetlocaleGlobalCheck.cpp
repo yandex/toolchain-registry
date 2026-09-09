@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoSetlocaleGlobalCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -84,8 +85,8 @@ namespace clang {
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *SetlocaleCall, SetlocaleCall->getBeginLoc(),
                              *Result.Context)) {
-                        (void)Instance;
-                        diag(SetlocaleCall->getBeginLoc(),
+
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, SetlocaleCall->getBeginLoc(),
                              "the setlocale function shall not be called");
                     }
                     return;
@@ -111,8 +112,8 @@ namespace clang {
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *UnresolvedCall, UnresolvedCall->getBeginLoc(),
                              *Result.Context)) {
-                        (void)Instance;
-                        diag(UnresolvedCall->getBeginLoc(),
+
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, UnresolvedCall->getBeginLoc(),
                              "the setlocale function shall not be called");
                     }
                     return;
@@ -129,8 +130,8 @@ namespace clang {
                              *LocaleGlobalCall,
                              LocaleGlobalCall->getBeginLoc(),
                              *Result.Context)) {
-                        (void)Instance;
-                        diag(LocaleGlobalCall->getBeginLoc(),
+
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, LocaleGlobalCall->getBeginLoc(),
                              "the std::locale::global function shall not be "
                              "called");
                     }

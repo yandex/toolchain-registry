@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoUnionCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -33,8 +34,8 @@ void SdcNoUnionCheck::check(const MatchFinder::MatchResult& Result) {
 
     for (const Decl* Instance :
          AnalysisInstances.claim(*RD, RD->getBeginLoc(), *Result.Context)) {
-        (void)Instance;
-        diag(RD->getBeginLoc(),
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, RD->getBeginLoc(),
              "use of 'union' is prohibited; use 'std::variant' instead");
     }
 }

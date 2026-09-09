@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcSingleVariableDeclarationCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -54,8 +55,8 @@ void SdcSingleVariableDeclarationCheck::check(
         SourceLocation Location = SM.getSpellingLoc(Group->getBeginLoc());
         for (const Decl* Instance : AnalysisInstances.claim(
                  *Group, Group->getBeginLoc(), *Result.Context)) {
-            (void)Instance;
-            diag(Location,
+
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location,
                  "a declaration should not declare more than one variable");
         }
         return;
@@ -89,16 +90,15 @@ void SdcSingleVariableDeclarationCheck::check(
     SourceLocation GroupLocation =
         Begin.isMacroID() ? SM.getExpansionLoc(Begin) : SpellingBegin;
     const unsigned GroupKey = GroupLocation.getRawEncoding();
-    llvm::DenseSet<unsigned>& Members = GroupMembers[GroupKey];
-    if (!Members.insert(MemberLocation.getRawEncoding()).second ||
-        Members.size() < 2) {
-        return;
-    }
-
-    for (const Decl* Instance : AnalysisInstances.claim(
-             *Declaration, SpellingBegin, *Result.Context)) {
-        (void)Instance;
-        diag(SpellingBegin,
+    auto Instances = collectTemplateInstantiationContexts(
+        DynTypedNode::create(*Declaration), *Result.Context);
+    if (Instances.empty()) Instances.push_back(nullptr);
+    for (const Decl *Instance : Instances) {
+        auto &Members = GroupMembers[{GroupKey, Instance}];
+        // Group and deduplicate independently in each concrete specialization.
+        if (!Members.insert(MemberLocation.getRawEncoding()).second ||
+            Members.size() != 2) continue;
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, SpellingBegin,
              "a declaration should not declare more than one variable or member "
              "variable");
     }

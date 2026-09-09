@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoUnsignedUnaryMinusCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -45,8 +46,8 @@ void SdcNoUnsignedUnaryMinusCheck::check(
 
     for (const Decl* Instance : AnalysisInstances.claim(
              *Operator, Operator->getOperatorLoc(), *Result.Context)) {
-        (void)Instance;
-        diag(Location,
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location,
              "built-in unary '-' operator should not be applied to an unsigned "
              "expression");
     }

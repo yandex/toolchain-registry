@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoBitFieldsCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -42,12 +43,11 @@ void SdcNoBitFieldsCheck::check(
 
     for (const Decl* Instance :
          AnalysisInstances.claim(*Field, Anchor, *Result.Context)) {
-        (void)Instance;
+
         if (Field->getIdentifier()) {
-            diag(Location, "bit-field '%0' should not be declared")
-                << Field->getName();
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location, "bit-field '%0' should not be declared", Field->getName());
         } else {
-            diag(Location, "unnamed bit-field should not be declared");
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location, "unnamed bit-field should not be declared");
         }
     }
 }

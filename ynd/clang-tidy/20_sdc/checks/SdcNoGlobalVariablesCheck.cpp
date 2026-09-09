@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoGlobalVariablesCheck.h"
 #include "SdcCodeSelection.h"
 #include "clang/AST/ASTContext.h"
@@ -125,7 +126,7 @@ namespace clang {
                 // definition lives.
                 if (VD->isThisDeclarationADefinition() ==
                         VarDecl::DeclarationOnly &&
-                    VD->hasExternalStorage() && isConstQualified(VD)) {
+                    isConstQualified(VD)) {
                     return;
                 }
 
@@ -139,8 +140,8 @@ namespace clang {
 
                 for (const Decl* Instance : AnalysisInstances.claim(
                          *VD, VD->getLocation(), *Result.Context)) {
-                    (void)Instance;
-                    diag(VD->getLocation(),
+
+                    diagnoseAnalysisInstance(*this, Instance, *Result.Context, VD->getLocation(),
                          "global variable is not allowed; declare it as constexpr, "
                          "or as const with constant initialization, or move it to "
                          "function scope");

@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoAsmCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -27,8 +28,8 @@ void SdcNoAsmCheck::check(const MatchFinder::MatchResult& Result) {
 
     for (const Decl* Instance :
          AnalysisInstances.claim(*Asm, Asm->getAsmLoc(), *Result.Context)) {
-        (void)Instance;
-        diag(Asm->getAsmLoc(),
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Asm->getAsmLoc(),
              "use of 'asm' is prohibited; use compiler intrinsics instead if "
              "low-level hardware access is required");
     }

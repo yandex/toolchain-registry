@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoAddressofOperatorOverloadCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -49,8 +50,8 @@ void SdcNoAddressofOperatorOverloadCheck::check(const MatchFinder::MatchResult& 
 
     for (const Decl* Instance : AnalysisInstances.claim(
              *FD, FD->getLocation(), *Result.Context)) {
-        (void)Instance;
-        diag(FD->getLocation(),
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, FD->getLocation(),
              "overloading 'operator&' (address-of) is prohibited; "
              "use 'std::addressof' to obtain the address of an object");
     }

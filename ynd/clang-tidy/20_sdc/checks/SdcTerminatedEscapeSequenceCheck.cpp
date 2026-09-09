@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcTerminatedEscapeSequenceCheck.h"
 
 #include "clang/AST/Expr.h"
@@ -142,11 +143,10 @@ void SdcTerminatedEscapeSequenceCheck::checkLiteralToken(
     }
     for (const Decl* Instance :
          AnalysisInstances.claim(Node, TokenLocation, Context)) {
-        (void)Instance;
-        diag(DiagnosticLocation,
+
+        diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLocation,
              "%0 is not terminated; end the literal token or start another "
-             "escape immediately after it")
-            << Violation->Kind;
+             "escape immediately after it", Violation->Kind);
         if (TokenLocation.isMacroID() &&
             WrittenLocation != DiagnosticLocation) {
             diag(WrittenLocation, "escape sequence is written here",

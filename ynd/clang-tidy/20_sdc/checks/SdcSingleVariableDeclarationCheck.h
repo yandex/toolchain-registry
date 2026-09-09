@@ -18,7 +18,7 @@ public:
     void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
 private:
-    llvm::DenseMap<unsigned, llvm::DenseSet<unsigned>> GroupMembers;
+    llvm::DenseMap<std::pair<unsigned, const Decl *>, llvm::DenseSet<unsigned>> GroupMembers;
     AnalysisInstanceTracker AnalysisInstances;
 };
 

@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcErrnoZeroAssignCheck.h"
 
 #include "clang/AST/Expr.h"
@@ -80,8 +81,8 @@ void SdcErrnoZeroAssignCheck::check(const MatchFinder::MatchResult& Result) {
 
     if (BO->getOpcode() != BO_Assign) {
         for (const Decl* Instance : Instances) {
-            (void)Instance;
-            diag(BO->getOperatorLoc(),
+
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, BO->getOperatorLoc(),
                  "compound assignment to 'errno' is not allowed; only the "
                  "literal value zero may be assigned to 'errno'");
         }
@@ -97,8 +98,8 @@ void SdcErrnoZeroAssignCheck::check(const MatchFinder::MatchResult& Result) {
         if (IL->getValue().isZero()) return;
 
     for (const Decl* Instance : Instances) {
-        (void)Instance;
-        diag(BO->getOperatorLoc(),
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, BO->getOperatorLoc(),
              "only the literal value zero may be assigned to 'errno'");
     }
 }

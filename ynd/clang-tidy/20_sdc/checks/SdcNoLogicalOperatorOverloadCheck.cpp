@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoLogicalOperatorOverloadCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -47,10 +48,9 @@ void SdcNoLogicalOperatorOverloadCheck::check(const MatchFinder::MatchResult& Re
 
     for (const Decl* Instance : AnalysisInstances.claim(
              *FD, FD->getLocation(), *Result.Context)) {
-        (void)Instance;
-        diag(FD->getLocation(),
-             "overloading '%0' is prohibited; it breaks short-circuit evaluation semantics")
-            << OpName;
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, FD->getLocation(),
+             "overloading '%0' is prohibited; it breaks short-circuit evaluation semantics", OpName);
     }
 }
 

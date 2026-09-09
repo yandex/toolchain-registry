@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcSpecialMemberFunctionsCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
@@ -49,6 +50,8 @@ namespace clang {
                         .empty()) {
                     return;
                 }
+
+                CheckContext = Result.Context;
 
                 // Analyze the class
                 SpecialMemberInfo Info = analyzeClass(ClassDecl);
@@ -125,7 +128,8 @@ namespace clang {
                     return MemberState::Deleted;
                 }
 
-                if (Dtor->isDefaulted()) {
+                const auto *Definition = Dtor->getDefinition();
+                if (Dtor->isDefaulted() || (Definition && Definition->isDefaulted())) {
                     return MemberState::Defaulted;
                 }
 
@@ -161,7 +165,8 @@ namespace clang {
                     return MemberState::Deleted;
                 }
 
-                if (CopyCtor->isDefaulted()) {
+                const auto *Definition = CopyCtor->getDefinition();
+                if (CopyCtor->isDefaulted() || (Definition && Definition->isDefaulted())) {
                     return MemberState::Defaulted;
                 }
 
@@ -196,7 +201,8 @@ namespace clang {
                     return MemberState::Deleted;
                 }
 
-                if (CopyAssign->isDefaulted()) {
+                const auto *Definition = CopyAssign->getDefinition();
+                if (CopyAssign->isDefaulted() || (Definition && Definition->isDefaulted())) {
                     return MemberState::Defaulted;
                 }
 
@@ -231,7 +237,8 @@ namespace clang {
                     return MemberState::Deleted;
                 }
 
-                if (MoveCtor->isDefaulted()) {
+                const auto *Definition = MoveCtor->getDefinition();
+                if (MoveCtor->isDefaulted() || (Definition && Definition->isDefaulted())) {
                     return MemberState::Defaulted;
                 }
 
@@ -266,7 +273,8 @@ namespace clang {
                     return MemberState::Deleted;
                 }
 
-                if (MoveAssign->isDefaulted()) {
+                const auto *Definition = MoveAssign->getDefinition();
+                if (MoveAssign->isDefaulted() || (Definition && Definition->isDefaulted())) {
                     return MemberState::Defaulted;
                 }
 
@@ -279,10 +287,13 @@ namespace clang {
                     return false;
                 const CXXDestructorDecl* Destructor =
                     Info.ClassDecl->getDestructor();
-                if (!Destructor || Destructor->isDeleted() ||
-                    Destructor->getAccess() != AS_public) {
+                if ((!Destructor && !Info.ClassDecl->hasSimpleDestructor()) ||
+                    (Destructor && (Destructor->isDeleted() ||
+                    Destructor->getAccess() != AS_public))) {
                     return false;
                 }
+                if (!Info.CopyCtorDecl && Info.ClassDecl->hasSimpleCopyConstructor())
+                    return true;
                 for (const CXXConstructorDecl* Constructor :
                      Info.ClassDecl->ctors()) {
                     unsigned TypeQualifiers = 0;
@@ -302,19 +313,22 @@ namespace clang {
                     return false;
                 const CXXDestructorDecl* Destructor =
                     Info.ClassDecl->getDestructor();
-                if (!Destructor || Destructor->isDeleted() ||
-                    Destructor->getAccess() != AS_public) {
+                if ((!Destructor && !Info.ClassDecl->hasSimpleDestructor()) ||
+                    (Destructor && (Destructor->isDeleted() ||
+                    Destructor->getAccess() != AS_public))) {
                     return false;
                 }
                 if (Info.MoveCtorDecl) {
                     return !Info.MoveCtorDecl->isDeleted() &&
                            Info.MoveCtorDecl->getAccess() == AS_public;
                 }
-                return isCopyConstructible(Info);
+                return Info.ClassDecl->hasSimpleMoveConstructor() || isCopyConstructible(Info);
             }
 
             bool SdcSpecialMemberFunctionsCheck::isCopyAssignable(
                 const SpecialMemberInfo& Info) {
+                if (!Info.CopyAssignDecl && Info.ClassDecl->hasSimpleCopyAssignment())
+                    return true;
                 for (const CXXMethodDecl* Method : Info.ClassDecl->methods()) {
                     if (!Method->isCopyAssignmentOperator() ||
                         Method->getNumParams() == 0)
@@ -336,7 +350,7 @@ namespace clang {
                     return !Info.MoveAssignDecl->isDeleted() &&
                            Info.MoveAssignDecl->getAccess() == AS_public;
                 }
-                return isCopyAssignable(Info);
+                return Info.ClassDecl->hasSimpleMoveAssignment() || isCopyAssignable(Info);
             }
 
             SdcSpecialMemberFunctionsCheck::ClassCategory
@@ -444,7 +458,7 @@ namespace clang {
             void SdcSpecialMemberFunctionsCheck::checkCategoryValidity(
                 const SpecialMemberInfo& Info) {
                 if (Info.Category == ClassCategory::Invalid) {
-                    diag(Info.ClassDecl->getLocation(),
+                    diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                          "class has invalid combination of copy/move constructibility and assignability; "
                          "must be Unmovable, Move-only, or Copy-enabled");
                 }
@@ -460,7 +474,7 @@ namespace clang {
                     Info.MoveAssignment == MemberState::Customized;
 
                 if (hasCustomizedCopyMove && Info.Destructor != MemberState::Customized) {
-                    diag(Info.ClassDecl->getLocation(),
+                    diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                          "class has customized copy or move operations but no customized destructor");
 
                     // Add notes showing which operations are customized
@@ -504,7 +518,7 @@ namespace clang {
                 }
 
                 if (!isDestructorNonEmpty(DtorDefinition)) {
-                    diag(Info.ClassDecl->getLocation(),
+                    diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                          "class has customized destructor with empty body; "
                          "customized destructor must contain at least one non-null statement");
                     diag(DtorDefinition->getLocation(),
@@ -529,14 +543,14 @@ namespace clang {
                         // Unique manager: move-only with customized destructor
                         // Must have customized move constructor
                         if (Info.MoveConstructor != MemberState::Customized) {
-                            diag(Info.ClassDecl->getLocation(),
+                            diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                  "unique manager (move-only class with customized destructor) "
                                  "must have customized move constructor");
                         }
 
                         // If move-assignable, must have customized move assignment
                         if (isMoveAssignable(Info) && Info.MoveAssignment != MemberState::Customized) {
-                            diag(Info.ClassDecl->getLocation(),
+                            diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                  "unique manager that is move-assignable must have "
                                  "customized move assignment operator");
                         }
@@ -546,7 +560,7 @@ namespace clang {
                         // General manager: copy-enabled with customized destructor
                         // Must have customized copy constructor
                         if (Info.CopyConstructor != MemberState::Customized) {
-                            diag(Info.ClassDecl->getLocation(),
+                            diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                  "general manager (copy-enabled class with customized destructor) "
                                  "must have customized copy constructor");
                         }
@@ -554,14 +568,14 @@ namespace clang {
                         // Move constructor must be either customized or not declared
                         if (Info.MoveConstructor != MemberState::Customized &&
                             Info.MoveConstructor != MemberState::Implicit) {
-                            diag(Info.ClassDecl->getLocation(),
+                            diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                  "general manager move constructor must be either customized or not declared "
                                  "(not defaulted)");
                         }
 
                         // If copy-assignable, must have customized copy assignment
                         if (isCopyAssignable(Info) && Info.CopyAssignment != MemberState::Customized) {
-                            diag(Info.ClassDecl->getLocation(),
+                            diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                  "general manager that is copy-assignable must have "
                                  "customized copy assignment operator");
                         }
@@ -575,7 +589,7 @@ namespace clang {
                                 // At least one is declared, both must be customized
                                 if (Info.MoveConstructor != MemberState::Customized ||
                                     Info.MoveAssignment != MemberState::Customized) {
-                                    diag(Info.ClassDecl->getLocation(),
+                                    diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                                          "general manager that is copy-assignable must have move operations "
                                          "either both customized or both not declared");
                                 }
@@ -608,7 +622,7 @@ namespace clang {
                 // If destructor is public and virtual, class must be unmovable
                 if (hasPublicDtor && isVirtualDtor) {
                     if (Info.Category != ClassCategory::Unmovable) {
-                        diag(Info.ClassDecl->getLocation(),
+                        diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                              "class with public virtual destructor must be unmovable");
                     }
                 }
@@ -681,7 +695,7 @@ namespace clang {
                     }
 
                     if (!satisfiesRequirement1 && !satisfiesRequirement2) {
-                        diag(Info.ClassDecl->getLocation(),
+                        diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                              "class used as public base must have either a public virtual destructor "
                              "(and be unmovable) or a protected non-virtual destructor");
                     }
@@ -815,7 +829,7 @@ namespace clang {
 
                 if (!allSame) {
                     // Found a violation - special member definitions in different files
-                    diag(Info.ClassDecl->getLocation(),
+                    diagnoseAnalysisInstance(*this, Info.ClassDecl, *CheckContext, Info.ClassDecl->getLocation(),
                          "all out-of-class definitions of special member functions "
                          "must be in the same file");
 

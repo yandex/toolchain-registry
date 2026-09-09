@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcBracesAroundStatementsCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -30,9 +31,8 @@ void SdcBracesAroundStatementsCheck::check(
                                     StringRef Kind) {
         for (const Decl* Instance :
              AnalysisInstances.claim(Node, Loc, *Result.Context)) {
-            (void)Instance;
-            diag(Loc, "body of %0 statement shall be a compound statement")
-                << Kind;
+
+            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Loc, "body of %0 statement shall be a compound statement", Kind);
         }
     };
 

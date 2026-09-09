@@ -1,3 +1,4 @@
+#include "SdcPolicyDiagnostic.h"
 #include "SdcNoBuiltInUnaryPlusCheck.h"
 #include "SdcCodeSelection.h"
 
@@ -42,8 +43,8 @@ void SdcNoBuiltInUnaryPlusCheck::check(
 
     for (const Decl* Instance : AnalysisInstances.claim(
              *Operator, Operator->getOperatorLoc(), *Result.Context)) {
-        (void)Instance;
-        diag(Location, "built-in unary '+' operator should not be used");
+
+        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Location, "built-in unary '+' operator should not be used");
     }
 }
 

@@ -133,6 +133,12 @@ namespace clang {
                         return true;
                     }
 
+                    bool TraverseElaboratedTypeLoc(ElaboratedTypeLoc Location) {
+                        if (Location.getQualifierLoc())
+                            return TraverseNestedNameSpecifierLoc(Location.getQualifierLoc());
+                        return RecursiveASTVisitor::TraverseElaboratedTypeLoc(Location);
+                    }
+
                     bool VisitTypedefTypeLoc(TypedefTypeLoc TypeLocation) {
                         if (TypeLocation.getBeginLoc() !=
                             TypeLocation.getNameLoc()) {
