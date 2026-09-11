@@ -17,7 +17,7 @@ LLVM_PROFDATA_FILE=$CLANG_TIDY_PGO_PROFILE
 {% block keep_tools %}
 {{super()}}
 {% for tool in ('llvm-bolt', 'perf2bolt') %}
-if test -e bin/{{tool}}; then
+if test -e bin/{{tool}} || test -L bin/{{tool}}; then
     mv bin/{{tool}} bin1/.
 fi
 {% endfor %}
