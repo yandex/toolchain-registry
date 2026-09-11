@@ -159,6 +159,19 @@ static bool canFallThrough(const Stmt* S) {
     return true;
 }
 
+// Recognize dispatch arms whose only operation returns or throws. Do not use
+// canFallThrough here: a block ending in return can still contain an earlier
+// break or goto that carries its state elsewhere.
+static const Stmt* terminalDispatchArm(const Stmt* S) {
+    while (const auto* Label = dyn_cast<SwitchCase>(S))
+        S = Label->getSubStmt();
+    while (const auto* Attributed = dyn_cast<AttributedStmt>(S))
+        S = Attributed->getSubStmt();
+    if (const auto* E = dyn_cast<Expr>(S))
+        S = E->IgnoreImplicit();
+    return isa<ReturnStmt>(S) || isa<CXXThrowExpr>(S) ? S : nullptr;
+}
+
 // ─── Per-function visitor ────────────────────────────────────────────────────
 
 class MovedFromVisitor : public RecursiveASTVisitor<MovedFromVisitor> {
@@ -271,6 +284,52 @@ public:
         if (ElseFallsThrough)
             for (const auto& [VD, MoveLoc] : ElseState)
                 MovedFrom.try_emplace(VD, MoveLoc);
+        return true;
+    }
+
+    // Each terminal dispatch arm starts at the switch condition, never at
+    // the preceding arm. Leave general switches on the existing traversal:
+    // fallthrough, break and goto need their own control-flow routing.
+    bool TraverseSwitchStmt(SwitchStmt* S) {
+        const auto* Body = dyn_cast<CompoundStmt>(S->getBody());
+        if (!Body || Body->body_empty())
+            return RecursiveASTVisitor::TraverseSwitchStmt(S);
+        bool SawArm = false;
+        for (const Stmt* Arm : Body->body()) {
+            // Dispatch macros can leave an unreachable break after a throw
+            // or return. It introduces no additional control-flow edge.
+            if (SawArm && (isa<BreakStmt>(Arm) || isa<NullStmt>(Arm)))
+                continue;
+            if (!isa<SwitchCase>(Arm) || !terminalDispatchArm(Arm))
+                return RecursiveASTVisitor::TraverseSwitchStmt(S);
+            SawArm = true;
+        }
+
+        if (Stmt* Init = S->getInit())
+            if (!TraverseStmt(Init)) return false;
+        if (VarDecl* ConditionVar = S->getConditionVariable())
+            if (!TraverseDecl(ConditionVar)) return false;
+        if (!TraverseStmt(S->getCond())) return false;
+
+        const auto EntryState = MovedFrom;
+        decltype(MovedFrom) ExitState;
+        bool HasDefault = false;
+        for (const SwitchCase* Label = S->getSwitchCaseList(); Label;
+             Label = Label->getNextSwitchCase())
+            HasDefault |= isa<DefaultStmt>(Label);
+        if (!HasDefault) ExitState = EntryState;
+
+        for (Stmt* Arm : Body->body()) {
+            if (!isa<SwitchCase>(Arm)) continue;
+            MovedFrom = EntryState;
+            if (!TraverseStmt(Arm)) return false;
+            // A throw can reach an enclosing handler. Keep that state until
+            // exception edges are modelled; returning arms cannot reach it.
+            if (isa<CXXThrowExpr>(terminalDispatchArm(Arm)))
+                for (const auto& [VD, MoveLoc] : MovedFrom)
+                    ExitState.try_emplace(VD, MoveLoc);
+        }
+        MovedFrom = std::move(ExitState);
         return true;
     }
 
@@ -404,7 +463,10 @@ void SdcMovedFromStateCheck::registerMatchers(MatchFinder* Finder) {
 
 void SdcMovedFromStateCheck::check(const MatchFinder::MatchResult& Result) {
     const auto* FD = Result.Nodes.getNodeAs<FunctionDecl>("func");
-    if (!FD || FD->isDependentContext()) return;
+    // Defaulted bodies are synthesized by Clang. Their memberwise moves use
+    // repeated xvalue casts of the enclosing parameter to access distinct
+    // subobjects, not repeated source-level moves of that whole parameter.
+    if (!FD || FD->isDependentContext() || FD->isDefaulted()) return;
 
     MovedFromVisitor V(*Result.Context, *this);
     V.run(FD);

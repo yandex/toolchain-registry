@@ -61,22 +61,39 @@ namespace clang {
                                                    ConditionValueKind ValueKind) {
                         if (ValueKind == CVK_NotEvaluated || Range.isInvalid()) return;
 
-                        SourceLocation Cur = SM.getSpellingLoc(Range.getBegin());
-                        const SourceLocation Last = SM.getSpellingLoc(Range.getEnd());
+                        // The callback range can begin/end in expanded macros.
+                        // Spelling locations then point into replacement lists,
+                        // possibly in another file or the command-line buffer.
+                        // Raw lexing must stay inside the actual directive.
+                        const CharSourceRange Expanded = SM.getExpansionRange(Range);
+                        SourceLocation Cur = Expanded.getBegin();
+                        SourceLocation End = Expanded.getEnd();
+                        if (Expanded.isTokenRange())
+                            End = Lexer::getLocForEndOfToken(End, 0, SM, LangOpts);
+                        const SourceLocation Last = End;
                         if (Cur.isInvalid() || Last.isInvalid() ||
-                            SM.isInSystemHeader(Cur)) {
+                            SM.isInSystemHeader(Cur) ||
+                            SM.getFileID(Cur) != SM.getFileID(Last)) {
                             return;
                         }
 
-                        while (!SM.isBeforeInTranslationUnit(Last, Cur)) {
+                        const FileID File = SM.getFileID(Cur);
+                        const unsigned EndOffset = SM.getFileOffset(Last);
+                        while (SM.getFileOffset(Cur) < EndOffset) {
                             Token Tok;
                             if (Lexer::getRawToken(Cur, Tok, SM, LangOpts,
                                                    /*IgnoreWhiteSpace=*/true)) {
                                 break;
                             }
+                            if (Tok.is(tok::eof) ||
+                                SM.getFileID(Tok.getLocation()) != File ||
+                                SM.getFileOffset(Tok.getLocation()) >= EndOffset)
+                                break;
                             const SourceLocation Next = Lexer::getLocForEndOfToken(
                                 Tok.getLocation(), 0, SM, LangOpts);
-                            if (Next.isInvalid() || Next == Cur) break;
+                            if (Next.isInvalid() || SM.getFileID(Next) != File ||
+                                SM.getFileOffset(Next) <= SM.getFileOffset(Cur))
+                                break;
                             Cur = Next;
 
                             if (!Tok.is(tok::numeric_constant)) continue;
