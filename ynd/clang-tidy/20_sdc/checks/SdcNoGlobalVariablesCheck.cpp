@@ -41,6 +41,13 @@ namespace clang {
                 // Returns true if VD lives at namespace scope (including the
                 // translation-unit scope and anonymous namespaces).
                 bool isNamespaceScopeVar(const VarDecl* VD) {
+                    // Parameters nested in function types (such as callback
+                    // aliases) can have a namespace DeclContext in Clang.
+                    // Their declaration kind still identifies them as
+                    // parameters, not namespace-scope objects.
+                    if (isa<ParmVarDecl>(VD)) {
+                        return false;
+                    }
                     const DeclContext* DC = VD->getDeclContext();
                     if (!DC) {
                         return false;
