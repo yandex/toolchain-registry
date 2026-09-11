@@ -129,15 +129,13 @@ mkdir -p ${out}/fix
 cat << EOF > ${out}/fix/remove_unused.sh
 mkdir bin1
 
+{% block keep_tools %}
 mv bin/yaml2json* bin1/.
 mv bin/clang-tidy* bin1/.
 mv bin/clang-apply-replacements* bin1/.
+{% endblock %}
 rm -rf bin
 
 mv bin1 bin
 EOF
 {% endblock %}
-
-
-
-
