@@ -6,6 +6,11 @@ CFLAGS(
     -g
 )
 
+IF (CLANG)
+    # Emit complete control-block types even when libc++ has only line tables.
+    CXXFLAGS(-fstandalone-debug)
+ENDIF()
+
 SRCS(
     main.cpp
 )

@@ -1,10 +1,12 @@
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <deque>
 #include <exception>
 #include <forward_list>
 #include <list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -59,6 +61,18 @@ std::unique_ptr<int> test_unique_empty;
 
 std::shared_ptr<int> test_shared_int(new int(1));
 std::shared_ptr<int> test_shared_empty;
+
+std::shared_ptr<int> test_shared_multiple = std::make_shared<int>(2);
+std::shared_ptr<int> test_shared_multiple_copy = test_shared_multiple;
+std::weak_ptr<int> test_weak_live = test_shared_multiple;
+std::weak_ptr<int> test_weak_empty;
+std::weak_ptr<int> test_weak_expired = [] {
+    auto owner = std::make_shared<int>(3);
+    return std::weak_ptr<int>(owner);
+}();
+
+// Reference-count storage used before the libc++ atomic update in r18668631.
+std::atomic<long> test_legacy_shared_counts[] = {-1, 0, 2};
 
 std::variant<int, std::string> test_variant_default;
 std::variant<int, std::string> test_variant_int(10);

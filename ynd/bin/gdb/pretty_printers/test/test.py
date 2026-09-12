@@ -75,6 +75,10 @@ tests = dict(
     test_unique_empty='std::__y1::unique_ptr<int> = {get() = 0x0}',
     test_shared_int=re.compile(r'(= )?std::__y1::shared_ptr \(count 1, weak 0\) = \{get\(\) = 0x[0-9a-f]+\}'),
     test_shared_empty='std::__y1::shared_ptr (empty) = {get() = 0x0}',
+    test_shared_multiple=re.compile(r'= std::__y1::shared_ptr \(count 2, weak 1\) = \{get\(\) = 0x[0-9a-f]+\}'),
+    test_weak_live=re.compile(r'= std::__y1::weak_ptr \(count 2, weak 1\) = \{get\(\) = 0x[0-9a-f]+\}'),
+    test_weak_empty='std::__y1::weak_ptr (empty) = {get() = 0x0}',
+    test_weak_expired=re.compile(r'= std::__y1::weak_ptr \(expired, weak 0\) = \{get\(\) = 0x[0-9a-f]+\}'),
     test_tvector='TVector (length=4, capacity=4) = {[0] = 1, [1] = 2, [2] = 3, [3] = 4}',
     test_tstring='"Это тест."',
     test_nullbyte_tstring='"\\000тест"',
@@ -121,12 +125,21 @@ tests = dict(
 @pytest.mark.parametrize(('test_name', 'test_output'), tests.items(), ids=tests.keys())
 def test_pretty_printers(test_name, test_output):
     actual_output = data(test_name)
-    if test_name == 'test_shared_int' and 'no member named __shared_owners_' in actual_output:
-        pytest.xfail('test_shared_int fails when libcxx is built with -gline-tables-only')
-    elif hasattr(test_output, 'search'):
+    if hasattr(test_output, 'search'):
         assert test_output.search(actual_output) is not None, actual_output.decode('UTF-8')
     else:
         assert '$1 = {}\n'.format(test_output) in actual_output, actual_output.decode('UTF-8')
+
+
+def test_legacy_shared_refcounts():
+    actual_output = gdb(
+        'b stop_here',
+        'run',
+        'python from libcxx_printers import SharedPointerPrinter; '
+        'values = gdb.parse_and_eval("test_legacy_shared_counts"); '
+        'print([int(SharedPointerPrinter._refcount(values[i])) for i in range(3)])',
+    )
+    assert '[-1, 0, 2]\n' in actual_output, actual_output.decode('UTF-8')
 
 
 xmethod_tests = dict(
