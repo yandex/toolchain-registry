@@ -1,18 +1,20 @@
 {% extends '//die/std/ix.sh' %}
-
 {% block fetch %}
-http://s3.mds.yandex.net/sandbox-tmp/13531730486/clang-tidy-20-profiles.tgz
-sha:da9ec5f619ef30afe2a51f389b8fafd69732eb091c40e27cf405e76b02c6be30
+https://proxy.sandbox.yandex-team.ru/13624164850
+sha:b9a85940a7436da36ab56beded0f3005b55539790ba433beb14f95d7f01b2d3f
 {% endblock %}
-
 {% block unpack %}
-mkdir src; cd src; tar -xf ${src}/*tgz
+mkdir src
+cd src
+for file in "${src}"/*; do
+    if [ "${file##*/}" != touch ]; then
+        tar -xf "${file}"
+    fi
+done
 {% endblock %}
-
 {% block install %}
-cp ${tmp}/src/bolt-profile.prof ${out}/
+cp -a ${tmp}/src/. ${out}/
 {% endblock %}
-
 {% block env %}
 export CLANG_TIDY_BOLT_PROFILE=${out}/bolt-profile.prof
 {% endblock %}
