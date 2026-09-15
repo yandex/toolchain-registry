@@ -34,16 +34,19 @@ namespace clang {
                     return isCharacterType(T->getPointeeType());
                 }
 
-                // True if E is a string literal, or a selection between
-                // string-literal-like operands (e.g.
-                // `cond ? "yes" : "no"`). Every reachable leaf is a string
-                // literal, so the decayed array is still guaranteed to carry a
-                // terminating sentinel - the same justification as the bare
-                // string-literal exemption.
+                // A string literal, a compiler-generated function name under
+                // the project deviation, or a selection between such values.
+                // Every leaf has a compiler-provided terminating sentinel.
                 bool isStringLiteralLike(const Expr* E) {
                     if (!E) return false;
                     E = E->IgnoreParenImpCasts();
                     if (isa<StringLiteral>(E)) return true;
+                    // SDC-DEV-7.11.2-001: predefined function-name arrays are
+                    // permitted at character-pointer boundaries. They are not
+                    // literal expressions; this is an explicit project deviation.
+                    // Ordinary named const arrays must not inherit it.
+                    if (const auto* PE = dyn_cast<PredefinedExpr>(E))
+                        return PE->getFunctionName() != nullptr;
                     if (const auto* CO = dyn_cast<ConditionalOperator>(E)) {
                         return isStringLiteralLike(CO->getTrueExpr()) &&
                                isStringLiteralLike(CO->getFalseExpr());

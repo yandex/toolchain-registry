@@ -8,7 +8,8 @@ namespace clang {
 
             // Disallows array-to-pointer decay at function-call argument
             // positions (including constructor calls). String literals passed
-            // to pointer-to-character parameters are exempted.
+            // to pointer-to-character parameters are exempted, as are
+            // compiler-generated function-name strings by project deviation.
             class SdcNoArrayDecayInCallCheck: public ClangTidyCheck {
             public:
                 SdcNoArrayDecayInCallCheck(StringRef Name, ClangTidyContext* Context);
