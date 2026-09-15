@@ -28,21 +28,40 @@ void SdcNoCtorDtorDynamicTypeCheck::check(const MatchFinder::MatchResult &Result
         const auto *E = dyn_cast<Expr>(S);
         if (!E) return;
         bool Violation = false;
+        const CXXMethodDecl *VirtualMethod = nullptr;
         if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E)) {
             const auto *M = Call->getMethodDecl();
             const auto *Member = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParenImpCasts());
             Violation = M && M->isVirtual() && Member && !Member->hasQualifier() &&
                 currentObject(Call->getImplicitObjectArgument());
+            if (Violation) VirtualMethod = M;
         } else if (const auto *T = dyn_cast<CXXTypeidExpr>(E)) {
             Violation = !T->isTypeOperand() && T->isPotentiallyEvaluated() &&
                 currentObject(T->getExprOperand());
         } else if (const auto *D = dyn_cast<CXXDynamicCastExpr>(E)) {
             Violation = currentObject(D->getSubExpr());
         }
-        if (Violation && isInAnalyzedCode(*E, E->getExprLoc(), C))
-            emitPolicyDiagnostic(*this, DynTypedNode::create(*E), E->getExprLoc(),
-                "do not use the current object's dynamic type during construction or destruction",
-                C, Instances);
+        if (!Violation || !isInAnalyzedCode(*E, E->getExprLoc(), C)) return;
+        const unsigned Destruction = isa<CXXDestructorDecl>(F);
+        for (const Decl *Instance : Instances.claim(*E, E->getExprLoc(), C)) {
+            if (VirtualMethod) {
+                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                    "virtual call to %0 on the current object during %select{construction|destruction}1",
+                    VirtualMethod, Destruction);
+                diag(VirtualMethod->getLocation(), "virtual function %0 declared here",
+                     DiagnosticIDs::Note) << VirtualMethod;
+            } else if (const auto *T = dyn_cast<CXXTypeidExpr>(E)) {
+                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                    "typeid uses the current object's polymorphic type %0 during %select{construction|destruction}1",
+                    T->getExprOperand()->getType(), Destruction);
+            } else if (const auto *D = dyn_cast<CXXDynamicCastExpr>(E)) {
+                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                    "dynamic_cast from %0 to %1 uses the current object during %select{construction|destruction}2",
+                    D->getSubExpr()->getType(), D->getTypeAsWritten(), Destruction);
+            }
+            diag(F->getLocation(), "in %select{constructor|destructor}0 %1",
+                 DiagnosticIDs::Note) << Destruction << F;
+        }
     };
     if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(F))
         for (const auto *Init : Ctor->inits()) local_evidence::walk(Init->getInit(), C, Inspect, true);

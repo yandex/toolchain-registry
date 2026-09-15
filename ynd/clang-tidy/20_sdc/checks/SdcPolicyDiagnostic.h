@@ -24,9 +24,25 @@ void diagnoseAnalysisInstance(ClangTidyCheck &Check, const Decl *Instance,
                               ASTContext &Context, SourceLocation Location,
                               StringRef Message, const Args &...Arguments) {
     std::string Format = Message.str() + "%" + std::to_string(sizeof...(Args));
-    auto Diagnostic = Check.diag(Location, Format);
-    (Diagnostic << ... << Arguments);
-    Diagnostic << analysisInstanceSuffix(Instance, Context);
+    {
+        auto Diagnostic = Check.diag(Location, Format);
+        (Diagnostic << ... << Arguments);
+        Diagnostic << analysisInstanceSuffix(Instance, Context);
+    }
+
+    SourceLocation Point;
+    if (const auto *Function = dyn_cast_or_null<FunctionDecl>(Instance))
+        Point = Function->getPointOfInstantiation();
+    else if (const auto *Class = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Instance))
+        Point = Class->getPointOfInstantiation();
+    else if (const auto *Variable = dyn_cast_or_null<VarTemplateSpecializationDecl>(Instance))
+        Point = Variable->getPointOfInstantiation();
+
+    // Clang retains a point of instantiation on each specialization. It does
+    // not retain Sema's full active instantiation stack for clang-tidy checks.
+    if (Point.isValid())
+        Check.diag(Point, "in instantiation of %0 requested here", DiagnosticIDs::Note)
+            << cast<NamedDecl>(Instance);
 }
 
 inline void emitPolicyDiagnostic(ClangTidyCheck &Check, const DynTypedNode &Node,

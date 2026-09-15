@@ -15,10 +15,14 @@ void SdcNoPointerToIntegralCastCheck::check(const MatchFinder::MatchResult &Resu
     auto N = DynTypedNode::create(*E);
     if (!isInAnalyzedCode(N, L, C)) return;
     StringRef Message;
-    if (const auto *Cast = dyn_cast<ExplicitCastExpr>(E))
+    const auto *Cast = dyn_cast<ExplicitCastExpr>(E);
+    if (Cast)
         if (Cast->getSubExpr()->IgnoreParenImpCasts()->getType()->isPointerType() && Cast->getType()->isIntegralOrEnumerationType())
-            Message = "do not cast a pointer to an integral type";
+            Message = "do not cast pointer type %0 to integral type %1";
     if (!Message.empty())
-        emitPolicyDiagnostic(*this, N, L, Message, C, Instances);
+        for (const Decl *Instance : Instances.claim(N, L, C))
+            diagnoseAnalysisInstance(*this, Instance, C, L, Message,
+                                     Cast->getSubExpr()->IgnoreParenImpCasts()->getType(),
+                                     Cast->getTypeAsWritten());
 }
 } // namespace clang::tidy::sdc

@@ -1,5 +1,6 @@
 #include "SdcNoCStyleFunctionalCastsCheck.h"
 #include "SdcCodeSelection.h"
+#include "SdcPolicyDiagnostic.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExprCXX.h"
@@ -78,10 +79,8 @@ namespace clang {
                     }
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                        (void)Instance;
-                        diag(Primary,
-                             "C-style cast from %0 to %1 shall not be used")
-                            << From << To;
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
+                             "C-style cast from %0 to %1 shall not be used", From, To);
                         if (Expansion.isValid() && Expansion != Primary) {
                             diag(Expansion,
                                  "cast is produced by this macro expansion",
@@ -145,11 +144,9 @@ namespace clang {
                     if (Cast->getType()->isVoidType()) {
                         for (const Decl* Instance : AnalysisInstances.claim(
                                  *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                            (void)Instance;
-                            diag(Primary,
+                            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
                                  "functional-notation cast of %0 to void shall not be "
-                                 "used; use '(void)expr' to discard a value")
-                                << From;
+                                 "used; use '(void)expr' to discard a value", From);
                             if (Expansion.isValid() && Expansion != Primary) {
                                 diag(Expansion,
                                      "cast is produced by this macro expansion",
@@ -161,10 +158,8 @@ namespace clang {
 
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                        (void)Instance;
-                        diag(Primary,
-                             "functional-notation cast from %0 to %1 shall not be used")
-                            << From << To;
+                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
+                             "functional-notation cast from %0 to %1 shall not be used", From, To);
                         if (Expansion.isValid() && Expansion != Primary) {
                             diag(Expansion,
                                  "cast is produced by this macro expansion",

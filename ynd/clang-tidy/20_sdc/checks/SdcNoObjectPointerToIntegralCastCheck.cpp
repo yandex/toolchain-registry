@@ -2,6 +2,7 @@
 
 #include "SdcCastUtils.h"
 #include "SdcCodeSelection.h"
+#include "SdcPolicyDiagnostic.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/TypeLoc.h"
@@ -102,12 +103,10 @@ namespace clang {
 
                 for (const Decl* Instance : AnalysisInstances.claim(
                          *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                    (void)Instance;
-                    diag(Cast->getBeginLoc(),
+                    diagnoseAnalysisInstance(*this, Instance, *Result.Context, Cast->getBeginLoc(),
                          "cast from object pointer %0 to integral type %1 is not "
                          "permitted; use an explicit cast to std::uintptr_t or "
-                         "std::intptr_t instead")
-                        << From << To;
+                         "std::intptr_t instead", From, To);
                 }
             }
 

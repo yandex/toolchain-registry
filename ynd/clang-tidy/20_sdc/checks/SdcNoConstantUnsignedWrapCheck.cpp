@@ -36,12 +36,17 @@ void SdcNoConstantUnsignedWrapCheck::registerPPCallbacks(const SourceManager &, 
     registerExpressionPreprocessing(*this, *PP, false);
 }
 void SdcNoConstantUnsignedWrapCheck::registerMatchers(MatchFinder *Finder) {
-    Finder->addMatcher(expr().bind("expr"), this);
+    Finder->addMatcher(expr(anyOf(
+        binaryOperator(anyOf(hasOperatorName("+"), hasOperatorName("-"),
+                             hasOperatorName("*"), hasOperatorName("<<"))),
+        unaryOperator(hasOperatorName("-")))).bind("expr"), this);
 }
 void SdcNoConstantUnsignedWrapCheck::check(const MatchFinder::MatchResult &Result) {
     auto &C = *Result.Context;
     const auto *E = Result.Nodes.getNodeAs<Expr>("expr");
-    if (!E) return;
+    // Unevaluated strings (e.g. static_assert messages) have no QualType.
+    // Only typed arithmetic nodes are relevant, including in a recovery AST.
+    if (!E || E->getType().isNull()) return;
     SourceLocation L = E->getExprLoc();
     auto N = DynTypedNode::create(*E);
     if (!isInAnalyzedCode(N, L, C)) return;

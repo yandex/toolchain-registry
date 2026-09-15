@@ -68,7 +68,9 @@ namespace clang {
                     }
                 }
 
-                diag(Cast->getBeginLoc(), "reinterpret_cast shall not be used");
+                diag(Cast->getBeginLoc(), "reinterpret_cast from %0 to %1 shall not be used")
+                    << Cast->getSubExpr()->IgnoreParenImpCasts()->getType()
+                    << Cast->getTypeAsWritten();
             }
 
         } // namespace sdc

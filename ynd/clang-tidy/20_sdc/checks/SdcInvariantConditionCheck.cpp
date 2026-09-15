@@ -1,11 +1,25 @@
 #include "SdcInvariantConditionCheck.h"
 #include "SdcLocalEvidenceUtils.h"
 #include "SdcPolicyDiagnostic.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 namespace clang::tidy::sdc {
 namespace {
+bool inConstexprIfCondition(const Expr *E, ASTContext &C) {
+    auto Node = DynTypedNode::create(*E);
+    for (unsigned Depth = 0; Depth < 128; ++Depth) {
+        auto Parents = C.getParents(Node);
+        if (Parents.size() != 1) return false;
+        const auto &Parent = Parents[0];
+        if (const auto *I = Parent.get<IfStmt>())
+            if (I->isConstexpr() && Node.get<Stmt>() == I->getCond()) return true;
+        Node = Parent;
+    }
+    return false;
+}
+
 bool typeRange(const Expr *E, ASTContext &C, llvm::APSInt &Min, llvm::APSInt &Max) {
     const auto *V = local_evidence::directObject(E);
     if (!V || V->getType().isVolatileQualified() || !V->getType()->isIntegerType() ||
@@ -49,17 +63,27 @@ bool invariant(const Expr *E, ASTContext &C, bool &Value) {
 }
 } // namespace
 void SdcInvariantConditionCheck::registerMatchers(MatchFinder *Finder) {
+    // Project adaptation: compile-time assertions intentionally require constant
+    // expressions. Leave failed assertions to the compiler's own diagnostic.
     Finder->addMatcher(stmt(anyOf(ifStmt(), whileStmt(), forStmt(), doStmt(), switchStmt(),
-                                 conditionalOperator(), binaryOperator(anyOf(hasOperatorName("&&"), hasOperatorName("||")))))
+                                 conditionalOperator(), binaryOperator(anyOf(hasOperatorName("&&"), hasOperatorName("||")))),
+                            unless(hasAncestor(staticAssertDecl())))
                        .bind("control"), this);
 }
 void SdcInvariantConditionCheck::check(const MatchFinder::MatchResult &Result) {
     const auto *S = Result.Nodes.getNodeAs<Stmt>("control");
     auto &C = *Result.Context;
     const Expr *Condition = nullptr;
+    bool LiteralConstexpr = false;
     if (const auto *I = dyn_cast<IfStmt>(S)) {
-        if (I->isConstexpr() || I->isConsteval()) return;
+        if (I->isConsteval()) return;
         Condition = I->getCond();
+        if (I->isConstexpr()) {
+            // Owner policy: a bare Boolean literal disguises an unconditional
+            // or disabled branch; named capabilities and type traits are exempt.
+            if (!isa<CXXBoolLiteralExpr>(Condition->IgnoreParenImpCasts())) return;
+            LiteralConstexpr = true;
+        }
     } else if (const auto *W = dyn_cast<WhileStmt>(S)) Condition = W->getCond();
     else if (const auto *F = dyn_cast<ForStmt>(S)) Condition = F->getCond();
     else if (const auto *D = dyn_cast<DoStmt>(S)) Condition = D->getCond();
@@ -68,6 +92,9 @@ void SdcInvariantConditionCheck::check(const MatchFinder::MatchResult &Result) {
     else if (const auto *B = dyn_cast<BinaryOperator>(S)) Condition = B->getLHS();
     if (!Condition || !isInAnalyzedCode(*Condition, Condition->getExprLoc(), C) ||
         !local_evidence::visibleEvaluation(Condition, C)) return;
+    // Exempt the entire condition, including nested logical and conditional
+    // operators, but retain runtime checks in the selected body and init-statement.
+    if (!LiteralConstexpr && inConstexprIfCondition(Condition, C)) return;
     bool Value;
     if (!invariant(Condition, C, Value)) return;
     bool ConstantValue;
@@ -75,7 +102,10 @@ void SdcInvariantConditionCheck::check(const MatchFinder::MatchResult &Result) {
     if (isa<WhileStmt>(S) && Constant && Value) return;
     if (isa<DoStmt>(S) && Constant && !Value && S->getBeginLoc().isMacroID()) return;
     for (const Decl *Instance : Instances.claim(*Condition, Condition->getExprLoc(), C)) {
-        if (isa<SwitchStmt>(S))
+        if (LiteralConstexpr)
+            diagnoseAnalysisInstance(*this, Instance, C, Condition->getExprLoc(),
+                "if constexpr condition is the literal %0", Value ? "true" : "false");
+        else if (isa<SwitchStmt>(S))
             diagnoseAnalysisInstance(*this, Instance, C, Condition->getExprLoc(),
                 "switch controlling expression has a constant value");
         else diagnoseAnalysisInstance(*this, Instance, C, Condition->getExprLoc(),

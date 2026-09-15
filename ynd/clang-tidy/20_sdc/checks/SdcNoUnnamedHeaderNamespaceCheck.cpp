@@ -18,8 +18,11 @@ void SdcNoUnnamedHeaderNamespaceCheck::check(const MatchFinder::MatchResult &Res
     if (!D || isa<TranslationUnitDecl>(D)) return;
     SourceLocation L = D->getLocation();
     StringRef Message;
+    // The declaration belongs to the expansion file, even when the namespace
+    // token is supplied by a macro body written in a different file. Keep the
+    // original location below for the separate targeted/system source policy.
     if (const auto *NS = dyn_cast<NamespaceDecl>(D))
-        if (NS->isAnonymousNamespace() && inHeader(L, SM))
+        if (NS->isAnonymousNamespace() && inHeader(SM.getExpansionLoc(L), SM))
             Message = "do not declare unnamed namespaces in header files";
     L = D->getBeginLoc();
     if (!Message.empty() && isInAnalyzedCode(*D, L, C))
