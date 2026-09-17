@@ -551,6 +551,7 @@
   "ynd/clang/22/patches/clang/fix-flang-build-win32.patch":"toolchains/ynd/clang/22/patches/clang/fix-flang-build-win32.patch",
   "ynd/clang/22/patches/clang/llvm-21-mmacosx-version-min.patch":"toolchains/ynd/clang/22/patches/clang/llvm-21-mmacosx-version-min.patch",
   "ynd/clang/22/patches/clang/yt-specific-options.patch":"toolchains/ynd/clang/22/patches/clang/yt-specific-options.patch",
+  "ynd/clang/22/patches/llvm/backport-pr177855-slp-gathered-loads.patch":"toolchains/ynd/clang/22/patches/llvm/backport-pr177855-slp-gathered-loads.patch",
   "ynd/clang/22/patches/llvm/dont-remove-dbg-info.patch":"toolchains/ynd/clang/22/patches/llvm/dont-remove-dbg-info.patch",
   "ynd/clang/22/patches/llvm/fix-objcopy-elf.patch":"toolchains/ynd/clang/22/patches/llvm/fix-objcopy-elf.patch",
   "ynd/clang/22/patches/llvm/vfs-case-insensitive.patch":"toolchains/ynd/clang/22/patches/llvm/vfs-case-insensitive.patch",

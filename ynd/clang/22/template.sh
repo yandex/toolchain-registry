@@ -49,6 +49,7 @@ clang-statistics-used-bytes.patch
 vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 fix-objcopy-elf.patch
+backport-pr177855-slp-gathered-loads.patch
 {% endblock %}
 
 {% block patch %}
