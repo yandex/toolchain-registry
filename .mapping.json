@@ -35,6 +35,8 @@
   "devtools/gdb/yt_fibers_printer.py":"devtools/gdb/yt_fibers_printer.py",
   "ix":"toolchains/ix",
   "lib/c++/19/patched/ix.sh":"toolchains/lib/c++/19/patched/ix.sh",
+  "ynd/ag/ix.sh":"toolchains/ynd/ag/ix.sh",
+  "ynd/ag/patches/arcignore.patch":"toolchains/ynd/ag/patches/arcignore.patch",
   "ynd/bin/aflplusplus/4.40/cmake/CMakeLists.txt":"toolchains/ynd/bin/aflplusplus/4.40/cmake/CMakeLists.txt",
   "ynd/bin/aflplusplus/4.40/cmake/InstrumentationCMakeLists.txt":"toolchains/ynd/bin/aflplusplus/4.40/cmake/InstrumentationCMakeLists.txt",
   "ynd/bin/aflplusplus/4.40/cmake/SrcCMakeLists.txt":"toolchains/ynd/bin/aflplusplus/4.40/cmake/SrcCMakeLists.txt",

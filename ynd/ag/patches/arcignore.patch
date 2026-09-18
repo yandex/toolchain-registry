@@ -1,0 +1,8 @@
+--- a/src/ignore.c
++++ b/src/ignore.c
+@@ -35,4 +35,5 @@
+     ".git/info/exclude",
+     ".hgignore",
++    ".arcignore",
+     NULL
+ };
