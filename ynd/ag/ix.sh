@@ -1,7 +1,12 @@
 {% extends '//bin/ag/ix.sh' %}
 
+{% block make_target %}
+ag{{target.exe_suffix}}
+{% endblock %}
+
 {% block patches %}
 arcignore.patch
+getpagesize.patch
 {% endblock %}
 
 {% block patch %}

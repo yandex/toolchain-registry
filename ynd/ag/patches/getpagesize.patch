@@ -1,0 +1,41 @@
+--- a/src/decompress.c
++++ b/src/decompress.c
+@@ -2,6 +2,20 @@
+ #include <unistd.h>
+
+ #include "decompress.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#endif
++
++static size_t ag_getpagesize(void) {
++#ifdef _WIN32
++    SYSTEM_INFO info;
++    GetSystemInfo(&info);
++    return info.dwPageSize;
++#else
++    return getpagesize();
++#endif
++}
+
+ #ifdef HAVE_LZMA_H
+ #include <lzma.h>
+@@ -51,7 +65,7 @@
+     /* Explicitly cast away the const-ness of buf */
+     stream.next_in = (Bytef *)buf;
+
+-    pagesize = getpagesize();
++    pagesize = ag_getpagesize();
+     result_size = ((buf_len + pagesize - 1) & ~(pagesize - 1));
+     do {
+         do {
+@@ -140,7 +154,7 @@
+         goto error_out;
+     }
+
+-    pagesize = getpagesize();
++    pagesize = ag_getpagesize();
+     result_size = ((buf_len + pagesize - 1) & ~(pagesize - 1));
+     do {
+         do {
