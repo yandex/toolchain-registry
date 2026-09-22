@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
@@ -9,7 +9,7 @@ namespace sdc {
 
 // Unlike readability-braces-around-statements,
 // this also covers the substatement of a switch statement.
-class SdcBracesAroundStatementsCheck : public ClangTidyCheck {
+class SdcBracesAroundStatementsCheck : public SdcPolicyCheck {
 public:
     SdcBracesAroundStatementsCheck(StringRef Name, ClangTidyContext* Context);
 

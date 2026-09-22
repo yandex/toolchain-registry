@@ -19,7 +19,7 @@ namespace sdc {
 
 SdcForwardingReferenceCheck::SdcForwardingReferenceCheck(StringRef Name,
                                                           ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -85,7 +85,7 @@ static bool isStdForward(const CallExpr* CE) {
 
     if (const auto* DRE = dyn_cast<DeclRefExpr>(Callee)) {
         const NamedDecl* D = DRE->getDecl();
-        if (!D || D->getName() != "forward") return false;
+        if (!D || !D->getIdentifier() || D->getName() != "forward") return false;
         return inStdNS(D);
     }
     if (const auto* ULE = dyn_cast<UnresolvedLookupExpr>(Callee)) {
@@ -151,7 +151,7 @@ static bool isCorrectForwardType(QualType ForwardT, const ParmVarDecl* P) {
 
 // ─── Part B: validate std::forward call ────────────────────────────────────
 
-static void checkForwardCall(const CallExpr* CE, ClangTidyCheck* Check,
+static void checkForwardCall(const CallExpr* CE, SdcPolicyCheck* Check,
                              AnalysisInstanceTracker& Instances,
                              ASTContext& Context) {
     if (CE->getNumArgs() == 0) return;
@@ -209,7 +209,7 @@ static unsigned firstExplicitArgument(const CallExpr* CE) {
     return 1;
 }
 
-static void checkCallArguments(const CallExpr* CE, ClangTidyCheck* Check,
+static void checkCallArguments(const CallExpr* CE, SdcPolicyCheck* Check,
                                AnalysisInstanceTracker& Instances,
                                ASTContext& Context) {
     for (unsigned I = firstExplicitArgument(CE); I < CE->getNumArgs(); ++I) {

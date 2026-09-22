@@ -1,6 +1,5 @@
 #include "SdcNoCommaOperatorCheck.h"
 #include "SdcPolicyDiagnostic.h"
-#include "clang/AST/ParentMapContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Lex/Lexer.h"
 
@@ -13,13 +12,8 @@ bool foldedComma(const Expr *E, ASTContext &C) {
     Token T;
     auto L = C.getSourceManager().getSpellingLoc(E->getExprLoc());
     if (!Lexer::getRawToken(L, T, C.getSourceManager(), C.getLangOpts(), true) && T.is(tok::ellipsis)) return true;
-    auto N = DynTypedNode::create(*E);
-    for (unsigned I = 0; I < 64; ++I) {
-        auto P = C.getParents(N); if (P.empty()) break;
-        if (P[0].get<CXXFoldExpr>()) return true;
-        if (P[0].get<Decl>() || P[0].get<CompoundStmt>()) break;
-        N = P[0];
-    }
+    // A written comma inside a fold operand is still prohibited. Only the
+    // fold operator itself (lowered at the ellipsis) receives the exception.
     return false;
 }
 
@@ -36,10 +30,21 @@ void SdcNoCommaOperatorCheck::check(const MatchFinder::MatchResult &Result) {
     if (!isInAnalyzedCode(N, L, C)) return;
     const auto *B = dyn_cast_or_null<BinaryOperator>(E);
     const auto *O = dyn_cast_or_null<CXXOperatorCallExpr>(E);
-    StringRef Message;
-    if (((B && B->getOpcode() == BO_Comma) || (O && O->getOperator() == OO_Comma)) && !foldedComma(E, C))
-        Message = "do not use the comma operator outside a fold expression";
-    if (!Message.empty())
-        emitPolicyDiagnostic(*this, N, L, Message, C, Instances);
+    if (!((B && B->getOpcode() == BO_Comma) ||
+          (O && O->getOperator() == OO_Comma)) || foldedComma(E, C)) return;
+    for (const Decl *Instance : Instances.claim(N, L, C)) {
+        if (O) {
+            const auto *Callee = O->getDirectCallee();
+            diagnoseAnalysisInstance(*this, Instance, C, L,
+                "do not use overloaded comma operator '%0' with operand types %1 "
+                "and %2; only the fold operator is exempt",
+                Callee ? Callee->getQualifiedNameAsString() : "operator,",
+                policyTypeName(O->getArg(0)->getType(), C),
+                policyTypeName(O->getArg(1)->getType(), C));
+        } else {
+            diagnoseAnalysisInstance(*this, Instance, C, L,
+                "do not use the built-in comma operator; only the fold operator is exempt");
+        }
+    }
 }
 } // namespace clang::tidy::sdc

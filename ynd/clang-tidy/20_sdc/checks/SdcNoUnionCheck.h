@@ -1,13 +1,13 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
 namespace sdc {
 
-class SdcNoUnionCheck : public ClangTidyCheck {
+class SdcNoUnionCheck : public SdcPolicyCheck {
 public:
     SdcNoUnionCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

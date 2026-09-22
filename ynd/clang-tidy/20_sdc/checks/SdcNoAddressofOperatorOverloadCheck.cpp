@@ -13,7 +13,7 @@ namespace sdc {
 
 SdcNoAddressofOperatorOverloadCheck::SdcNoAddressofOperatorOverloadCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoAddressofOperatorOverloadCheck::registerMatchers(MatchFinder* Finder) {
     // operator& is overloaded for both address-of (unary) and bitwise-AND (binary).

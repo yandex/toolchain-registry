@@ -39,9 +39,9 @@ void SdcConsistentParameterNamesCheck::check(const MatchFinder::MatchResult &Res
             const auto *Q = Other->getParamDecl(I);
             if (!Q->getIdentifier() || P->getName() == Q->getName()) continue;
             for (const Decl *Instance : Instances.claim(*P, P->getLocation(), C)) {
-                diagnoseAnalysisInstance(*this, Instance, C, P->getLocation(),
+                if (!diagnoseAnalysisInstance(*this, Instance, C, P->getLocation(),
                     "parameter name '%0' differs from the visible declaration name '%1'",
-                    P->getName(), Q->getName());
+                    P->getName(), Q->getName())) continue;
                 diag(Q->getLocation(), "conflicting parameter name is written here", DiagnosticIDs::Note);
             }
             break;

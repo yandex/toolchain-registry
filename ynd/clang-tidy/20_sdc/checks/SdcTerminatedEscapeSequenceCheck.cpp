@@ -99,7 +99,7 @@ std::optional<UnterminatedEscape> findUnterminatedEscape(StringRef Body) {
 
 SdcTerminatedEscapeSequenceCheck::SdcTerminatedEscapeSequenceCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcTerminatedEscapeSequenceCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
@@ -144,9 +144,9 @@ void SdcTerminatedEscapeSequenceCheck::checkLiteralToken(
     for (const Decl* Instance :
          AnalysisInstances.claim(Node, TokenLocation, Context)) {
 
-        diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLocation,
+        if (!diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLocation,
              "%0 is not terminated; end the literal token or start another "
-             "escape immediately after it", Violation->Kind);
+             "escape immediately after it", Violation->Kind)) continue;
         if (TokenLocation.isMacroID() &&
             WrittenLocation != DiagnosticLocation) {
             diag(WrittenLocation, "escape sequence is written here",

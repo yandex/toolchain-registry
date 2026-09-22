@@ -14,7 +14,7 @@ namespace sdc {
 
 SdcNoBuiltInUnaryPlusCheck::SdcNoBuiltInUnaryPlusCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoBuiltInUnaryPlusCheck::registerMatchers(MatchFinder* Finder) {
     // Overloaded unary + is represented by CXXOperatorCallExpr, so this

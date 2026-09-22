@@ -1,14 +1,14 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
 namespace sdc {
 
 // Prohibits bit-field declarations.
-class SdcNoBitFieldsCheck : public ClangTidyCheck {
+class SdcNoBitFieldsCheck : public SdcPolicyCheck {
 public:
     SdcNoBitFieldsCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

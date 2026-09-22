@@ -141,8 +141,8 @@ void SdcPredicateSideEffectsCheck::check(const MatchFinder::MatchResult &Result)
     const Expr *Effect = NonConst ? nullptr : bodyEffect(Function, Lambda, C);
     if (!NonConst && !Effect) return;
     for (const Decl *Instance : Instances.claim(Node, Location, C)) {
-        diagnoseAnalysisInstance(*this, Instance, C, Location, NonConst ?
-            "predicate call operator must be const" : "predicate has a visible persistent side effect");
+        if (!diagnoseAnalysisInstance(*this, Instance, C, Location, NonConst ?
+            "predicate call operator must be const" : "predicate has a visible persistent side effect")) continue;
         diag(NonConst ? Operator->getLocation() : Effect->getExprLoc(),
              NonConst ? "non-const call operator is declared here" : "persistent side effect occurs here",
              DiagnosticIDs::Note);

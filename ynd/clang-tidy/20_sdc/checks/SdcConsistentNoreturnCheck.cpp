@@ -27,8 +27,8 @@ void SdcConsistentNoreturnCheck::check(const MatchFinder::MatchResult &Result) {
     }
     if (!Evidence) return;
     for (const Decl *Instance : Instances.claim(*F, F->getLocation(), C)) {
-        diagnoseAnalysisInstance(*this, Instance, C, F->getLocation(),
-            "repeat the noreturn attribute on this declaration");
+        if (!diagnoseAnalysisInstance(*this, Instance, C, F->getLocation(),
+            "repeat the noreturn attribute on this declaration")) continue;
         diag(Evidence->getLocation(), "another declaration explicitly specifies noreturn here", DiagnosticIDs::Note);
     }
 }

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
@@ -15,7 +15,7 @@ namespace sdc {
 // \x<hex>. Universal character names: \u<4hex> \U<8hex>. Anything else
 // (e.g. the GCC extension \e, the unknown \q, malformed UCNs) is a
 // violation.
-class SdcEscapeSequenceCheck : public ClangTidyCheck {
+class SdcEscapeSequenceCheck : public SdcPolicyCheck {
 public:
     SdcEscapeSequenceCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

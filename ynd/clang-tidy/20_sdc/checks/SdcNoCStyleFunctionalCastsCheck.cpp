@@ -14,7 +14,7 @@ namespace clang {
 
             SdcNoCStyleFunctionalCastsCheck::SdcNoCStyleFunctionalCastsCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcPolicyCheck(Name, Context)
             {
             }
 
@@ -79,8 +79,8 @@ namespace clang {
                     }
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
-                             "C-style cast from %0 to %1 shall not be used", From, To);
+                        if (!diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
+                             "C-style cast from %0 to %1 shall not be used", From, To)) continue;
                         if (Expansion.isValid() && Expansion != Primary) {
                             diag(Expansion,
                                  "cast is produced by this macro expansion",
@@ -144,9 +144,9 @@ namespace clang {
                     if (Cast->getType()->isVoidType()) {
                         for (const Decl* Instance : AnalysisInstances.claim(
                                  *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                            diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
+                            if (!diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
                                  "functional-notation cast of %0 to void shall not be "
-                                 "used; use '(void)expr' to discard a value", From);
+                                 "used; use '(void)expr' to discard a value", From)) continue;
                             if (Expansion.isValid() && Expansion != Primary) {
                                 diag(Expansion,
                                      "cast is produced by this macro expansion",
@@ -158,8 +158,8 @@ namespace clang {
 
                     for (const Decl* Instance : AnalysisInstances.claim(
                              *Cast, Cast->getBeginLoc(), *Result.Context)) {
-                        diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
-                             "functional-notation cast from %0 to %1 shall not be used", From, To);
+                        if (!diagnoseAnalysisInstance(*this, Instance, *Result.Context, Primary,
+                             "functional-notation cast from %0 to %1 shall not be used", From, To)) continue;
                         if (Expansion.isValid() && Expansion != Primary) {
                             diag(Expansion,
                                  "cast is produced by this macro expansion",

@@ -1,5 +1,4 @@
 #include "SdcInitializeBasesCheck.h"
-#include "SdcPolicyDiagnostic.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
@@ -13,27 +12,46 @@ bool emptyBase(const CXXRecordDecl *R) {
         if (!emptyBase(B.getType()->getAsCXXRecordDecl())) return false;
     return true;
 }
+const CXXBaseSpecifier *baseSpecifier(const CXXConstructorDecl *Ctor, QualType Type, ASTContext &C) {
+    for (const auto &B : Ctor->getParent()->bases())
+        if (C.hasSameType(B.getType(), Type)) return &B;
+    for (const auto &B : Ctor->getParent()->vbases())
+        if (C.hasSameType(B.getType(), Type)) return &B;
+    return nullptr;
+}
 } // namespace
 void SdcInitializeBasesCheck::registerMatchers(MatchFinder *Finder) {
-    Finder->addMatcher(decl(unless(isImplicit())).bind("decl"), this);
+    Finder->addMatcher(cxxConstructorDecl(unless(isImplicit())).bind("ctor"), this);
 }
 
 void SdcInitializeBasesCheck::check(const MatchFinder::MatchResult &Result) {
     auto &C = *Result.Context;
-    const auto *D = Result.Nodes.getNodeAs<Decl>("decl");
-    if (!D || isa<TranslationUnitDecl>(D)) return;
-    const auto *Ctor = dyn_cast<CXXConstructorDecl>(D);
-    const auto *R = dyn_cast<CXXRecordDecl>(D);
-    SourceLocation L = D->getLocation();
-    StringRef Message;
-    if (Ctor && Ctor->isUserProvided() && Ctor->doesThisDeclarationHaveABody() && !Ctor->isDelegatingConstructor()) {
-        for (const auto *I : Ctor->inits())
-            if (I->isBaseInitializer() && !I->isWritten() &&
-                !emptyBase(I->getBaseClass()->getAsCXXRecordDecl()))
-                Message = "explicitly initialize every non-empty immediate and virtual base class";
+    const auto *Ctor = Result.Nodes.getNodeAs<CXXConstructorDecl>("ctor");
+    if (!Ctor || !Ctor->isUserProvided() || !Ctor->doesThisDeclarationHaveABody() || Ctor->isDelegatingConstructor()) return;
+    const auto L = Ctor->getBeginLoc();
+    if (!isInAnalyzedCode(*Ctor, L, C) || !shouldReportPolicyDiagnostic(L, *Result.SourceManager)) return;
+    llvm::SmallVector<QualType, 4> Missing;
+    std::string Names;
+    for (const auto *I : Ctor->inits()) {
+        if (!I->isBaseInitializer() || I->isWritten() || emptyBase(I->getBaseClass()->getAsCXXRecordDecl())) continue;
+        const QualType Type(I->getBaseClass(), 0);
+        Missing.push_back(Type);
+        if (!Names.empty()) Names += ", ";
+        Names += policyTypeName(Type, C);
     }
-    L = D->getBeginLoc();
-    if (!Message.empty() && isInAnalyzedCode(*D, L, C))
-        emitPolicyDiagnostic(*this, DynTypedNode::create(*D), L, Message, C, Instances);
+    if (Missing.empty()) return;
+    for (const Decl *Instance : Instances.claim(*Ctor, L, C)) {
+        if (!diagnoseAnalysisInstance(*this, Instance, C, L,
+                "constructor '%0' must explicitly initialize %select{base|bases}1 %2",
+                Ctor->getQualifiedNameAsString(), unsigned(Missing.size() != 1), Names)) continue;
+        for (const auto Type : Missing) {
+            const auto *B = baseSpecifier(Ctor, Type, C);
+            if (!B) continue;
+            const auto *R = Type->getAsCXXRecordDecl();
+            diag(B->getBeginLoc(), "%select{immediate|virtual}0 base %1 is declared here%2", DiagnosticIDs::Note)
+                << unsigned(B->isVirtual()) << Type
+                << (R && R->isPolymorphic() ? "; virtual functions exclude it from the empty-base exception" : "");
+        }
+    }
 }
 } // namespace clang::tidy::sdc

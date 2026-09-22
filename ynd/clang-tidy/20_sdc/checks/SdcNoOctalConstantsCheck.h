@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
     namespace tidy {
@@ -10,7 +10,7 @@ namespace clang {
             // Octal constants shall not be used.
             // The integer constant 0 (written as a single numeric digit) is an octal constant,
             // but its use is permitted as an exception to this rule.
-            class SdcNoOctalConstantsCheck: public ClangTidyCheck {
+            class SdcNoOctalConstantsCheck: public SdcPolicyCheck {
             public:
                 SdcNoOctalConstantsCheck(StringRef Name, ClangTidyContext* Context);
                 void registerPPCallbacks(const SourceManager& SM, Preprocessor* PP,

@@ -70,7 +70,7 @@ namespace clang {
 
             SdcNoObjectPointerToIntegralCastCheck::SdcNoObjectPointerToIntegralCastCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcPolicyCheck(Name, Context)
             {
             }
 

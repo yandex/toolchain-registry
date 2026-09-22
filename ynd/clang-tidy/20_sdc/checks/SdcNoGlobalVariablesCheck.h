@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
     namespace tidy {
@@ -10,7 +10,7 @@ namespace clang {
             // Disallows variables with namespace scope and class static data
             // members unless they are constexpr, or const with constant
             // (static) initialization.
-            class SdcNoGlobalVariablesCheck: public ClangTidyCheck {
+            class SdcNoGlobalVariablesCheck: public SdcPolicyCheck {
             public:
                 SdcNoGlobalVariablesCheck(StringRef Name, ClangTidyContext* Context);
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;

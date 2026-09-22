@@ -45,19 +45,19 @@ void SdcNoCtorDtorDynamicTypeCheck::check(const MatchFinder::MatchResult &Result
         const unsigned Destruction = isa<CXXDestructorDecl>(F);
         for (const Decl *Instance : Instances.claim(*E, E->getExprLoc(), C)) {
             if (VirtualMethod) {
-                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                if (!diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
                     "virtual call to %0 on the current object during %select{construction|destruction}1",
-                    VirtualMethod, Destruction);
+                    VirtualMethod, Destruction)) continue;
                 diag(VirtualMethod->getLocation(), "virtual function %0 declared here",
                      DiagnosticIDs::Note) << VirtualMethod;
             } else if (const auto *T = dyn_cast<CXXTypeidExpr>(E)) {
-                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                if (!diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
                     "typeid uses the current object's polymorphic type %0 during %select{construction|destruction}1",
-                    T->getExprOperand()->getType(), Destruction);
+                    T->getExprOperand()->getType(), Destruction)) continue;
             } else if (const auto *D = dyn_cast<CXXDynamicCastExpr>(E)) {
-                diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
+                if (!diagnoseAnalysisInstance(*this, Instance, C, E->getExprLoc(),
                     "dynamic_cast from %0 to %1 uses the current object during %select{construction|destruction}2",
-                    D->getSubExpr()->getType(), D->getTypeAsWritten(), Destruction);
+                    D->getSubExpr()->getType(), D->getTypeAsWritten(), Destruction)) continue;
             }
             diag(F->getLocation(), "in %select{constructor|destructor}0 %1",
                  DiagnosticIDs::Note) << Destruction << F;

@@ -1,14 +1,14 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
 namespace sdc {
 
 // Requires numeric and universal escape sequences to be terminated.
-class SdcTerminatedEscapeSequenceCheck : public ClangTidyCheck {
+class SdcTerminatedEscapeSequenceCheck : public SdcPolicyCheck {
 public:
     SdcTerminatedEscapeSequenceCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

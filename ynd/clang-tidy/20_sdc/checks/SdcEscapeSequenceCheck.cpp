@@ -128,7 +128,7 @@ std::optional<EscapeViolation> findInvalidEscape(StringRef Body) {
 
 SdcEscapeSequenceCheck::SdcEscapeSequenceCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcEscapeSequenceCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
@@ -178,9 +178,9 @@ void SdcEscapeSequenceCheck::checkLiteralToken(
 
     for (const Decl* Instance : AnalysisInstances.claim(Node, Loc, Context)) {
 
-        diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLoc,
+        if (!diagnoseAnalysisInstance(*this, Instance, Context, DiagnosticLoc,
              "%0 in character/string literal; `\\` shall only form a "
-             "defined escape sequence or universal character name", V->What);
+             "defined escape sequence or universal character name", V->What)) continue;
         if (Loc.isMacroID() && WrittenEscapeLoc != DiagnosticLoc) {
             diag(WrittenEscapeLoc, "escape sequence is written here",
                  DiagnosticIDs::Note);

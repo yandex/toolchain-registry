@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -10,7 +10,7 @@ namespace tidy {
 namespace sdc {
 
 // Requires separate declarations for variables and member variables.
-class SdcSingleVariableDeclarationCheck : public ClangTidyCheck {
+class SdcSingleVariableDeclarationCheck : public SdcPolicyCheck {
 public:
     SdcSingleVariableDeclarationCheck(StringRef Name,
                                       ClangTidyContext* Context);

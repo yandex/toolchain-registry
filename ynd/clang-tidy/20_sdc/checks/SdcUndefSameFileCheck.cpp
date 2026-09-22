@@ -36,7 +36,15 @@ class UndefSameFileCallbacks : public PPCallbacks {
         if (File.isInvalid()) {
             return std::nullopt;
         }
-        return MacroKey(File.getHashValue(), Identifier);
+        const auto Entry = SM.getFileEntryRefForID(File);
+        // Command-line -D/-U directives live in compiler-created buffers, not
+        // source files. They must not produce locationless source diagnostics.
+        if (!Entry) {
+            return std::nullopt;
+        }
+        // Re-entering the same header creates a new FileID. The rule concerns
+        // the physical file, so retain its identity across include instances.
+        return MacroKey(Entry->getUID(), Identifier);
     }
 
 public:

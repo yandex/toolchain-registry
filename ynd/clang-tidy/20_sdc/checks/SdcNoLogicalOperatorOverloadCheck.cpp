@@ -13,7 +13,7 @@ namespace sdc {
 
 SdcNoLogicalOperatorOverloadCheck::SdcNoLogicalOperatorOverloadCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoLogicalOperatorOverloadCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

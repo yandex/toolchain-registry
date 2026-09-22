@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 #include "clang/AST/DeclCXX.h"
 #include <map>
 #include <string>
@@ -18,7 +18,7 @@ namespace clang {
             // - Customized destructors must have non-empty bodies
             // - Proper inheritance patterns for base classes
             // - All out-of-class special member definitions must be in the same file
-            class SdcSpecialMemberFunctionsCheck: public ClangTidyCheck {
+            class SdcSpecialMemberFunctionsCheck: public SdcPolicyCheck {
             public:
                 SdcSpecialMemberFunctionsCheck(StringRef Name, ClangTidyContext* Context);
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;

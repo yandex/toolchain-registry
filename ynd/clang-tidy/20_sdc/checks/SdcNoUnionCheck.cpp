@@ -12,7 +12,7 @@ namespace tidy {
 namespace sdc {
 
 SdcNoUnionCheck::SdcNoUnionCheck(StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoUnionCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

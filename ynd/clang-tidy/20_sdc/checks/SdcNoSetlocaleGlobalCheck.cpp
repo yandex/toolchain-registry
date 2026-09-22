@@ -14,7 +14,7 @@ namespace clang {
 
             SdcNoSetlocaleGlobalCheck::SdcNoSetlocaleGlobalCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcPolicyCheck(Name, Context)
             {
             }
 

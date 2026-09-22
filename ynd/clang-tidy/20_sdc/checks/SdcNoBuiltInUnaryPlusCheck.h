@@ -1,14 +1,14 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
 namespace sdc {
 
 // Prohibits the built-in unary + operator.
-class SdcNoBuiltInUnaryPlusCheck : public ClangTidyCheck {
+class SdcNoBuiltInUnaryPlusCheck : public SdcPolicyCheck {
 public:
     SdcNoBuiltInUnaryPlusCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

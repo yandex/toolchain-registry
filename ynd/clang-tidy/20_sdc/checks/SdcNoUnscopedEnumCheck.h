@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
@@ -9,7 +9,7 @@ namespace sdc {
 
 // Prohibits unscoped enumerations except when enclosed directly in a class or
 // struct.
-class SdcNoUnscopedEnumCheck : public ClangTidyCheck {
+class SdcNoUnscopedEnumCheck : public SdcPolicyCheck {
 public:
     SdcNoUnscopedEnumCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

@@ -7,6 +7,16 @@
 using namespace clang::ast_matchers;
 namespace clang::tidy::sdc {
 namespace {
+bool isWrittenBooleanLiteral(const Expr *E) {
+    // Strip only parentheses and the constant-evaluation wrapper. In particular,
+    // preserve SubstNonTypeTemplateParmExpr: its value is not a written literal.
+    while (true) {
+        if (const auto *P = dyn_cast<ParenExpr>(E)) E = P->getSubExpr();
+        else if (const auto *C = dyn_cast<ConstantExpr>(E)) E = C->getSubExpr();
+        else return isa<CXXBoolLiteralExpr>(E);
+    }
+}
+
 bool inConstexprIfCondition(const Expr *E, ASTContext &C) {
     auto Node = DynTypedNode::create(*E);
     for (unsigned Depth = 0; Depth < 128; ++Depth) {
@@ -81,7 +91,7 @@ void SdcInvariantConditionCheck::check(const MatchFinder::MatchResult &Result) {
         if (I->isConstexpr()) {
             // Owner policy: a bare Boolean literal disguises an unconditional
             // or disabled branch; named capabilities and type traits are exempt.
-            if (!isa<CXXBoolLiteralExpr>(Condition->IgnoreParenImpCasts())) return;
+            if (!isWrittenBooleanLiteral(Condition)) return;
             LiteralConstexpr = true;
         }
     } else if (const auto *W = dyn_cast<WhileStmt>(S)) Condition = W->getCond();

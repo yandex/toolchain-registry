@@ -15,7 +15,7 @@ namespace sdc {
 
 SdcSingleVariableDeclarationCheck::SdcSingleVariableDeclarationCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcSingleVariableDeclarationCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(
@@ -84,12 +84,10 @@ void SdcSingleVariableDeclarationCheck::check(
         return;
     }
 
-    // A macro definition may be expanded into several independent declaration
-    // statements. Group by expansion site so those uses are not combined, but
-    // point the eventual warning at the macro spelling developers must edit.
-    SourceLocation GroupLocation =
-        Begin.isMacroID() ? SM.getExpansionLoc(Begin) : SpellingBegin;
-    const unsigned GroupKey = GroupLocation.getRawEncoding();
+    // Preserve both the token offset and the expansion identity. Collapsing to
+    // the outer macro invocation merges separate declarations emitted by one
+    // expansion; collapsing to spelling merges independent invocations.
+    const unsigned GroupKey = Begin.getRawEncoding();
     auto Instances = collectTemplateInstantiationContexts(
         DynTypedNode::create(*Declaration), *Result.Context);
     if (Instances.empty()) Instances.push_back(nullptr);

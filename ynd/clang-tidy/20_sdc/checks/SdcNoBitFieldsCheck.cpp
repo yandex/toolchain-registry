@@ -14,7 +14,7 @@ namespace sdc {
 
 SdcNoBitFieldsCheck::SdcNoBitFieldsCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoBitFieldsCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

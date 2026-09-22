@@ -47,8 +47,8 @@ void SdcShortCircuitSideEffectsCheck::check(const MatchFinder::MatchResult &Resu
     // missing body, or the mere presence of a call.
     if (!Evidence || !isWrittenInAnalyzedSource(Evidence->getExprLoc(), *Result.SourceManager)) return;
     for (const Decl *Instance : Instances.claim(*B, B->getOperatorLoc(), C)) {
-        diagnoseAnalysisInstance(*this, Instance, C, B->getOperatorLoc(),
-            "right-hand operand has a visible persistent side effect");
+        if (!diagnoseAnalysisInstance(*this, Instance, C, B->getOperatorLoc(),
+            "right-hand operand has a visible persistent side effect")) continue;
         if (VolatileRead) {
             const QualType Type = cast<ImplicitCastExpr>(Evidence)->getSubExpr()->getType();
             if (Object)

@@ -71,8 +71,8 @@ void SdcSpecializationLocationCheck::check(const MatchFinder::MatchResult &Resul
     for (const auto &A : S->getTemplateArgs().asArray()) if (!Files.argument(A)) return;
     if (Files.contains(S->getLocation())) return;
     for (const Decl *Instance : Instances.claim(*S, S->getLocation(), C)) {
-        diagnoseAnalysisInstance(*this, Instance, C, S->getLocation(),
-            "define this specialization in the primary template's file or a specialized argument's definition file");
+        if (!diagnoseAnalysisInstance(*this, Instance, C, S->getLocation(),
+            "define this specialization in the primary template's file or a specialized argument's definition file")) continue;
         diag(Primary->getLocation(), "primary template is defined here", DiagnosticIDs::Note);
     }
 }

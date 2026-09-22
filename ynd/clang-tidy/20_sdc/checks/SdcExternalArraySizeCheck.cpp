@@ -28,7 +28,7 @@ void SdcExternalArraySizeCheck::check(const MatchFinder::MatchResult &Result) {
     L = D->getBeginLoc();
     if (!Message.empty() && isInAnalyzedCode(*D, L, C)) {
         for (const Decl *Instance : Instances.claim(DynTypedNode::create(*D), L, C)) {
-            diagnoseAnalysisInstance(*this, Instance, C, L, Message, V->getName());
+            if (!diagnoseAnalysisInstance(*this, Instance, C, L, Message, V->getName())) continue;
             // A macro backtrace may stop at a wrapper or a template expansion.
             // Show the omitted bound itself, independently of that backtrace.
             if (BoundLocation.isMacroID())

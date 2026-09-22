@@ -1,12 +1,12 @@
 #pragma once
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 #include "SdcCodeSelection.h"
 
 namespace clang::tidy::sdc {
-class SdcDeprecatedFeaturesCheck final : public ClangTidyCheck {
+class SdcDeprecatedFeaturesCheck final : public SdcPolicyCheck {
 public:
     SdcDeprecatedFeaturesCheck(StringRef Name, ClangTidyContext *Context)
-        : ClangTidyCheck(Name, Context) {}
+        : SdcPolicyCheck(Name, Context) {}
     void registerPPCallbacks(const SourceManager &, Preprocessor *, Preprocessor *) override;
     void registerMatchers(ast_matchers::MatchFinder *Finder) override;
     void check(const ast_matchers::MatchFinder::MatchResult &Result) override;

@@ -14,7 +14,7 @@ namespace sdc {
 
 SdcEnumExplicitUnderlyingTypeCheck::SdcEnumExplicitUnderlyingTypeCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcEnumExplicitUnderlyingTypeCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

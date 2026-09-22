@@ -11,7 +11,7 @@ namespace tidy {
 namespace sdc {
 
 SdcNoAsmCheck::SdcNoAsmCheck(StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoAsmCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

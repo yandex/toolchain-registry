@@ -82,8 +82,8 @@ void SdcNoLocalRecursionCheck::check(const MatchFinder::MatchResult &Result) {
             auto L = E.Call->getExprLoc();
             if (!isInAnalyzedCode(*E.Call, L, C)) continue;
             for (const Decl *Instance : Instances.claim(*E.Call, L, C)) {
-                diagnoseAnalysisInstance(*this, Instance, C, L,
-                    "this direct call participates in a locally resolved recursion cycle");
+                if (!diagnoseAnalysisInstance(*this, Instance, C, L,
+                    "this direct call participates in a locally resolved recursion cycle")) continue;
                 diag(E.To->getLocation(), "cycle calls this function", DiagnosticIDs::Note);
             }
             break; // One actionable call per participating function.

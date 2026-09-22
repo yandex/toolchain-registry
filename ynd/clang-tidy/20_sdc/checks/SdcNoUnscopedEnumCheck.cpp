@@ -15,7 +15,7 @@ namespace sdc {
 
 SdcNoUnscopedEnumCheck::SdcNoUnscopedEnumCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcNoUnscopedEnumCheck::registerMatchers(MatchFinder* Finder) {
     Finder->addMatcher(

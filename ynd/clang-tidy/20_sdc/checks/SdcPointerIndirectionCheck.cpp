@@ -2,6 +2,7 @@
 #include "SdcPolicyDiagnostic.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace clang::ast_matchers;
 namespace clang::tidy::sdc {
@@ -32,14 +33,23 @@ void SdcPointerIndirectionCheck::check(const MatchFinder::MatchResult &Result) {
     const auto *D = Result.Nodes.getNodeAs<Decl>("decl");
     if (!D || isa<TranslationUnitDecl>(D)) return;
     const auto *V = dyn_cast<VarDecl>(D);
-    const auto *F = dyn_cast<FunctionDecl>(D);
     const auto *Field = dyn_cast<FieldDecl>(D);
-    SourceLocation L = D->getLocation();
-    StringRef Message;
-    if ((V && tooManyPointers(V->getType())) || (Field && tooManyPointers(Field->getType())))
-        Message = "an object declaration should contain no more than two levels of pointer indirection";
-    L = D->getBeginLoc();
-    if (!Message.empty() && isInAnalyzedCode(*D, L, C))
-        emitPolicyDiagnostic(*this, DynTypedNode::create(*D), L, Message, C, Instances);
+    if (const auto *Parameter = dyn_cast<ParmVarDecl>(D)) {
+        // TypeLoc traversal also visits parameters in aliases and nested
+        // function types. They are not objects; inspect the enclosing object's
+        // complete type instead, including callback parameters and return types.
+        const auto *Owner = dyn_cast<FunctionDecl>(Parameter->getDeclContext());
+        if (!Owner || !llvm::is_contained(Owner->parameters(), Parameter)) return;
+    }
+    QualType Type = V ? V->getType() : Field ? Field->getType() : QualType();
+    SourceLocation L = D->getBeginLoc();
+    if (!tooManyPointers(Type) || !isInAnalyzedCode(*D, L, C)) return;
+    const auto *Named = cast<NamedDecl>(D);
+    std::string Name = Named->getQualifiedNameAsString();
+    if (Name.empty()) Name = "<unnamed>";
+    for (const Decl *Instance : Instances.claim(*D, L, C))
+        diagnoseAnalysisInstance(*this, Instance, C, L,
+            "object declaration '%0' has type %1 containing more than two levels "
+            "of pointer indirection", Name, policyTypeName(Type, C));
 }
 } // namespace clang::tidy::sdc

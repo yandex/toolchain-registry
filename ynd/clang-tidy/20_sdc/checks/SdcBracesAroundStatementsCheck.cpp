@@ -13,7 +13,7 @@ namespace sdc {
 
 SdcBracesAroundStatementsCheck::SdcBracesAroundStatementsCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcBracesAroundStatementsCheck::registerMatchers(MatchFinder* Finder) {
     const auto NoSystem = unless(isExpansionInSystemHeader());

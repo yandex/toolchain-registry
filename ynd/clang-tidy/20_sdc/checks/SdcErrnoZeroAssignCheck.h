@@ -1,13 +1,13 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 
 namespace clang {
 namespace tidy {
 namespace sdc {
 
-class SdcErrnoZeroAssignCheck : public ClangTidyCheck {
+class SdcErrnoZeroAssignCheck : public SdcPolicyCheck {
 public:
     SdcErrnoZeroAssignCheck(StringRef Name, ClangTidyContext* Context);
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;

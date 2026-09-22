@@ -19,7 +19,7 @@ namespace sdc {
 
 SdcExceptionUnfriendlyNoexceptCheck::SdcExceptionUnfriendlyNoexceptCheck(
     StringRef Name, ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcExceptionUnfriendlyNoexceptCheck::registerMatchers(MatchFinder* Finder) {
     const auto noSys = unless(isExpansionInSystemHeader());

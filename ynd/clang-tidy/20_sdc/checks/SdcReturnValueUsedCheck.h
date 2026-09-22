@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bridge_header.h"
+#include "SdcPolicyDiagnostic.h"
 #include "SdcCodeSelection.h"
 #include <set>
 
@@ -8,7 +8,7 @@ namespace clang {
 namespace tidy {
 namespace sdc {
 
-class SdcReturnValueUsedCheck : public ClangTidyCheck {
+class SdcReturnValueUsedCheck : public SdcPolicyCheck {
 public:
     SdcReturnValueUsedCheck(StringRef Name, ClangTidyContext* Context);
 

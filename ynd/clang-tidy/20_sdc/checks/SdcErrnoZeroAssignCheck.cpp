@@ -15,7 +15,7 @@ namespace sdc {
 
 SdcErrnoZeroAssignCheck::SdcErrnoZeroAssignCheck(StringRef Name,
                                                    ClangTidyContext* Context)
-    : ClangTidyCheck(Name, Context) {}
+    : SdcPolicyCheck(Name, Context) {}
 
 void SdcErrnoZeroAssignCheck::registerMatchers(MatchFinder* Finder) {
     // Match all assignment operators that are not in system headers — errno
