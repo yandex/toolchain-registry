@@ -8,6 +8,7 @@
 #include "insurance_enum_usage_check.h"
 #include "insurance_optional_usage_check.h"
 #include "insurance_type_based_naming_check.h"
+#include "missing_reserve_check.h"
 #include "uneeded_temporary_string_check.h"
 #include "usage_restriction_checks.h"
 #include "using_namespace_in_header_check.h"
@@ -30,6 +31,7 @@ public:
         // IGNF-1863
         CheckFactories.registerCheck<TypeidNameRestrictionCheck>("arcadia-typeid-name-restriction");
         CheckFactories.registerCheck<AsciiCompareIgnoreCaseCheck>("arcadia-ascii-compare-ignorecase");
+        CheckFactories.registerCheck<MissingReserveCheck>("arcadia-missing-reserve");
         CheckFactories.registerCheck<UnneededTemporaryStringCheck>("arcadia-unneeded-temporary-string");
         CheckFactories.registerCheck<UsingNamespaceInHeaderCheck>("arcadia-using-namespace-in-header");
         CheckFactories.registerCheck<UtilTStringUpperCaseMethodsCheck>("arcadia-util-tstring-methods");

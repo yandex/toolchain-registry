@@ -466,6 +466,8 @@
   "ynd/clang-tidy/checks/insurance_optional_usage_check.h":"toolchains/ynd/clang-tidy/checks/insurance_optional_usage_check.h",
   "ynd/clang-tidy/checks/insurance_type_based_naming_check.cpp":"toolchains/ynd/clang-tidy/checks/insurance_type_based_naming_check.cpp",
   "ynd/clang-tidy/checks/insurance_type_based_naming_check.h":"toolchains/ynd/clang-tidy/checks/insurance_type_based_naming_check.h",
+  "ynd/clang-tidy/checks/missing_reserve_check.cpp":"toolchains/ynd/clang-tidy/checks/missing_reserve_check.cpp",
+  "ynd/clang-tidy/checks/missing_reserve_check.h":"toolchains/ynd/clang-tidy/checks/missing_reserve_check.h",
   "ynd/clang-tidy/checks/possible_nullptr_check.cpp":"toolchains/ynd/clang-tidy/checks/possible_nullptr_check.cpp",
   "ynd/clang-tidy/checks/taxi_async_use_after_free_check.cpp":"toolchains/ynd/clang-tidy/checks/taxi_async_use_after_free_check.cpp",
   "ynd/clang-tidy/checks/taxi_async_use_after_free_check.h":"toolchains/ynd/clang-tidy/checks/taxi_async_use_after_free_check.h",
