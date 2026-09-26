@@ -1,7 +1,7 @@
 {% extends '//die/std/ix.sh' %}
 {% block fetch %}
-https://proxy.sandbox.yandex-team.ru/13623359293
-sha:5824db7b5b95557c76405bdbee4691069fbcdad3c41175b2acf9938ffa3cb71b
+https://proxy.sandbox.yandex-team.ru/13817144358
+sha:739b1fffd9b6855a9dbec521f9ccc9a9b2b584db0c67b22dec85b3dd042b6eef
 {% endblock %}
 {% block unpack %}
 mkdir src
