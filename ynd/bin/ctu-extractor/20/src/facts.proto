@@ -1,0 +1,698 @@
+// facts.proto — System-Wide CTU Checker, fact schema v5.
+//
+// SINGLE SOURCE OF TRUTH. The C++ extractor (writer) and the Go analyzer
+// (reader) are both generated from this file; there is no hand-written schema
+// anywhere else. See docs/DESIGN.md and the T0.1 plan.
+//
+// The schema's SPINE is the memory-location / action / sequencing model that
+// Rule 4.6.1 (sequencing) needs: `Aml` (abstract memory location), `Access`
+// (an action = read/write on an Aml), and `ExprNode` (the construct tree from
+// which Stage 3 derives sequenced-before via the T4.1 tables). Declaration
+// facts (6.2.x / 13.3.3 / 21.6.4) are a small side-vocabulary hanging off the
+// same entity-ID scheme.
+//
+// Determinism (a hard AC) is a PRODUCER-discipline property, not a wire-format
+// guarantee: exactly one pinned extractor binary ever writes a Blob, it sorts
+// records canonically and serializes deterministically, and NO `map<>` fields
+// appear anywhere (map iteration order is protobuf's main nondeterminism
+// source). See the Blob message and the extractor's serialize path.
+
+syntax = "proto3";
+
+package ctu.facts.v2;
+
+option go_package = "a.yandex-team.ru/junk/arkhip0v0/system-wide-checks/schema/factspb;factspb";
+
+// ---------------------------------------------------------------------------
+// Common
+// ---------------------------------------------------------------------------
+
+// Content-hash identity, assigned AT EXTRACTION TIME (never reconstructed
+// downstream). id = bytes[0..8) of SHA-256(canonical_encoding), interpreted
+// BIG-ENDIAN into a uint64. The canonical encoding is defined in
+// extractor/entity_id.* and is a NORMATIVE, versioned requirement (it is
+// qualification evidence). id_hi is reserved 0 today so the id can widen to
+// 128 bits without a schema break if the 64-bit collision self-check ever
+// trips at scale.
+message EntityId {
+  fixed64 id = 1;
+  fixed64 id_hi = 2;
+}
+
+// A source location. `file` is ALWAYS source-root-relative and normalized
+// (never an absolute or build-dir path) so blobs are reproducible across
+// machines and the entity-ID TU-qualifier is stable.
+message SourceRef {
+  string file = 1;
+  uint32 line = 2;
+}
+
+enum EntityKind {
+  EK_UNKNOWN = 0;
+  EK_FUNCTION = 1;
+  EK_VAR = 2;
+  EK_TYPE = 3;
+  EK_CALLSITE = 4;
+}
+
+enum Linkage {
+  LK_UNKNOWN = 0;
+  LK_EXTERNAL = 1;
+  LK_INTERNAL = 2;
+}
+
+// Language mode of the translation unit that produced a declaration fact.
+// UNKNOWN preserves conservative behavior for pre-field blobs.
+enum SourceLanguage {
+  SL_UNKNOWN = 0;
+  SL_C = 1;
+  SL_CXX = 2;
+}
+
+// Origin class, stamped at extraction from path + build metadata (the T0.8
+// seam). Lives on the Fact wrapper so every fact carries it.
+enum OriginClass {
+  OC_UNKNOWN = 0;
+  OC_FIRST_PARTY = 1;
+  OC_CONTRIB = 2;
+  OC_SYSTEM = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Abstract Memory Location (Aml) — the overlap-oracle vocabulary.
+//
+// The FULL vocabulary is defined now even though precision is implemented
+// incrementally, so no schema churn is needed as tiers land. Two actions
+// conflict iff their Amls MAY OVERLAP (default overlap; the oracle proves
+// disjointness). Crucially there is NO Andersen-style points-to set per
+// pointer (soundness invariant 3): `*p` gets a location via a Steensgaard
+// UnifyClass, merged across TUs via summaries — never a global solve.
+// ---------------------------------------------------------------------------
+
+// A named complete object (global / static). Distinct entities never overlap.
+message NamedGlobal {
+  EntityId entity = 1;
+}
+
+// A region reachable through parameter N (the "unknown-through-param-N"
+// footprint element). deref_depth distinguishes the pointer from its pointee.
+message ParamRegion {
+  uint32 param_index = 1;
+  uint32 deref_depth = 2;
+}
+
+// A local object, function-scoped. local_id is assigned by a pinned
+// traversal (see ExprNode note on determinism), first-encounter order,
+// unique within one function (never compared across functions).
+message Local {
+  uint32 local_id = 1;
+  // Set if this local's address was ever taken, or it was ever bound to a
+  // reference / passed to any function without a value copy (no
+  // lvalue-to-rvalue conversion) — anywhere in the function, not just at
+  // this occurrence. A non-escaping local can never be touched by an opaque
+  // call; an escaping one conservatively can (soundness invariant 1).
+  // Imprecision, not unsoundness: doesn't distinguish const&-only (read)
+  // escapes from writable ones — a future refinement, not attempted here.
+  bool escaped = 2;
+}
+
+// Field-sensitive access: a field path within a base location. Distinct
+// fields of one object do not overlap.
+message Field {
+  Aml base = 1;
+  repeated uint32 field_path = 2;
+}
+
+// A Steensgaard unification class (near-linear, per-TU; classes merge across
+// TUs via summaries). This is how a dereference gets a location without
+// points-to. class_id is function/TU-scoped and deterministically assigned.
+message UnifyClass {
+  uint32 class_id = 1;
+}
+
+// THE single unique location all volatile accesses collapse to (Rule 4.6.1's
+// volatile clause). Any two unsequenced volatile accesses conflict.
+message VolatileLoc {}
+
+// A constant/read-only storage location (string literal, nullptr, etc.).
+// Constants are in read-only memory — reads are fine, writes are UB and
+// should be dropped.  A single global location suffices because constants
+// never conflict with any program variable (NamedGlobal/Local/ParamRegion)
+// and two constant reads never conflict with each other (read-read is always
+// safe).  The extractor emits this for call arguments that are string
+// literals, nullptr, or other non-trackable constant expressions, instead
+// of falling back to Widening(W_UNKNOWN_EVERYTHING) which would falsely
+// conflict with everything.
+message ConstLoc {}
+
+// A unique, per-allocation-site identity for the pointee of a pointer
+// returned by an allocator function (malloc, calloc, realloc, mmap, operator
+// new).  Two distinct AllocationIds never overlap (each allocation is a
+// fresh, non-aliasing region).  An AllocationId overlaps with Widening
+// (conservative — an opaque call could have stashed a pointer to this
+// allocation) but NOT with concrete NamedGlobal/Local/ParamRegion — the
+// allocation is fresh.  The id is a deterministic, per-call-site counter
+// (not per dynamic call — two calls to malloc in a loop get the same id,
+// sound by construction).
+message AllocationId {
+  uint32 id = 1;
+}
+
+// A sound widening: when precision is exhausted the footprint degrades toward
+// "may touch anything (in this category)" — never toward silence.
+message Widening {
+  enum Kind {
+    W_UNKNOWN = 0;
+    W_UNKNOWN_GLOBAL = 1;         // some unspecified named global
+    W_UNKNOWN_THROUGH_PARAM = 2;  // something reachable through param_index
+    W_UNKNOWN_EVERYTHING = 3;     // top: may touch any location
+  }
+  Kind kind = 1;
+  uint32 param_index = 2;  // meaningful iff kind == W_UNKNOWN_THROUGH_PARAM
+}
+
+// The address of a specific, statically-known function. Used by the
+// function-pointer resolver (analyzer/funcptr.go): when a pointer variable
+// is assigned a function's address (`fp = &func;` or `fp = func;` via
+// function-to-pointer decay), the UnifyConstraint's b-side carries this
+// instead of a Local/NamedGlobal, and the resolver accumulates the set of
+// distinct function ids per UnifyClass to resolve indirect calls through
+// that pointer to real footprints. See docs/PLAN_indirect_calls.md.
+message FuncTarget {
+  EntityId function_id = 1;  // matches some FuncDecl.id
+}
+
+message Aml {
+  oneof loc {
+    NamedGlobal named_global = 1;
+    ParamRegion param_region = 2;
+    Local local = 3;
+    Field field = 4;
+    UnifyClass unify_class = 5;
+    // field 6 formerly ErrnoLoc; errno is now a reserved-name synthetic
+    // NamedGlobal instead (see analyzer/libc_stubs.go's synthErrnoBuf).
+    VolatileLoc volatile_loc = 7;
+    Widening widening = 8;
+    AllocationId allocation_id = 10;
+    ConstLoc const_loc = 11;
+    FuncTarget func_target = 12;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spine facts
+// ---------------------------------------------------------------------------
+
+// An action: a value computation (READ) or a side effect (WRITE) on an Aml,
+// positioned at node_id within full_expr_id's sequence graph.
+message Access {
+  enum Kind {
+    READ = 0;
+    WRITE = 1;
+  }
+  EntityId function = 1;
+  uint64 full_expr_id = 2;
+  uint64 node_id = 3;
+  Kind kind = 4;
+  Aml aml = 5;
+  bool is_volatile = 6;
+  SourceRef loc = 7;
+}
+
+// The construct kind of an expression node — one row of the T4.1 sequencing
+// tables. The extractor emits the tree STRUCTURE (kind + operand children);
+// the checker derives sequenced-before edges from the per-construct,
+// per-language-version tables (kept as data in the checker, not here).
+enum ConstructKind {
+  CK_UNKNOWN = 0;
+  CK_LEAF = 1;         // value-computation leaf (var ref, literal); NO operands
+  CK_BINOP = 2;        // ordinary binary operator (+, -, relational, bitwise):
+                       // operands UNSEQUENCED
+  CK_LOGICAL_AND = 3;  // && — operand 0 sequenced-before operand 1
+  CK_LOGICAL_OR = 4;   // || — operand 0 sequenced-before operand 1
+  CK_TERNARY = 5;      // ?: — operand 0 (cond) sequenced-before 1/2 (branches);
+                       // 1 and 2 are MUTUALLY EXCLUSIVE (never both evaluate)
+  CK_COMMA = 6;        // , — operand 0 sequenced-before operand 1
+  CK_CALL = 7;         // operand 0 (callee) sequenced-before every arg;
+                       // args indeterminately sequenced w.r.t. each other
+  CK_INIT_LIST = 8;    // braced-init-list — operands sequenced left to right
+  CK_NEW = 9;          // new-expression: operands (placement args, array
+                       // size, initializer) indeterminately sequenced among
+                       // themselves. Conservative simplification: rule 11
+                       // (C++17+) actually sequences the initializer after
+                       // the allocator's own args, but our operand list
+                       // can't unambiguously tell "no initializer, N alloc
+                       // args" apart from "initializer present, N-1 alloc
+                       // args" at the same N — so we don't model that edge,
+                       // and stay sound (not silent) by treating it as
+                       // indeterminate instead.
+  CK_CO_AWAIT = 10;    // co_await / co_yield (DESIGN §2 coroutine policy)
+  CK_THROW = 11;       // throw
+  CK_ASSIGN = 12;      // assignment/compound-assignment — operand 0 = LHS,
+                       // operand 1 = RHS: operand 1 sequenced-before operand 0
+                       // (C++17+; pre-17 unsequenced)
+  CK_SUBSCRIPT = 13;   // E1[E2] — operand 0 (E1) sequenced-before operand 1
+                       // (E2) (C++17+; pre-17 unsequenced)
+  CK_SHIFT = 14;       // << >> — operand 0 sequenced-before operand 1
+                       // (C++17+; pre-17 unsequenced, i.e. like CK_BINOP)
+  CK_PTR_TO_MEMBER = 15;  // .* ->* — operand 0 sequenced-before operand 1
+                          // (C++17+; pre-17 unsequenced)
+  CK_CONSTRUCT_CALL = 16; // direct-init constructor call, e.g. T x(a, b) —
+                          // args indeterminately sequenced (call-like)
+  CK_TEMP_DTOR = 17;      // a temporary requiring destruction at the end of
+                          // the full-expression (CXXBindTemporaryExpr):
+                          // operand 0 is the temporary's construction: the
+                          // destructor call itself is implicit (no operand
+                          // of its own) and opaque — conservatively assumed
+                          // to touch volatile, like CK_CALL. Local (not
+                          // temporary) variables' scope-exit destructor
+                          // calls have NO AST representation at all (pure
+                          // CodeGen insertion) and are NOT covered by this
+                          // or any other ConstructKind.
+}
+
+// One node of a full-expression's construct tree.
+message ExprNode {
+  EntityId function = 1;
+  uint64 full_expr_id = 2;
+  uint64 node_id = 3;
+  ConstructKind construct = 4;
+  // Child node ids, in OPERAND ORDER (semantic; never sorted). For CK_CALL,
+  // operand 0 is ALWAYS the callee; operands 1.. are arguments in call order.
+  repeated uint64 operands = 5;
+  SourceRef loc = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Deferred-but-defined: these fact kinds are part of the schema now so the
+// vocabulary is complete, but the minimal T0.1 extractor does not populate
+// them yet (they belong to Stage-2 summary construction / W3 call graph).
+// ---------------------------------------------------------------------------
+
+// A Steensgaard unification edge: a and b must be in the same class.
+message UnifyConstraint {
+  enum Reason {
+    R_ASSIGN = 0;
+    R_CAST = 1;
+    R_ARG_BIND = 2;
+    R_RETURN = 3;
+    // Pointer arithmetic preserves the allocation/object base but not an
+    // exact field or array-element offset.
+    R_POINTER_ARITH = 4;
+    // Assignment to function-pointer storage. Unlike an ordinary pointer
+    // alias edge, a RHS ParamRegion is a callback value that must be bound
+    // through each direct call site's actual argument.
+    R_FUNC_PTR_STORE = 5;
+  }
+  EntityId function = 1;
+  Aml a = 2;
+  Aml b = 3;
+  Reason reason = 4;
+  // Source expression that introduced this points-to relation. This lets
+  // analyzer telemetry identify the operation that first widened a class.
+  SourceRef loc = 5;
+  // For R_CAST only: the post-cast AST expression class that the extractor
+  // could not resolve to a pointer target. R_CAST is historical shorthand
+  // for an unresolved pointer RHS, not necessarily an explicit cast.
+  string unresolved_pointer_shape = 6;
+  // Compact structural detail for unresolved_pointer_shape, used only for
+  // targeted telemetry (for example, the two branch shapes of a ternary).
+  string unresolved_pointer_detail = 7;
+}
+
+// A local whose address escapes the function (forces widening of its class).
+message Escape {
+  EntityId function = 1;
+  Aml local = 2;
+}
+
+// A call site with arg→param binding, so Stage 2 can remap a callee's
+// ParamRegion effects into the caller's Amls. callee is a zero EntityId when
+// unresolved; is_indirect flags indirect/virtual sites (resolved in W3's
+// closed-world pass).
+message CallSite {
+  EntityId caller = 1;
+  EntityId callee = 2;
+  uint64 full_expr_id = 3;
+  uint64 node_id = 4;
+  repeated Aml args = 5;
+  bool is_indirect = 6;
+  SourceRef loc = 7;
+
+  // A virtual call is a SUBSET of is_indirect: the extractor can't know
+  // (single-TU) which override actually runs, but — unlike a raw function
+  // pointer/std::function, which has no structure to search — it CAN name
+  // the statically-resolved virtual method slot and receiver expression's
+  // static class. The
+  // analyzer's whole-program Class Hierarchy Analysis (cha.go) then
+  // resolves this to every override reachable from receiver_class_mangled
+  // downward (inclusive), using ClassInfo facts merged across every blob —
+  // a bounded candidate set instead of one unresolved sink, and (since
+  // those candidates become real call-graph edges) indirect recursion
+  // through virtual dispatch falls out of the existing SCC machinery for
+  // free. is_indirect stays true for these too: callee is still unresolved
+  // in the single-target sense the field was always meant for.
+  bool is_virtual = 8;
+  string virtual_method_name = 9;     // unqualified name; meaningful iff is_virtual
+  string receiver_class_mangled = 10; // mangled type CHA searches from; meaningful iff is_virtual
+
+  // Set (non-zero) when this call's return value is directly consumed by a
+  // pointer-typed local's assignment — either a DeclStmt initializer
+  // (`T *p = f();`) or a BinaryOperator assignment (`p = f();`).  Value is
+  // the caller-side `UnifyClass.class_id` used for the assigned pointer's
+  // class (same id as recorded in the R_ASSIGN UnifyConstraint's A side).
+  //
+  // Cross-function return-value propagation uses this to override the
+  // caller's pointer class with the callee's resolved return target (see
+  // cross_unify.go's crossFunctionUnify).  Zero means "no such assignment"
+  // (return value was ignored, or passed into a larger expression that the
+  // extractor didn't recognize as a pointer-local target — sound default).
+  //
+  // Because UnifyClass ids are function-scoped (assigned per-function by
+  // the extractor and reset between functions), this uint32 is meaningful
+  // ONLY together with `caller`.
+  uint32 caller_return_class_id = 11;
+  bool caller_return_class_id_set = 12;  // distinguish "id == 0" from "unset"
+
+  // Set iff is_indirect: the callee expression's own resolved Aml (the
+  // pointer VALUE being called through, resolved via
+  // resolvePointerTargetAml in the extractor). The function-pointer
+  // resolver (analyzer/funcptr.go) uses this to ask "what does THIS call's
+  // callee pointer resolve to" — the UnifyClass it maps to carries the
+  // set of FuncTarget candidates accumulated by the resolver.
+  Aml indirect_callee = 13;
+
+  // Set iff is_indirect: the static type of the callee expression, as a
+  // stringified function-pointer type (e.g. "void (*)(int *)"). Used by
+  // Phase 2 of the function-pointer resolver (analyzer/funcptr.go) to
+  // look up candidates by signature when Phase 1's intraprocedural
+  // resolution fails. The type string is produced by the extractor's
+  // typeToString() on the callee expression's type — it must match the
+  // key format built from FuncDecl.ret_type + FuncDecl.params in the
+  // analyzer's addr_taken.go signature index.
+  string indirect_callee_type = 14;
+
+  // Exact statically-selected virtual declaration. Unlike the unqualified
+  // method name, this distinguishes overloads and lets whole-program CHA
+  // follow explicit C++ override relations rather than name matching.
+  string virtual_method_mangled = 15;
+
+  // The receiver's abstract memory location, in the caller's vocabulary.
+  // Receiver-type flow uses this to refine the RTA candidate set when all
+  // reaching concrete dynamic-type seeds form a bounded finite set. Missing,
+  // unknown, or overflowed flow always retains the conservative RTA result.
+  Aml virtual_receiver = 16;
+}
+
+// One basic block of a function's normal-control-flow graph. This deliberately
+// records only the information needed by Rule 9.6.4's interprocedural
+// may-return analysis: successor blocks, calls which must return before those
+// successors are reached, and a normal exit. Exceptional exits are not normal
+// returns and therefore are not marked as exits here.
+message ControlFlowCall {
+  uint64 full_expr_id = 1;
+  uint64 node_id = 2;
+}
+
+message ControlFlowBlock {
+  EntityId function = 1;
+  uint32 block_id = 2;
+  repeated uint32 successors = 3;
+  repeated ControlFlowCall calls = 4;
+  bool is_entry = 5;
+  bool has_normal_exit = 6;
+  SourceRef normal_exit_loc = 7;
+}
+
+// One operation which consults an object's dynamic type for Rule 15.1.1.
+// object names the receiver/operand in the containing function's AML space;
+// the analyzer transports parameter-rooted uses through calls until it can
+// determine whether a constructor/destructor's current object is involved.
+message DynamicTypeUse {
+  enum Kind {
+    DTU_UNKNOWN = 0;
+    DTU_VIRTUAL_CALL = 1;
+    DTU_TYPEID = 2;
+    DTU_DYNAMIC_CAST = 3;
+  }
+  EntityId function = 1;
+  Aml object = 2;
+  Kind kind = 3;
+  SourceRef loc = 4;
+  bool has_complete_object_identity = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Declaration side-vocabulary (Tier-0 rules)
+// ---------------------------------------------------------------------------
+
+message FuncDecl {
+  enum Kind {
+    DECL = 0;
+    DEF = 1;
+  }
+  enum Virtuality {
+    V_NONE = 0;
+    V_VIRTUAL = 1;
+    V_PURE = 2;
+  }
+  EntityId id = 1;
+  string mangled = 2;
+  string name = 3;
+  string ret_type = 4;
+  repeated string params = 5;       // positional (semantic) — never sorted
+  repeated string param_names = 6;  // positional, index-aligned with params
+  Kind kind = 7;
+  bool is_inline = 8;
+  bool is_templated = 9;
+  bool is_template_pattern = 10;    // uninstantiated pattern: NOT a per-entity identity
+  Virtuality virtuality = 11;
+  repeated string base_classes = 12;
+  fixed64 body_hash = 13;           // SHA-256 low64 of body token text; 0 iff no body
+  Linkage linkage = 14;
+  bool is_system_header = 15;
+  SourceRef loc = 16;
+  // Canonical pre-image of `id` (the exact bytes SHA-256 hashed). Emitted so
+  // the analyzer's collision self-check can compare pre-images WITHOUT
+  // re-implementing the ID encoder in Go: same id64 + differing entity_key = a
+  // real 64-bit collision = hard error. Deduped away for identical entities.
+  bytes entity_key = 17;
+  // Frontend provenance useful for large-build telemetry and declaration
+  // deduplication diagnostics. These fields do not affect entity identity.
+  bool is_implicit = 18;
+  bool is_lambda = 19;
+  bool is_template_specialization = 20;
+  // First 128 bits of SHA-256 over Clang's canonical structural function-type
+  // encoding. Unlike ret_type+params, this includes variadicness, exception
+  // specification, calling convention, and member cv/ref qualifiers without
+  // depending on diagnostic-printer choices.
+  fixed64 canonical_type_hash = 21;
+  fixed64 canonical_type_hash_hi = 22;
+  bool has_complete_type_identity = 23;
+  SourceLanguage source_language = 24;
+  // Rule-level declaration identity for source-written [[noreturn]]. Clang
+  // propagates this inheritable attribute to later redeclarations, so the
+  // extractor records only a non-inherited occurrence. The presence bit
+  // distinguishes old blobs from a current declaration without the attribute.
+  bool has_noreturn_attribute_identity = 25;
+  bool has_noreturn_attribute = 26;
+  // Exact function entities immediately overridden by this declaration.
+  // Entity IDs, rather than mangled-name strings, preserve TU separation for
+  // internal-linkage classes. The coverage bit distinguishes old blobs whose
+  // empty repeated field means "not extracted" from a current non-override.
+  repeated EntityId overridden_ids = 27;
+  bool has_complete_override_identity = 28;
+  bool is_constructor = 29;
+  bool is_destructor = 30;
+}
+
+message VarDecl {
+  enum Kind {
+    DECL = 0;
+    DEF = 1;
+    TENTATIVE_DEF = 2;  // C tentative definition (`int g;` at file scope)
+    EXTERN = 3;
+  }
+  EntityId id = 1;
+  string mangled = 2;
+  string name = 3;
+  string type = 4;
+  Kind kind = 5;        // computed BEFORE linkage (FN-critical; see extractor)
+  bool is_inline = 6;
+  Linkage linkage = 7;
+  bool is_system_header = 8;
+  SourceRef loc = 9;
+  bytes entity_key = 10;  // canonical pre-image of id (see FuncDecl.entity_key)
+  // First 128 bits of SHA-256 over Clang's canonical structural variable-type
+  // encoding.
+  fixed64 canonical_type_hash = 11;
+  fixed64 canonical_type_hash_hi = 12;
+  bool has_complete_type_identity = 13;
+  SourceLanguage source_language = 14;
+  // Compatibility metadata for the outermost array layer. C++ permits a
+  // declaration with an omitted outer bound to be redeclared with a bound;
+  // the element type must still agree. The explicit presence bit keeps old
+  // blobs distinguishable from new non-array declarations.
+  bool has_outer_array_compatibility = 15;
+  bool is_outer_array = 16;
+  bool outer_array_bound_omitted = 17;
+  fixed64 outer_array_element_type_hash = 18;
+  fixed64 outer_array_element_type_hash_hi = 19;
+}
+
+message VMethod {
+  string name = 1;
+  string mangled = 2;
+  bool is_pure = 3;
+  // Immediate overridden declarations, identified by mangled function name.
+  // The analyzer follows this graph transitively to identify one virtual
+  // slot without conflating overloads that share `name`.
+  repeated string overridden_mangled = 4;
+}
+
+message ClassInfo {
+  // Real type ID from the mangled type identity (fixes cross-TU name
+  // fusion). NOTE: class template specializations aren't emitted yet (see
+  // extractor's VisitCXXRecordDecl) — their vtables are invisible; feeds W3.
+  EntityId id = 1;
+  string mangled = 2;
+  string name = 3;
+  // MANGLED TYPE strings (same scheme as this class's own `mangled` field),
+  // not plain declaration names — a plain name is ambiguous across
+  // namespaces/TUs, and cha.go joins these against every other class's own
+  // `mangled` to build the whole-program hierarchy, so an exact-match key
+  // is required, not a display string. Declaration order (semantic).
+  repeated string bases = 4;
+  repeated VMethod virtual_methods = 5;  // sorted by mangled for stable serialization
+  bool is_system_header = 6;
+  SourceRef loc = 7;
+  bytes entity_key = 8;  // canonical pre-image of id (see FuncDecl.entity_key)
+  // True only for facts produced by an extractor that records every
+  // potentially-evaluated complete-object construction of a polymorphic
+  // class. The analyzer requires this bit across the entire receiver
+  // subtree before applying instantiated-type refinement; old/mixed facts
+  // therefore retain full CHA rather than becoming silently unsound.
+  bool has_complete_object_construction_coverage = 9;
+  // Polymorphic record/array element types stored as non-static data
+  // members. Constructing the containing complete object also constructs
+  // these member complete objects, including through an implicit defaulted
+  // constructor whose initializer AST may not be materialized at a caller.
+  repeated string polymorphic_member_classes = 10;
+}
+
+// One potentially-evaluated construction of a complete polymorphic object.
+// Base/delegating subobject construction is deliberately excluded: the
+// dynamic type during ordinary virtual dispatch is the complete object's
+// type. function is zero for namespace/static-storage initialization.
+message ObjectConstruction {
+  EntityId function = 1;
+  string class_mangled = 2;
+  SourceRef loc = 3;
+}
+
+// A proof that one abstract memory location denotes an object of exactly the
+// named complete dynamic class. The extractor emits this only for expressions
+// whose origin makes the dynamic type invariant (for example, `&object` where
+// object is a non-reference record variable, or `new Concrete`). Assignments
+// and argument bindings transport these seeds in the analyzer.
+message ReceiverTypeSeed {
+  EntityId function = 1;
+  Aml object = 2;
+  string class_mangled = 3;
+  SourceRef loc = 4;
+}
+
+message GlobalDelete {
+  enum Kind {
+    DELETE = 0;
+    DELETE_ARRAY = 1;
+  }
+  Kind kind = 1;
+  bool sized = 2;
+  bool aligned = 3;
+  bool is_system_header = 4;
+  SourceRef loc = 5;
+}
+
+// One source-level definition participating in C++'s one-definition rule.
+// The 128-bit identity combines Clang's stable AST ODR hash with a normalized
+// pretty-printed declaration, so it covers both token/initializer differences
+// and semantic differences such as an inline call resolving to another
+// overload in a different TU. translation_unit is the main source file, not
+// the defining header: non-inline definitions included by two TUs are two
+// program definitions even when their source location is identical.
+message OdrDefinition {
+  EntityId entity = 1;
+  EntityKind entity_kind = 2;
+  string name = 3;
+  bool allows_multiple_definitions = 4;
+  fixed64 definition_hash = 5;
+  fixed64 definition_hash_hi = 6;
+  SourceRef loc = 7;
+  string translation_unit = 8;
+  bytes entity_key = 9;
+  bool is_system_header = 10;
+  SourceLanguage source_language = 11;
+  // False when Clang intentionally left part of the semantic definition
+  // unresolved (notably a lazy exception specification on an explicitly
+  // defaulted member). Such a fact remains coverage telemetry but cannot be
+  // used as evidence that two source definitions differ.
+  bool has_complete_identity = 12;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope + blob
+// ---------------------------------------------------------------------------
+
+message Fact {
+  OriginClass origin = 1;
+  oneof kind {
+    FuncDecl func_decl = 2;
+    VarDecl var_decl = 3;
+    ClassInfo class_info = 4;
+    GlobalDelete global_delete = 5;
+    Access access = 6;
+    ExprNode expr_node = 7;
+    UnifyConstraint unify_constraint = 8;
+    Escape escape = 9;
+    CallSite call_site = 10;
+    ObjectConstruction object_construction = 11;
+    ReceiverTypeSeed receiver_type_seed = 12;
+    OdrDefinition odr_definition = 13;
+    ControlFlowBlock control_flow_block = 14;
+    DynamicTypeUse dynamic_type_use = 15;
+  }
+}
+
+// Stamped into EVERY blob (DESIGN §8 requires toolchain version in every fact
+// table). The reader hard-refuses a schema_version mismatch, and asserts all
+// blobs in one link target share header versions (a mixed-version link is a
+// silent-corruption + determinism hazard).
+message BlobHeader {
+  uint32 schema_version = 1;
+  string tool_version = 2;
+  string toolchain_version = 3;
+  string zstd_version = 4;
+  string source_root = 5;
+  // Set when the clang frontend reported an error for this TU: the blob may
+  // carry a normal-looking but PARTIAL fact table. The extractor also fails
+  // its own exit code on this by default (--ctu-keep-going opts out), but
+  // the analyzer must independently treat incomplete=true as a hard failure.
+  // Distinct from the 0-byte-file convention (LoadBlob), which means "no
+  // source file at all".
+  bool incomplete = 6;
+  // True only for extractors that emit OdrDefinition for every supported
+  // source-level function, variable, class and enum definition in this TU.
+  // An absent/false bit on an old blob suppresses "no definition" conclusions
+  // while still permitting conclusive observed multiple-definition findings.
+  bool has_complete_odr_definition_coverage = 7;
+}
+
+// A whole per-TU fact table: one header + the canonically-sorted, deduped
+// facts. Serialized deterministically, then zstd-compressed, one Blob per
+// would-be .o. (Per-function streaming for giant TUs is T0.5; the logical
+// schema is unaffected by that later change.)
+message Blob {
+  BlobHeader header = 1;
+  repeated Fact facts = 2;
+}
