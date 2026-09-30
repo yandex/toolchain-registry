@@ -1,0 +1,96 @@
+--- a/include/llvm/Transforms/Instrumentation/AddressSanitizer.h
++++ b/include/llvm/Transforms/Instrumentation/AddressSanitizer.h
+@@ -30,6 +30,7 @@
+   int InstrumentationWithCallsThreshold = 7000;
+   uint32_t MaxInlinePoisoningSize = 64;
+   bool InsertVersionCheck = true;
++  std::vector<std::pair<std::string, std::string>> PrefixMap;
+ };
+ 
+ /// Public interface to the address sanitizer module pass for instrumenting code
+--- a/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -20,6 +20,7 @@
+ #include "llvm/ADT/DenseMap.h"
+ #include "llvm/ADT/DepthFirstIterator.h"
+ #include "llvm/ADT/SmallPtrSet.h"
++#include "llvm/ADT/SmallString.h"
+ #include "llvm/ADT/SmallSet.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/Statistic.h"
+@@ -71,6 +72,7 @@
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/MathExtras.h"
++#include "llvm/Support/Path.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include "llvm/TargetParser/Triple.h"
+ #include "llvm/Transforms/Instrumentation/AddressSanitizerCommon.h"
+@@ -928,11 +930,13 @@
+ 
+ class ModuleAddressSanitizer {
+ public:
+-  ModuleAddressSanitizer(Module &M, bool InsertVersionCheck,
+-                         bool CompileKernel = false, bool Recover = false,
+-                         bool UseGlobalsGC = true, bool UseOdrIndicator = true,
+-                         AsanDtorKind DestructorKind = AsanDtorKind::Global,
+-                         AsanCtorKind ConstructorKind = AsanCtorKind::Global)
++  ModuleAddressSanitizer(
++      Module &M, bool InsertVersionCheck, bool CompileKernel = false,
++      bool Recover = false, bool UseGlobalsGC = true,
++      bool UseOdrIndicator = true,
++      AsanDtorKind DestructorKind = AsanDtorKind::Global,
++      AsanCtorKind ConstructorKind = AsanCtorKind::Global,
++      std::vector<std::pair<std::string, std::string>> PrefixMap = {})
+       : M(M),
+         CompileKernel(ClEnableKasan.getNumOccurrences() > 0 ? ClEnableKasan
+                                                             : CompileKernel),
+@@ -959,7 +963,8 @@
+         DestructorKind(DestructorKind),
+         ConstructorKind(ClConstructorKind.getNumOccurrences() > 0
+                             ? ClConstructorKind
+-                            : ConstructorKind) {
++                            : ConstructorKind),
++        PrefixMap(std::move(PrefixMap)) {
+     C = &(M.getContext());
+     int LongSize = M.getDataLayout().getPointerSizeInBits();
+     IntptrTy = Type::getIntNTy(*C, LongSize);
+@@ -1022,6 +1027,7 @@
+   bool UseCtorComdat;
+   AsanDtorKind DestructorKind;
+   AsanCtorKind ConstructorKind;
++  std::vector<std::pair<std::string, std::string>> PrefixMap;
+   Type *IntptrTy;
+   PointerType *PtrTy;
+   LLVMContext *C;
+@@ -1309,7 +1315,8 @@
+ 
+   ModuleAddressSanitizer ModuleSanitizer(
+       M, Options.InsertVersionCheck, Options.CompileKernel, Options.Recover,
+-      UseGlobalGC, UseOdrIndicator, DestructorKind, ConstructorKind);
++      UseGlobalGC, UseOdrIndicator, DestructorKind, ConstructorKind,
++      Options.PrefixMap);
+   bool Modified = false;
+   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+   const StackSafetyGlobalInfo *const SSGI =
+@@ -2808,8 +2815,19 @@
+   if (!ModuleName) {
+     // We shouldn't merge same module names, as this string serves as unique
+     // module ID in runtime.
++    std::string ModuleNameStr = M.getModuleIdentifier();
++
++    // Apply prefix map remapping.
++    SmallString<256> RemappedName(ModuleNameStr);
++    for (const auto &[Old, New] : PrefixMap) {
++      if (llvm::sys::path::replace_path_prefix(RemappedName, Old, New)) {
++        ModuleNameStr = std::string(RemappedName);
++        break;
++      }
++    }
++
+     ModuleName =
+-        createPrivateGlobalForString(M, M.getModuleIdentifier(),
++        createPrivateGlobalForString(M, ModuleNameStr,
+                                      /*AllowMerging*/ false, genName("module"));
+   }
+   return ModuleName;

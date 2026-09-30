@@ -40,6 +40,7 @@ clang-format-patches.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
 clang-statistics-used-bytes.patch
+PR-186908-backport-sanitize-prefix-map.patch
 {% endblock %}
 
 {% block common_patches %}
@@ -50,6 +51,7 @@ vfs-case-insensitive.patch
 dont-remove-dbg-info.patch
 fix-objcopy-elf.patch
 backport-pr177855-slp-gathered-loads.patch
+PR-186908-backport-sanitize-prefix-map.patch
 {% endblock %}
 
 {% block patch %}

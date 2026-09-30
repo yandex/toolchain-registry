@@ -1,0 +1,112 @@
+--- a/include/clang/Basic/CodeGenOptions.h
++++ b/include/clang/Basic/CodeGenOptions.h
+@@ -261,6 +261,9 @@
+   /// file paths in coverage mapping.
+   llvm::SmallVector<std::pair<std::string, std::string>, 0> CoveragePrefixMap;
+ 
++  /// Prefix replacement map for sanitizers to remap source file paths.
++  llvm::SmallVector<std::pair<std::string, std::string>, 0> SanitizePrefixMap;
++
+   /// The ABI to use for passing floating point arguments.
+   std::string FloatABI;
+ 
+--- a/include/clang/Options/Options.td
++++ b/include/clang/Options/Options.td
+@@ -4776,6 +4776,11 @@
+   Visibility<[ClangOption, CC1Option]>,
+     HelpText<"remap file source paths in predefined preprocessor macros and "
+              "__builtin_FILE(). Implies -ffile-reproducible.">;
++def fsanitize_prefix_map_EQ
++  : Joined<["-"], "fsanitize-prefix-map=">, Group<f_Group>,
++    Visibility<[ClangOption, CC1Option]>,
++    MetaVarName<"<old>=<new>">,
++    HelpText<"Remap file source paths in sanitizer metadata">;
+ defm force_dwarf_frame : BoolFOption<"force-dwarf-frame",
+   CodeGenOpts<"ForceDwarfFrameSection">, DefaultFalse,
+   PosFlag<SetTrue, [], [ClangOption, CC1Option],
+--- a/lib/CodeGen/BackendUtil.cpp
++++ b/lib/CodeGen/BackendUtil.cpp
+@@ -762,6 +762,8 @@
+         Opts.Recover = CodeGenOpts.SanitizeRecover.has(Mask);
+         Opts.UseAfterScope = CodeGenOpts.SanitizeAddressUseAfterScope;
+         Opts.UseAfterReturn = CodeGenOpts.getSanitizeAddressUseAfterReturn();
++        for (const auto &P : CodeGenOpts.SanitizePrefixMap)
++          Opts.PrefixMap.push_back({P.first, P.second});
+         MPM.addPass(AddressSanitizerPass(Opts, UseGlobalGC, UseOdrIndicator,
+                                          DestructorKind));
+       }
+--- a/lib/CodeGen/CGExpr.cpp
++++ b/lib/CodeGen/CGExpr.cpp
+@@ -3861,6 +3861,15 @@
+   if (PLoc.isValid()) {
+     StringRef FilenameString = PLoc.getFilename();
+ 
++    // Apply sanitize prefix map.
++    SmallString<256> RemappedName(FilenameString);
++    for (const auto &[Old, New] : CGM.getCodeGenOpts().SanitizePrefixMap) {
++      if (llvm::sys::path::replace_path_prefix(RemappedName, Old, New)) {
++        FilenameString = RemappedName;
++        break;
++      }
++    }
++
+     int PathComponentsToStrip =
+         CGM.getCodeGenOpts().EmitCheckPathComponentsToStrip;
+     if (PathComponentsToStrip < 0) {
+--- a/lib/Driver/ToolChains/Clang.cpp
++++ b/lib/Driver/ToolChains/Clang.cpp
+@@ -329,6 +329,21 @@
+   }
+ }
+ 
++/// Add a CC1 option to specify the sanitizer file path prefix map.
++static void addSanitizePrefixMapArg(const Driver &D, const ArgList &Args,
++                                    ArgStringList &CmdArgs) {
++  for (const Arg *A : Args.filtered(options::OPT_ffile_prefix_map_EQ,
++                                    options::OPT_fsanitize_prefix_map_EQ)) {
++    StringRef Map = A->getValue();
++    if (!Map.contains('='))
++      D.Diag(diag::err_drv_invalid_argument_to_option)
++          << Map << A->getOption().getName();
++    else
++      CmdArgs.push_back(Args.MakeArgString("-fsanitize-prefix-map=" + Map));
++    A->claim();
++  }
++}
++
+ /// Add -x lang to \p CmdArgs for \p Input.
+ static void addDashXForInput(const ArgList &Args, const InputInfo &Input,
+                              ArgStringList &CmdArgs) {
+@@ -1178,6 +1193,7 @@
+ 
+   addMacroPrefixMapArg(D, Args, CmdArgs);
+   addCoveragePrefixMapArg(D, Args, CmdArgs);
++  addSanitizePrefixMapArg(D, Args, CmdArgs);
+ 
+   Args.AddLastArg(CmdArgs, options::OPT_ffile_reproducible,
+                   options::OPT_fno_file_reproducible);
+--- a/lib/Frontend/CompilerInvocation.cpp
++++ b/lib/Frontend/CompilerInvocation.cpp
+@@ -1581,6 +1581,10 @@
+     GenerateArg(Consumer, OPT_fcoverage_prefix_map_EQ,
+                 Prefix.first + "=" + Prefix.second);
+ 
++  for (const auto &Prefix : Opts.SanitizePrefixMap)
++    GenerateArg(Consumer, OPT_fsanitize_prefix_map_EQ,
++                Prefix.first + "=" + Prefix.second);
++
+   if (Opts.NewStructPathTBAA)
+     GenerateArg(Consumer, OPT_new_struct_path_tbaa);
+ 
+@@ -1891,6 +1895,11 @@
+     Opts.CoveragePrefixMap.emplace_back(Split.first, Split.second);
+   }
+ 
++  for (const auto &Arg : Args.getAllArgValues(OPT_fsanitize_prefix_map_EQ)) {
++    auto Split = StringRef(Arg).split('=');
++    Opts.SanitizePrefixMap.emplace_back(Split.first, Split.second);
++  }
++
+   const llvm::Triple::ArchType DebugEntryValueArchs[] = {
+       llvm::Triple::x86,     llvm::Triple::x86_64, llvm::Triple::aarch64,
+       llvm::Triple::arm,     llvm::Triple::armeb,  llvm::Triple::mips,

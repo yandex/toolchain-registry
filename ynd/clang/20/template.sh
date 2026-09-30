@@ -37,6 +37,7 @@ clang-format-pr182791.patch
 asan_static.patch
 D21113-case-insesitive-include-paths.patch
 clang-statistics-used-bytes.patch
+PR-186908-backport-sanitize-prefix-map.patch
 {% endblock %}
 
 {% block common_patches %}
@@ -52,6 +53,7 @@ dont-remove-dbg-info.patch
 backport-objcopy-macho.patch
 fix-objcopy-elf.patch
 fix-wasm-frexp-libcall-signatures.patch
+05-PR-186908-backport-sanitize-prefix-map.patch
 {% endblock %}
 
 {% block patch %}
