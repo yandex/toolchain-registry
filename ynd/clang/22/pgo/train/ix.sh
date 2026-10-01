@@ -1,0 +1,16 @@
+{% extends '//clang/22/template.sh' %}
+
+{% block bld_tool %}
+clang/22/pgo/instrumented
+bin/llvm-profdata/22
+{% endblock %}
+
+{% block postinstall %}
+echo "Merge profiles"
+llvm-profdata merge --output=${out}/merged.prof $PROFILES_DIR/*.profraw
+rm -rf ${out}/bin ${out}/lib ${out}/share ${out}/include
+{% endblock %}
+
+{% block env %}
+export MERGED_PROFILE=${out}/merged.prof
+{% endblock %}
