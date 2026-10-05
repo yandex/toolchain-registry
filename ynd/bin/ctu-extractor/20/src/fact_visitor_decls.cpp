@@ -5,6 +5,7 @@
 #include "fact_visitor.h"
 
 #include <algorithm>
+#include <functional>
 #include <vector>
 
 #include "clang/AST/EvaluatedExprVisitor.h"
@@ -296,7 +297,8 @@ bool FactVisitor::VisitVarDecl(VarDecl *VD) {
   // so ordinary assignment handling never sees them. Record a concrete
   // target on the global's actual NamedGlobal storage for the indirect-call
   // resolver (for example, `static Hook hook = default_hook;`).
-  if (VD->getType()->isFunctionPointerType() && VD->hasInit()) {
+  if (VD->hasGlobalStorage() && VD->getType()->isFunctionPointerType() &&
+      VD->hasInit()) {
     facts_pb::Aml rhsAml;
     if (resolvePointerTargetAml(VD->getInit(), &rhsAml) && rhsAml.has_func_target()) {
       facts_pb::Fact targetFact;
@@ -374,6 +376,123 @@ bool FactVisitor::VisitVarDecl(VarDecl *VD) {
         targetFact.set_origin(originOf(sys));
         g_facts.push_back(std::move(targetFact));
       }
+    }
+  }
+
+  // Arrays of callback records are selected through a runtime index in many
+  // C-style dispatch tables (`table[i].callback(...)`). A dynamic subscript
+  // intentionally drops the array index from the AML field path, so collect
+  // every initializer for each callback field onto that generalized path.
+  // Also retain the index-qualified path for constant-subscript users.
+  if (VD->hasInit()) {
+    const ArrayType *topArray = Ctx.getAsArrayType(VD->getType());
+    InitListExpr *topInit = dyn_cast<InitListExpr>(
+        VD->getInit()->IgnoreParenImpCasts());
+    if (VD->hasGlobalStorage() && topArray &&
+        topArray->getElementType()->getAs<RecordType>() && topInit) {
+      auto emitTarget = [&](ArrayRef<unsigned> path, Expr *init) {
+        facts_pb::Aml rhsAml;
+        bool resolved = resolvePointerTargetAml(init, &rhsAml);
+        bool isNull = !resolved && init->isNullPointerConstant(
+            Ctx, Expr::NPC_ValueDependentIsNotNull) != Expr::NPCK_NotNull;
+        if (isNull) return;
+
+        facts_pb::Fact targetFact;
+        facts_pb::UnifyConstraint *uc = targetFact.mutable_unify_constraint();
+        facts_pb::Field *field = uc->mutable_a()->mutable_field();
+        *field->mutable_base()->mutable_named_global()->mutable_entity() = v->id();
+        for (unsigned index : path) field->add_field_path(index);
+        if (resolved) {
+          *uc->mutable_b() = std::move(rhsAml);
+        } else {
+          uc->mutable_b()->mutable_widening()->set_kind(
+              facts_pb::Widening::W_UNKNOWN_EVERYTHING);
+        }
+        uc->set_reason(facts_pb::UnifyConstraint::R_FUNC_PTR_STORE);
+        setLoc(uc->mutable_loc(), init->getExprLoc(), SM);
+        targetFact.set_origin(originOf(sys));
+        g_facts.push_back(std::move(targetFact));
+      };
+
+      std::function<void(QualType, Expr *, std::vector<unsigned>,
+                         std::vector<unsigned>)>
+          collectRecordTargets;
+      collectRecordTargets = [&](QualType type, Expr *init,
+                                 std::vector<unsigned> generalPath,
+                                 std::vector<unsigned> exactPath) {
+        init = init->IgnoreParenImpCasts();
+        auto *ILE = dyn_cast<InitListExpr>(init);
+        if (!ILE) return;
+        if (const ArrayType *AT = Ctx.getAsArrayType(type)) {
+          for (unsigned i = 0; i < ILE->getNumInits(); ++i) {
+            std::vector<unsigned> elementPath = exactPath;
+            elementPath.push_back(i);
+            collectRecordTargets(AT->getElementType(), ILE->getInit(i),
+                                 generalPath, std::move(elementPath));
+          }
+          return;
+        }
+        const RecordType *RT = type->getAs<RecordType>();
+        if (!RT) return;
+        if (const auto *CXXRD = dyn_cast<CXXRecordDecl>(RT->getDecl());
+            CXXRD && CXXRD->getNumBases() != 0)
+          return;
+        unsigned initIndex = 0;
+        for (const FieldDecl *FD : RT->getDecl()->fields()) {
+          if (initIndex >= ILE->getNumInits()) break;
+          Expr *fieldInit = ILE->getInit(initIndex++);
+          std::vector<unsigned> fieldGeneral = generalPath;
+          std::vector<unsigned> fieldExact = exactPath;
+          fieldGeneral.push_back(FD->getFieldIndex());
+          fieldExact.push_back(FD->getFieldIndex());
+          if (FD->getType()->isFunctionPointerType()) {
+            emitTarget(fieldGeneral, fieldInit);
+            if (fieldExact != fieldGeneral) emitTarget(fieldExact, fieldInit);
+          } else if (Ctx.getAsArrayType(FD->getType()) ||
+                     FD->getType()->getAs<RecordType>()) {
+            collectRecordTargets(FD->getType(), fieldInit,
+                                 std::move(fieldGeneral),
+                                 std::move(fieldExact));
+          }
+        }
+      };
+      collectRecordTargets(VD->getType(), topInit, {}, {});
+    }
+  }
+
+  // A multidimensional callback table is commonly selected with runtime
+  // indices and returned through a helper (for example Zstd's compressor
+  // strategy table). A non-constant subscript intentionally resolves to the
+  // whole named array region, so retain the union of every direct function
+  // target on that base as well as any exact one-dimensional entries above.
+  // Arrays are homogeneous: every callable leaf has the same function-pointer
+  // type, making this a sound bounded candidate set rather than a cross-field
+  // guess for arbitrary records.
+  if (VD->hasInit()) {
+    const ArrayType *AT = Ctx.getAsArrayType(VD->getType());
+    InitListExpr *ILE = dyn_cast<InitListExpr>(
+        VD->getInit()->IgnoreParenImpCasts());
+    if (AT && Ctx.getAsArrayType(AT->getElementType()) && ILE) {
+      std::function<void(Expr *)> collectTargets = [&](Expr *init) {
+        init = init->IgnoreParenImpCasts();
+        if (auto *nested = dyn_cast<InitListExpr>(init)) {
+          for (Expr *child : nested->inits()) collectTargets(child);
+          return;
+        }
+        facts_pb::Aml rhsAml;
+        if (!resolvePointerTargetAml(init, &rhsAml) ||
+            !rhsAml.has_func_target())
+          return;
+        facts_pb::Fact targetFact;
+        facts_pb::UnifyConstraint *uc = targetFact.mutable_unify_constraint();
+        *uc->mutable_a()->mutable_named_global()->mutable_entity() = v->id();
+        *uc->mutable_b() = std::move(rhsAml);
+        uc->set_reason(facts_pb::UnifyConstraint::R_FUNC_PTR_STORE);
+        setLoc(uc->mutable_loc(), init->getExprLoc(), SM);
+        targetFact.set_origin(originOf(sys));
+        g_facts.push_back(std::move(targetFact));
+      };
+      collectTargets(ILE);
     }
   }
   g_facts.push_back(std::move(fact));
@@ -507,6 +626,12 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
   f->set_is_template_specialization(FD->isTemplateInstantiation() || FD->getTemplatedKind() == FunctionDecl::TK_MemberSpecialization);
   f->set_is_constructor(isa<CXXConstructorDecl>(FD));
   f->set_is_destructor(isa<CXXDestructorDecl>(FD));
+  f->set_has_memory_effect_attribute_identity(true);
+  f->set_has_const_attribute(FD->hasAttr<ConstAttr>());
+  f->set_has_pure_attribute(FD->hasAttr<PureAttr>());
+  f->set_has_complete_member_function_identity(true);
+  f->set_is_nonstatic_member_function(
+      isa<CXXMethodDecl>(FD) && !cast<CXXMethodDecl>(FD)->isStatic());
   if (auto *MD = dyn_cast<CXXMethodDecl>(FD)) {
     if (MD->isPureVirtual()) f->set_virtuality(facts_pb::FuncDecl::V_PURE);
     else if (MD->isVirtual()) f->set_virtuality(facts_pb::FuncDecl::V_VIRTUAL);
@@ -554,11 +679,14 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     nodeCounter_ = 0;
     localIds_.clear();
     escapedLocals_.clear();
+    localEscapeFullExpr_.clear();
     localAccessFactIdx_.clear();
     unifyClassIds_.clear();
     returnClassIds_.clear();
     nextUnifyClassId_ = 0;
     pendingCallSiteReturnClassId_.clear();
+    callResultClassIds_.clear();
+    constructionReceivers_.clear();
     callSiteNodes_.clear();
     addrTakenTo_.clear();
     addrTakenAmbiguousPtrs_.clear();
@@ -577,27 +705,122 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     // collide with a real local variable's id in the same function.
     nextTempLocalId_ = 0x80000000u;
     allocIdCounter_ = 0;
+    allocationIds_.clear();
     // A constructor's member-initializer-list (base and member
     // initializers, user-written OR implicit) is stored separately from
     // getBody() and would otherwise never be visited (T0.6) — each
     // initializer's expression is its own full-expression.
-    if (auto *CD = dyn_cast<CXXConstructorDecl>(FD))
-      for (CXXCtorInitializer *Init : CD->inits())
-        if (Expr *IE = Init->getInit())
+    if (auto *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+      for (CXXCtorInitializer *Init : CD->inits()) {
+        if (Expr *IE = Init->getInit()) {
+          facts_pb::Aml thisObject;
+          thisObject.mutable_param_region()->set_param_index(
+              currentFunctionParamCount_);
+          thisObject.mutable_param_region()->set_deref_depth(1);
+
+          if (CXXConstructExpr *construction = directConstruction(IE)) {
+            facts_pb::Aml receiver = thisObject;
+            if (Init->isMemberInitializer()) {
+              facts_pb::Field *field = receiver.mutable_field();
+              *field->mutable_base() = thisObject;
+              field->add_field_path(Init->getMember()->getFieldIndex());
+            }
+            constructionReceivers_[construction] = std::move(receiver);
+          }
+
+          // A pointer/reference member initializer copies a receiver value
+          // into the constructed object just like an assignment in the
+          // constructor body. Keep this as receiver-only value flow; the
+          // analyzer remaps this->field and parameter sources through each
+          // direct constructor call site.
+          if (Init->isMemberInitializer()) {
+            facts_pb::Aml destination;
+            facts_pb::Field *field = destination.mutable_field();
+            *field->mutable_base() = thisObject;
+            field->add_field_path(Init->getMember()->getFieldIndex());
+            emitReceiverTypeStore(destination, Init->getMember()->getType(),
+                                  IE, fnId);
+          }
+
+          // A function-pointer member initialized by a constructor is a
+          // concrete callback store just like `object.callback = target` in
+          // the constructor body. Preserve the slot in the constructor's
+          // `this` vocabulary; the analyzer remaps it through each constructor
+          // call before binding a later member invocation's receiver.
+          if (Init->isMemberInitializer() &&
+              Init->getMember()->getType()->isFunctionPointerType()) {
+            facts_pb::Aml rhs;
+            bool resolved = resolvePointerTargetAml(IE, &rhs);
+            bool isNull = !resolved &&
+                IE->isNullPointerConstant(
+                    Ctx, Expr::NPC_ValueDependentIsNotNull) !=
+                    Expr::NPCK_NotNull;
+            if (!isNull) {
+              facts_pb::Fact storeFact;
+              facts_pb::UnifyConstraint *uc =
+                  storeFact.mutable_unify_constraint();
+              *uc->mutable_function() = fnId;
+              facts_pb::Field *field = uc->mutable_a()->mutable_field();
+              *field->mutable_base() = thisObject;
+              field->add_field_path(Init->getMember()->getFieldIndex());
+              if (resolved) {
+                *uc->mutable_b() = std::move(rhs);
+              } else {
+                uc->mutable_b()->mutable_widening()->set_kind(
+                    facts_pb::Widening::W_UNKNOWN_EVERYTHING);
+              }
+              uc->set_reason(facts_pb::UnifyConstraint::R_FUNC_PTR_STORE);
+              setLoc(uc->mutable_loc(), IE->getExprLoc(), SM);
+              storeFact.set_origin(
+                  originOf(isSystemLoc(IE->getExprLoc(), SM)));
+              g_facts.push_back(std::move(storeFact));
+            }
+          }
+
+          // A reference member is an alias, not a new object. Preserve that
+          // binding so callback values forwarded through tuple/wrapper
+          // constructors can reach later indirect calls on the same object.
+          if (Init->isMemberInitializer() &&
+              Init->getMember()->getType()->isReferenceType()) {
+            facts_pb::Aml rhs;
+            if (computeNamedVarAml(IE, &rhs) ||
+                resolvePointerTargetAml(IE, &rhs)) {
+              facts_pb::Fact aliasFact;
+              facts_pb::UnifyConstraint *uc =
+                  aliasFact.mutable_unify_constraint();
+              *uc->mutable_function() = fnId;
+              facts_pb::Field *field = uc->mutable_a()->mutable_field();
+              *field->mutable_base() = thisObject;
+              field->add_field_path(Init->getMember()->getFieldIndex());
+              *uc->mutable_b() = std::move(rhs);
+              uc->set_reason(facts_pb::UnifyConstraint::R_REFERENCE_ALIAS);
+              setLoc(uc->mutable_loc(), IE->getExprLoc(), SM);
+              aliasFact.set_origin(originOf(isSystemLoc(IE->getExprLoc(), SM)));
+              g_facts.push_back(std::move(aliasFact));
+            }
+          }
           buildNode(IE, fnId, ++fullExprCounter_, /*writeCtx=*/false);
+        }
+      }
+    }
     emitFullExprs(FD->getBody(), fnId);
     emitControlFlow(FD, fnId);
     currentFunctionDecl_ = nullptr;
 
-    // Escape can be discovered anywhere in the function, possibly after
-    // an earlier access to the same local was already emitted (escaped
-    // defaults to false) — fix those up now that the whole function has
-    // been scanned. Indices into g_facts stay valid across std::vector
-    // growth (we only ever append, never erase/reorder).
+    // Escape can be discovered anywhere in the function. Now that the whole
+    // body has been scanned, mark only accesses in later full-expressions:
+    // hidden global state cannot already point at a local first exposed by
+    // the current expression, whose direct reachability is represented by
+    // the call's ParamRegion effects. Indices into g_facts stay valid across
+    // std::vector growth (we only ever append, never erase/reorder).
     for (const VarDecl *VD : escapedLocals_) {
-      for (size_t idx : localAccessFactIdx_[VD])
-        if (facts_pb::Local *L = rootLocalOf(g_facts[idx].mutable_access()->mutable_aml()))
+      uint64_t escapeFullExpr = localEscapeFullExpr_.lookup(VD);
+      for (size_t idx : localAccessFactIdx_[VD]) {
+        facts_pb::Access *access = g_facts[idx].mutable_access();
+        if (access->full_expr_id() <= escapeFullExpr) continue;
+        if (facts_pb::Local *L = rootLocalOf(access->mutable_aml()))
           L->set_escaped(true);
+      }
       // A local object that has its address taken or is reference-bound
       // IS potentially reachable from outside the function, so its
       // Local Aml is already marked escaped above (mayOverlap: escaped

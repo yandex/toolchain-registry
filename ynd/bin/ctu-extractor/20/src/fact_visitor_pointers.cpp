@@ -17,9 +17,10 @@ static uint64_t syntheticGlobalId(llvm::StringRef name) {
 // "__synthetic_errno_buf" — see analyzer/libc_stubs.go's synthErrnoBuf.
 static constexpr const char *kSynthErrnoBuf = "__synthetic_errno_buf";
 
-// Pointer arithmetic may leave the particular field/array element used to
-// form the pointer. Retain only the enclosing object/region; keeping a Field
-// path here would incorrectly prove `&array[0] + 1` disjoint from array[1].
+// Pointer arithmetic on an address formed from a subobject may leave that
+// particular field/array element. Retain only the enclosing object/region;
+// keeping a Field path here would incorrectly prove `&array[0] + 1` disjoint
+// from array[1].
 static void dropFieldPrecision(facts_pb::Aml *aml) {
   while (aml->has_field()) {
     facts_pb::Aml base = aml->field().base();
@@ -27,9 +28,75 @@ static void dropFieldPrecision(facts_pb::Aml *aml) {
   }
 }
 
+// A pointer-valued glvalue loads a pointer from storage: `object.end`,
+// `table[index]`, or a local pointer variable. A Field AML resolved from such
+// an expression describes the loaded pointer's pointee abstraction, not the
+// address of the field/element that stores the pointer. Pointer arithmetic
+// must therefore retain that Field identity. In contrast, `&object.field`
+// and an array-to-pointer decay are prvalues after stripping casts and still
+// need dropFieldPrecision above.
+static bool pointerValueLoadedFromStorage(Expr *expr) {
+  expr = expr->IgnoreParenImpCasts();
+  while (auto *cast = dyn_cast<ExplicitCastExpr>(expr))
+    expr = cast->getSubExpr()->IgnoreParenImpCasts();
+  return expr->isGLValue() && expr->getType()->isPointerType();
+}
+
+// True only when an object expression denotes storage rooted in a temporary
+// whose lifetime is owned by the current full-expression. Besides a direct
+// prvalue (`make().f()`), retain that proof through dot-access to a real
+// subobject (`make().field.f()`). Do not follow arrows or reference-valued
+// fields: those designate separately selected storage.
+static bool isFreshTemporaryObjectStorage(Expr *expr) {
+  if (!expr) return false;
+
+  bool materialized = false;
+  Expr *current = expr;
+  while (current) {
+    if (auto *EWC = dyn_cast<ExprWithCleanups>(current)) {
+      current = EWC->getSubExpr();
+      continue;
+    }
+    if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(current)) {
+      materialized = true;
+      current = MTE->getSubExpr();
+      continue;
+    }
+    if (auto *BTE = dyn_cast<CXXBindTemporaryExpr>(current)) {
+      materialized = true;
+      current = BTE->getSubExpr();
+      continue;
+    }
+
+    current = current->IgnoreParenImpCasts();
+    if (auto *ME = dyn_cast<MemberExpr>(current)) {
+      if (ME->isArrow()) return false;
+      auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
+      if (!FD || FD->getType()->isReferenceType()) return false;
+      current = ME->getBase();
+      continue;
+    }
+    break;
+  }
+
+  return materialized || (current && current->isPRValue());
+}
+
 uint32_t FactVisitor::getOrAssignUnifyClassId(const VarDecl *VD) {
   auto ins = unifyClassIds_.try_emplace(VD, nextUnifyClassId_);
   if (ins.second) ++nextUnifyClassId_;
+  return ins.first->second;
+}
+
+uint32_t FactVisitor::getOrAssignCallResultClassId(const Expr *E) {
+  auto ins = callResultClassIds_.try_emplace(E, nextUnifyClassId_);
+  if (ins.second) ++nextUnifyClassId_;
+  return ins.first->second;
+}
+
+uint32_t FactVisitor::getOrAssignAllocationId(const Expr *E) {
+  auto ins = allocationIds_.try_emplace(E, allocIdCounter_);
+  if (ins.second) ++allocIdCounter_;
   return ins.first->second;
 }
 
@@ -151,6 +218,14 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
   // what the pointer points to, just the type through which it's viewed.
   while (auto *CE = dyn_cast<ExplicitCastExpr>(E))
     E = CE->getSubExpr()->IgnoreParenImpCasts();
+  if (auto *BO = dyn_cast<BinaryOperator>(E);
+      BO && (BO->getOpcode() == BO_PtrMemD ||
+             BO->getOpcode() == BO_PtrMemI) &&
+      BO->getRHS()->getType()->isMemberFunctionPointerType()) {
+    // `(object.*method)` and `(pointer->*method)` bind a receiver but retain
+    // the callable identity carried by the member-function pointer RHS.
+    return resolvePointerTargetAml(BO->getRHS(), aml);
+  }
   if (auto *MCE = dyn_cast<CXXMemberCallExpr>(E)) {
     if (auto *conversion = dyn_cast_or_null<CXXConversionDecl>(MCE->getDirectCallee())) {
       if (conversion->getConversionType()->isFunctionPointerType()) {
@@ -184,14 +259,16 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
                  (BO->getOpcode() == BO_Add && BO->getRHS()->getType()->isPointerType()
                       ? BO->getRHS() : nullptr);
     if (base && resolvePointerTargetAml(base, aml)) {
-      dropFieldPrecision(aml);
+      if (!pointerValueLoadedFromStorage(base))
+        dropFieldPrecision(aml);
       return true;
     }
   }
   if (auto *UO = dyn_cast<UnaryOperator>(E);
       UO && E->getType()->isPointerType() && UO->isIncrementDecrementOp()) {
     if (resolvePointerTargetAml(UO->getSubExpr(), aml)) {
-      dropFieldPrecision(aml);
+      if (!pointerValueLoadedFromStorage(UO->getSubExpr()))
+        dropFieldPrecision(aml);
       return true;
     }
   }
@@ -218,6 +295,11 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
     Sub = Sub->IgnoreParenImpCasts();
     if (auto *DRE = dyn_cast<DeclRefExpr>(Sub))
       if (auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl())) {
+        // Invoking a pointer to a virtual member still performs virtual
+        // dispatch. A plain FuncTarget cannot encode that dispatch set, so
+        // keep it unresolved rather than collapsing it to the base method.
+        if (auto *MD = dyn_cast<CXXMethodDecl>(FD); MD && MD->isVirtual())
+          return false;
         computeFuncEntityId(FD, Ctx, SM, aml->mutable_func_target()->mutable_function_id());
         return true;
       }
@@ -226,7 +308,18 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
   if (auto *UO = dyn_cast<UnaryOperator>(E)) {
     if (UO->getOpcode() == UO_AddrOf) {
       if (tryFuncTarget(UO->getSubExpr())) return true;
-      return computeNamedVarAml(UO->getSubExpr()->IgnoreParenImpCasts(), aml);
+      Expr *addressed = UO->getSubExpr()->IgnoreParenImpCasts();
+      if (computeNamedVarAml(addressed, aml)) return true;
+      // A call returning T&/T&& is an lvalue/xvalue designating the object
+      // selected by the callee. Taking its address therefore preserves the
+      // callee's existing return-class identity. This covers common library
+      // APIs such as &container[index], &locale.category(), and &front().
+      // Restrict the fallback to glvalue calls: taking the address of an
+      // ordinary prvalue is ill-formed, and must never manufacture pointee
+      // provenance from an unrelated call result.
+      if (isa<CallExpr>(addressed) && addressed->isGLValue())
+        return resolvePointerTargetAml(addressed, aml);
+      return false;
     }
     // `(*callback)(args)` and `callback(args)` invoke the same function
     // pointer value.  Clang represents the explicit spelling with a
@@ -273,7 +366,11 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
     // allocation and from all concrete program locations.
     if (FunctionDecl *FD = CE->getDirectCallee()) {
       if (isKnownAllocator(FD)) {
-        aml->mutable_allocation_id()->set_id(allocIdCounter_++);
+        facts_pb::AllocationId *allocation = aml->mutable_allocation_id();
+        allocation->set_id(getOrAssignAllocationId(CE));
+        if (currentFunctionDecl_)
+          computeFuncEntityId(currentFunctionDecl_, Ctx, SM,
+                              allocation->mutable_function());
         return true;
       }
       // The errno accessor: its pointee is the synthetic NamedGlobal
@@ -283,12 +380,15 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
             syntheticGlobalId(kSynthErrnoBuf));
         return true;
       }
-      // Non-allocator direct call returning a pointer: emit the callee's
-      // return-value UnifyClass.  The cross-function pass overrides its
-      // unifier entry with the remapped concrete target.
-      facts_pb::EntityId calleeEid;
-      computeFuncEntityId(FD, Ctx, SM, &calleeEid);
-      aml->mutable_unify_class()->set_class_id(getOrAssignReturnClassId(calleeEid));
+      // A directly-consumed return value has no destination VarDecl to key
+      // the existing cross-function machinery. Give each CallExpr its own
+      // caller-local class and stamp that same class on the CallSite. Return
+      // propagation then connects this particular result to the callee's
+      // returned pointer/reference without merging separate calls to the
+      // same forwarding helper.
+      uint32_t returnClassId = getOrAssignCallResultClassId(CE);
+      aml->mutable_unify_class()->set_class_id(returnClassId);
+      pendingCallSiteReturnClassId_[CE] = returnClassId;
       return true;
     }
   } else if (auto *CCE = dyn_cast<CXXConstructExpr>(E)) {
@@ -299,7 +399,11 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
   } else if (auto *NE = dyn_cast<CXXNewExpr>(E)) {
     // Non-placement operator new: the allocator is implicit (no
     // CallExpr), but the returned pointer is still a fresh allocation.
-    aml->mutable_allocation_id()->set_id(allocIdCounter_++);
+    facts_pb::AllocationId *allocation = aml->mutable_allocation_id();
+    allocation->set_id(getOrAssignAllocationId(NE));
+    if (currentFunctionDecl_)
+      computeFuncEntityId(currentFunctionDecl_, Ctx, SM,
+                          allocation->mutable_function());
     return true;
   } else if (auto *CO = dyn_cast<ConditionalOperator>(E)) {
     // Ternary ?: producing a pointer value.  Try both branches — if they
@@ -319,21 +423,31 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
       return true;
     }
   } else if (auto *ME = dyn_cast<MemberExpr>(E)) {
-    // `expr.field` or `this->field`: pointer to a struct/class field.
-    // For arrow (`->`), ONLY handle `this->field` — the `this` pointer
-    // is always the current object.  Do NOT resolve through unknown
-    // pointer parameters/fields (e.g. `w->p->a`) — the points-to set
-    // is unknown, so field-sensitivity must not apply.
+    // `expr.field`, `this->field`, or `trackedPointer->field`: a pointer
+    // value loaded from a struct/class field. Keep the base symbolic when it
+    // is a local pointer UnifyClass; canonicalAmls will later distribute the
+    // field over every concrete pointee retained for that class. This covers
+    // common aliases such as `T *tmp = (T *)arg->storage; tmp->buffer` without
+    // claiming that the local pointer has a single target.
     auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
     if (!FD) return false;
     facts_pb::Aml baseAml;
     if (ME->isArrow()) {
       unsigned index, depth;
-      // Only `this->field`: ParamRegion with depth 0 = `this`.
-      if (!paramRegionOf(ME->getBase(), index, depth) || depth != 0)
-        return false;
-      baseAml.mutable_param_region()->set_param_index(index);
-      baseAml.mutable_param_region()->set_deref_depth(1); // deref this → what it points to
+      if (auto *VD = trackablePointerVarOf(ME->getBase())) {
+        baseAml.mutable_unify_class()->set_class_id(getOrAssignUnifyClassId(VD));
+      } else if (paramRegionOf(ME->getBase(), index, depth)) {
+        // `->` dereferences the base one more time than paramRegionOf has
+        // accounted for.
+        baseAml.mutable_param_region()->set_param_index(index);
+        baseAml.mutable_param_region()->set_deref_depth(depth + 1);
+      } else {
+        // Preserve nested pointer fields such as `this->callbacks->read`.
+        // The recursively resolved base remains symbolic (and therefore
+        // widens normally when its pointee is unknown); appending a field
+        // path does not select a concrete target prematurely.
+        if (!resolvePointerTargetAml(ME->getBase(), &baseAml)) return false;
+      }
     } else if (!computeNamedVarAml(ME->getBase()->IgnoreParenImpCasts(), &baseAml)) {
       unsigned idx, dep;
       if (paramRegionOf(ME->getBase(), idx, dep)) {
@@ -353,6 +467,15 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
     else { *aml->mutable_field()->mutable_base() = baseAml; }
     aml->mutable_field()->add_field_path(FD->getFieldIndex());
     return true;
+  } else if (isa<ArraySubscriptExpr>(E)) {
+    // A pointer-valued array element denotes the element's storage, just as
+    // a pointer-valued MemberExpr denotes its field storage above. Reuse the
+    // named-variable resolver so constant indices remain field-sensitive and
+    // runtime indices conservatively select the whole array region. This is
+    // what lets a helper returning `callbacks[row][column]` carry the table's
+    // concrete targets into its return class instead of falling back to every
+    // address-taken function with the same signature.
+    return computeNamedVarAml(E, aml);
   }
   unsigned index, depth;
   if (paramRegionOf(E, index, depth)) {
@@ -585,15 +708,103 @@ void FactVisitor::handlePointerAssignment(VarDecl *VD, Expr *RHS, const facts_pb
   while (auto *EC = dyn_cast<ExplicitCastExpr>(CEcand))
     CEcand = EC->getSubExpr()->IgnoreParenImpCasts();
   if (auto *CE = dyn_cast<CallExpr>(CEcand)) {
-    if (const FunctionDecl *CFD = CE->getDirectCallee()) {
-      FunctionDecl *FD = const_cast<FunctionDecl *>(CFD);
-      if (!isKnownAllocator(FD))
-        pendingCallSiteReturnClassId_[CE] = vdClassId;
-    }
+    FunctionDecl *FD = const_cast<FunctionDecl *>(CE->getDirectCallee());
+    if (!FD || !isKnownAllocator(FD))
+      pendingCallSiteReturnClassId_[CE] = vdClassId;
   }
 }
 
+void FactVisitor::handleReceiverTypeStore(Expr *LHS, Expr *RHS,
+                                          const facts_pb::EntityId &fn) {
+  if (!LHS || !RHS || trackablePointerVarOf(LHS)) return;
+  facts_pb::Aml destination;
+  if (!computeNamedVarAml(LHS->IgnoreParenImpCasts(), &destination)) return;
+  emitReceiverTypeStore(destination, LHS->getType(), RHS, fn);
+}
+
+void FactVisitor::emitReceiverTypeStore(const facts_pb::Aml &destination,
+                                        QualType storedType, Expr *RHS,
+                                        const facts_pb::EntityId &fn) {
+  if (!RHS) return;
+  if (!storedType->isPointerType() && !storedType->isReferenceType()) return;
+  QualType objectType = storedType->isPointerType()
+      ? storedType->getPointeeType() : storedType.getNonReferenceType();
+  CXXRecordDecl *RD = objectType->getAsCXXRecordDecl();
+  RD = RD ? RD->getDefinition() : nullptr;
+  if (!RD || !RD->isPolymorphic()) return;
+
+  // Preserve a bounded union for conditional stores just as
+  // handlePointerAssignment does for pointer locals. Collapsing
+  // `field = cond ? &a : &b` to unknown loses both exact dynamic classes
+  // and makes every constructed sibling override look reachable later.
+  Expr *conditionalRHS = RHS->IgnoreParenImpCasts();
+  while (auto *EC = dyn_cast<ExplicitCastExpr>(conditionalRHS))
+    conditionalRHS = EC->getSubExpr()->IgnoreParenImpCasts();
+  if (auto *CO = dyn_cast<ConditionalOperator>(conditionalRHS);
+      CO && CO->getType()->isPointerType()) {
+    emitReceiverTypeStore(destination, storedType, CO->getTrueExpr(), fn);
+    emitReceiverTypeStore(destination, storedType, CO->getFalseExpr(), fn);
+    return;
+  }
+  if (RHS->isNullPointerConstant(Ctx, Expr::NPC_ValueDependentIsNotNull) !=
+      Expr::NPCK_NotNull)
+    return;
+
+  facts_pb::Aml source;
+  bool resolved = computeReceiverAml(RHS, true, &source);
+  if (resolved) emitReceiverTypeSeed(fn, source, RHS);
+
+  facts_pb::Fact fact;
+  facts_pb::UnifyConstraint *uc = fact.mutable_unify_constraint();
+  *uc->mutable_function() = fn;
+  *uc->mutable_a() = std::move(destination);
+  if (resolved) {
+    *uc->mutable_b() = std::move(source);
+  } else {
+    uc->mutable_b()->mutable_widening()->set_kind(
+        facts_pb::Widening::W_UNKNOWN_EVERYTHING);
+  }
+  uc->set_reason(facts_pb::UnifyConstraint::R_RECEIVER_TYPE_STORE);
+  setLoc(uc->mutable_loc(), RHS->getExprLoc(), SM);
+  fact.set_origin(originOf(isSystemLoc(RHS->getExprLoc(), SM)));
+  g_facts.push_back(std::move(fact));
+}
+
 bool FactVisitor::computeReceiverAml(Expr *E, bool isArrow, facts_pb::Aml *aml) {
+  if (!E) return false;
+  Expr *source = E;
+  for (;;) {
+    source = source->IgnoreParenImpCasts();
+    if (auto *EWC = dyn_cast<ExprWithCleanups>(source)) {
+      source = EWC->getSubExpr();
+      continue;
+    }
+    if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(source)) {
+      source = MTE->getSubExpr();
+      continue;
+    }
+    if (auto *BTE = dyn_cast<CXXBindTemporaryExpr>(source)) {
+      source = BTE->getSubExpr();
+      continue;
+    }
+    if (auto *cast = dyn_cast<ExplicitCastExpr>(source)) {
+      source = cast->getSubExpr();
+      continue;
+    }
+    break;
+  }
+
+  // A directly-consumed call result has no VarDecl to key the existing
+  // unification machinery. Give this CallExpr a synthetic caller-local
+  // class and stamp the same class on the inner CallSite. Return propagation
+  // then connects the callee's returned object/pointee to this outer receiver.
+  if (auto *call = dyn_cast<CallExpr>(source)) {
+    uint32_t id = getOrAssignCallResultClassId(call);
+    aml->mutable_unify_class()->set_class_id(id);
+    pendingCallSiteReturnClassId_[call] = id;
+    return true;
+  }
+
   E = E->IgnoreParenImpCasts();
   if (isArrow) return resolvePointerTargetAml(E, aml);
   return computeNamedVarAml(E, aml);
@@ -671,17 +882,46 @@ void FactVisitor::emitCallSite(FunctionDecl *calleeFD, bool indirect,
   // position) would otherwise collide with the reserved slot if just
   // appended at the end instead of inserted.
   std::vector<facts_pb::Aml> resolvedArgs;
+  std::vector<bool> argMayReachCallerStorage;
   resolvedArgs.reserve(args.size() + 1);
-  for (Expr *arg : args) {
-	// Passing a local pointer variable exposes the pointer's value to the
-	// callee. If that pointer was initialized from &local, the deferred
-	// addrTakenTo_ closure in VisitFunctionDecl will consequently retain
-	// local's escaped bit. Without this, p = &local; take_ptr(p) was
-	// incorrectly treated as though p never escaped.
-	if (auto *pointerLocal = trackablePointerVarOf(arg))
-	  escapedLocals_.insert(pointerLocal);
+  argMayReachCallerStorage.reserve(args.size() + 1);
+  FunctionDecl *parameterOwner = calleeFD ? calleeFD : methodForReceiver;
+  for (size_t argIndex = 0; argIndex < args.size(); ++argIndex) {
+    Expr *arg = args[argIndex];
+    QualType parameterType = arg->getType();
+    if (parameterOwner && argIndex < parameterOwner->getNumParams())
+      parameterType = parameterOwner->getParamDecl(argIndex)->getType();
+    // A copied scalar/enum cannot give the callee access to its source
+    // object. Records stay conservative because they can contain pointers.
+    bool mayReachCallerStorage = parameterType->isPointerType() ||
+        parameterType->isReferenceType() || parameterType->isRecordType() ||
+        parameterType->isArrayType() || parameterType->isMemberPointerType();
+    // Passing a local pointer variable exposes the pointer's value to the
+    // callee. If that pointer was initialized from &local, the deferred
+    // addrTakenTo_ closure in VisitFunctionDecl will consequently retain
+    // local's escaped bit. Without this, p = &local; take_ptr(p) was
+    // incorrectly treated as though p never escaped.
+    if (auto *pointerLocal = trackablePointerVarOf(arg))
+      markEscapedLocal(pointerLocal, feid);
     facts_pb::Aml a;
-    if (!resolvePointerTargetAml(arg, &a)) {
+    // A prvalue bound to a reference parameter denotes fresh temporary
+    // storage, not an arbitrary global. The old generic fallback mapped
+    // computed temporaries (especially call results) to W_UNKNOWN_GLOBAL;
+    // remapping a callee's precise ParamRegion effects through that value
+    // then manufactured conflicts with unrelated globals. Keep it as an
+    // escaped Local: it is provably distinct from every named object, while
+    // still conservatively overlapping opaque/widened effects because the
+    // callee receives its address and could publish it during this call.
+    bool freshReferenceTemporary = parameterOwner &&
+        argIndex < parameterOwner->getNumParams() &&
+        parameterOwner->getParamDecl(argIndex)->getType()->isReferenceType() &&
+        !isPointerType(arg->getType()) &&
+        isFreshTemporaryObjectStorage(arg);
+    if (freshReferenceTemporary) {
+      facts_pb::Local *local = a.mutable_local();
+      local->set_local_id(nextTempLocalId_++);
+      local->set_escaped(true);
+    } else if (!resolvePointerTargetAml(arg, &a)) {
       // Try computeNamedVarAml before falling back to Widening — this
       // handles named variables (globals, locals, fields) passed as
       // arguments, e.g. `strchr(buf, 'c')` where buf is a local array
@@ -724,30 +964,57 @@ void FactVisitor::emitCallSite(FunctionDecl *calleeFD, bool indirect,
     }
     emitReceiverTypeSeed(fn, a, arg);
     resolvedArgs.push_back(std::move(a));
+    argMayReachCallerStorage.push_back(mayReachCallerStorage);
   }
-  if (methodForReceiver && (receiverExpr || rawReceiver)) {
-    size_t slot = static_cast<size_t>(methodForReceiver->getNumParams());
+  if ((methodForReceiver || rawReceiver) && (receiverExpr || rawReceiver)) {
+    // An indirect pointer-to-member call has no MethodDecl at the call site,
+    // but its receiver still follows all explicit method arguments.
+    size_t slot = methodForReceiver
+        ? static_cast<size_t>(methodForReceiver->getNumParams())
+        : resolvedArgs.size();
+    cs->set_receiver_arg_index(static_cast<uint32_t>(slot));
+    cs->set_receiver_arg_index_set(true);
     while (resolvedArgs.size() < slot) {
       facts_pb::Aml pad;
       pad.mutable_widening()->set_kind(facts_pb::Widening::W_UNKNOWN_GLOBAL);
       resolvedArgs.push_back(std::move(pad));
     }
     facts_pb::Aml recv;
+    facts_pb::Aml typeFlowRecv;
     if (rawReceiver) {
       recv = *rawReceiver;
-    } else if (!computeReceiverAml(receiverExpr, receiverIsArrow, &recv)) {
+      typeFlowRecv = recv;
+    } else if (!computeReceiverAml(receiverExpr, receiverIsArrow, &typeFlowRecv)) {
       // An unrecognized receiver expression can never be a non-escaping
       // local of the caller — taking the address of a local is always
       // UO_AddrOf.  Use W_UNKNOWN_GLOBAL (narrower, sound).
-      recv.mutable_widening()->set_kind(facts_pb::Widening::W_UNKNOWN_GLOBAL);
+      typeFlowRecv.mutable_widening()->set_kind(
+          facts_pb::Widening::W_UNKNOWN_GLOBAL);
+    }
+    recv = typeFlowRecv;
+    // A dot-call on a prvalue operates on fresh temporary storage. Keep that
+    // concrete identity in args so the callee's `this` effects cannot alias
+    // unrelated globals. Arrow calls instead operate on the pointee selected
+    // by the pointer expression, so a prvalue pointer is not fresh storage.
+    if (receiverExpr && !receiverIsArrow &&
+        isFreshTemporaryObjectStorage(receiverExpr)) {
+      facts_pb::Local *local = recv.mutable_local();
+      local->set_local_id(nextTempLocalId_++);
+      local->set_escaped(true);
+      *cs->mutable_receiver_type_flow_arg() = typeFlowRecv;
     }
     if (receiverExpr)
-      emitReceiverTypeSeed(fn, recv, receiverExpr);
+      emitReceiverTypeSeed(fn, typeFlowRecv, receiverExpr);
     if (virtualMD)
-      *cs->mutable_virtual_receiver() = recv;
+      *cs->mutable_virtual_receiver() = typeFlowRecv;
     resolvedArgs.insert(resolvedArgs.begin() + slot, std::move(recv));
+    argMayReachCallerStorage.insert(argMayReachCallerStorage.begin() + slot,
+                                    true);
   }
   for (facts_pb::Aml &a : resolvedArgs) *cs->add_args() = std::move(a);
+  for (bool mayReach : argMayReachCallerStorage)
+    cs->add_arg_may_reach_caller_storage(mayReach);
+  cs->set_has_complete_arg_storage_reachability(true);
 
   cs->set_is_indirect(indirect);
   // For an indirect (non-virtual) call, resolve the callee expression's
@@ -770,9 +1037,46 @@ void FactVisitor::emitCallSite(FunctionDecl *calleeFD, bool indirect,
     // index reconstructs the same string from FuncDecl.ret_type + params.
     {
       QualType calleeType = calleeExpr->getType();
+      Expr *strippedCallee = calleeExpr->IgnoreParenImpCasts();
+      if (auto *BO = dyn_cast<BinaryOperator>(strippedCallee);
+          BO && (BO->getOpcode() == BO_PtrMemD ||
+                 BO->getOpcode() == BO_PtrMemI) &&
+          BO->getRHS()->getType()->isMemberFunctionPointerType()) {
+        calleeType = BO->getRHS()->getType();
+      }
+      cs->set_has_complete_indirect_callee_member_identity(true);
+      cs->set_indirect_callee_is_member_function(
+          calleeType->isMemberFunctionPointerType());
       if (auto *ptrTy = calleeType->getAs<clang::PointerType>())
         calleeType = ptrTy->getPointeeType();
-      cs->set_indirect_callee_type(typeToString(calleeType, Ctx));
+      if (auto *memberPtrTy = calleeType->getAs<clang::MemberPointerType>())
+        calleeType = memberPtrTy->getPointeeType();
+
+      if (!calleeType.isNull() && calleeType->isFunctionType()) {
+        uint64_t typeHashLo = 0, typeHashHi = 0;
+        typeFingerprint(calleeType, Ctx, &typeHashLo, &typeHashHi);
+        cs->set_indirect_callee_type_hash(typeHashLo);
+        cs->set_indirect_callee_type_hash_hi(typeHashHi);
+        cs->set_has_complete_indirect_callee_type_identity(true);
+      }
+
+      // FuncDecl signatures are stored as return type plus explicit parameter
+      // types. Build the call-site key the same way instead of printing the
+      // whole function type, which also includes qualifiers such as noexcept
+      // or a member function's trailing const and therefore cannot match the
+      // declaration-side index.
+      if (auto *funcTy = calleeType->getAs<clang::FunctionProtoType>()) {
+        std::string signature = typeToString(funcTy->getReturnType(), Ctx);
+        signature += " (";
+        for (unsigned i = 0; i < funcTy->getNumParams(); ++i) {
+          if (i != 0) signature += ", ";
+          signature += typeToString(funcTy->getParamType(i), Ctx);
+        }
+        signature += ")";
+        cs->set_indirect_callee_type(std::move(signature));
+      } else {
+        cs->set_indirect_callee_type(typeToString(calleeType, Ctx));
+      }
     }
   }
   if (virtualMD) {
@@ -932,11 +1236,26 @@ CXXRecordDecl *FactVisitor::exactDynamicClass(Expr *E) const {
     RD = RD->getDefinition();
     return RD && RD->isPolymorphic() ? RD : nullptr;
   };
+  auto finalPolymorphicPointee = [&](QualType T) -> CXXRecordDecl * {
+    if (T.isNull() || (!T->isPointerType() && !T->isReferenceType()))
+      return nullptr;
+    CXXRecordDecl *RD = polymorphicDefinition(T->getPointeeType());
+    return RD && RD->hasAttr<FinalAttr>() ? RD : nullptr;
+  };
   if (auto *EWC = dyn_cast<ExprWithCleanups>(E))
     E = EWC->getSubExpr();
   E = E->IgnoreParenImpCasts();
   while (auto *EC = dyn_cast<ExplicitCastExpr>(E))
     E = EC->getSubExpr()->IgnoreParenImpCasts();
+  // A pointer/reference normally carries only a static lower bound on the
+  // dynamic type. For a final class that lower bound is exact: no derived
+  // dynamic type can exist. This gives receiver flow a sound seed for final
+  // objects entering through parameters, fields, and factory returns instead
+  // of leaving those sites permanently at bottom. Explicit casts were peeled
+  // above, so a cast from Base* to Final* is deliberately not accepted as
+  // evidence about the underlying object.
+  if (CXXRecordDecl *RD = finalPolymorphicPointee(E->getType()))
+    return RD;
   if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
     return exactDynamicClass(MTE->getSubExpr());
   if (auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E))
@@ -960,6 +1279,11 @@ CXXRecordDecl *FactVisitor::exactDynamicClass(Expr *E) const {
       return nullptr;
     QualType T = Ctx.getBaseElementType(VD->getType());
     return polymorphicDefinition(T);
+  }
+  if (auto *CE = dyn_cast<CallExpr>(E)) {
+    QualType result = CE->getCallReturnType(Ctx);
+    if (!result->isPointerType() && !result->isReferenceType())
+      return polymorphicDefinition(Ctx.getBaseElementType(result));
   }
   if (auto *ME = dyn_cast<MemberExpr>(E)) {
     auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());

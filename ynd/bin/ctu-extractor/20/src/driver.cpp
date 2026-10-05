@@ -1,4 +1,4 @@
-// driver.cpp — System-Wide CTU Checker, fact extractor (schema v5, T0.1).
+// driver.cpp — System-Wide CTU Checker, fact extractor (schema v6, T0.1).
 //
 // A clean rewrite of the clang LibTooling extractor. Invoked as a compiler
 // replacement for one TU:
@@ -9,7 +9,7 @@
 // partial TU invalidates the whole-program result. --ctu-keep-going opts
 // into exit 0 with a partial blob (still BlobHeader.incomplete=true).
 //
-// It runs the clang frontend, emits schema-v5 facts (see schema/factspb/facts.proto),
+// It runs the clang frontend, emits schema-v6 facts (see schema/factspb/facts.proto),
 // and writes ONE deterministic, zstd-compressed `Blob` to the -o path. Facts
 // are collected in memory, then canonically sorted + deduped + serialized with
 // protobuf's deterministic option, so output is byte-identical run-to-run and
@@ -45,7 +45,7 @@
 #include "fact_visitor.h"
 #include "source_utils.h"
 
-static constexpr uint32_t kSchemaVersion = 5;
+static constexpr uint32_t kSchemaVersion = 6;
 static constexpr const char *kToolVersion = "swc-extractor/0.1";
 
 class FactConsumer : public ASTConsumer {

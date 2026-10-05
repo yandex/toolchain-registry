@@ -129,7 +129,8 @@ private:
   // could then write through that pointer) — globals don't need this, a
   // call can already plausibly touch any global regardless (see mayOverlap
   // in the Go checker).
-  void markEscapeIfLocal(Expr *E);
+  void markEscapeIfLocal(Expr *E, uint64_t fullExprId);
+  void markEscapedLocal(const VarDecl *VD, uint64_t fullExprId);
 
   // A local (never a parameter, never global/static) pointer variable whose
   // assignments we can observe within this one function — the scope of
@@ -168,6 +169,7 @@ private:
   // --- fact_visitor_pointers.cpp: pointer resolution / call-site emission
 
   uint32_t getOrAssignUnifyClassId(const VarDecl *VD);
+  uint32_t getOrAssignCallResultClassId(const Expr *E);
 
   // Returns a synthetic UnifyClass id representing a given function's
   // return value.  Used both by the callee's own R_RETURN (to name its
@@ -202,6 +204,11 @@ private:
   // (analyzer/libc_stubs.go's synthErrnoBuf), not a generic UnifyClass.
   static bool isErrnoLocation(FunctionDecl *FD);
 
+  // Returns a stable function-scoped identity for one allocator expression.
+  // resolvePointerTargetAml may visit the same AST node along several paths;
+  // memoization prevents one call site from acquiring several identities.
+  uint32_t getOrAssignAllocationId(const Expr *E);
+
   // What E denotes as a pointer VALUE's target (one level of indirection):
   // `&x` -> x's own Aml; a trackable local pointer -> its UnifyClass; a
   // pointer/reference PARAMETER -> ParamRegion one level deeper. Shared by
@@ -222,6 +229,10 @@ private:
   // resolved RHS unifies VD's class with it; unresolvable RHS taints via
   // Widening — the analyzer's union-find does the actual merging.
   void handlePointerAssignment(VarDecl *VD, Expr *RHS, const facts_pb::EntityId &fn);
+  void handleReceiverTypeStore(Expr *LHS, Expr *RHS, const facts_pb::EntityId &fn);
+  void emitReceiverTypeStore(const facts_pb::Aml &destination,
+                             QualType storedType, Expr *RHS,
+                             const facts_pb::EntityId &fn);
 
   // Resolves a member/operator() call's RECEIVER expression (the object the
   // call is invoked on) to what `this` equals inside the callee — the
@@ -233,6 +244,10 @@ private:
   // already the object — resolved directly via computeNamedVarAml, as if
   // an implicit `&receiver` had been taken.
   bool computeReceiverAml(Expr *E, bool isArrow, facts_pb::Aml *aml);
+
+  // Peel value-preserving cleanup/temporary wrappers and return the complete
+  // object construction at the root of an initializer, if any.
+  static CXXConstructExpr *directConstruction(Expr *E);
 
   // Emits a CallSite fact (W3 call graph). calleeFD is null for
   // indirect/virtual calls (is_indirect=true, callee left unresolved — the
@@ -247,9 +262,9 @@ private:
   // that actually exists across every merged blob.
   //
   // receiverExpr/receiverIsArrow/methodForReceiver are for a member call's
-  // implicit object argument (constructor receiver wiring is a separate,
-  // not-yet-done follow-up — still falls back to widening, sound, just not
-  // maximally precise yet). rawReceiver is an ALREADY-RESOLVED Aml used
+  // implicit object argument. Constructor and base/member subobject receivers
+  // are registered in constructionReceivers_ before their expressions are
+  // visited. rawReceiver is an ALREADY-RESOLVED Aml used
   // instead of resolving an expression — for a temporary's destructor call,
   // which has no natural "expression" for its own identity the way a
   // member-call receiver does (see the CXXBindTemporaryExpr case, which
@@ -282,9 +297,14 @@ private:
   llvm::DenseMap<const VarDecl *, uint32_t> localIds_;
   // Escape tracking (this function only; reset per function): locals whose
   // address was taken or that were reference-bound/passed-by-reference
-  // anywhere, and the g_facts indices of their already-emitted Access facts
-  // needing a retroactive escaped=true fixup (see VisitFunctionDecl).
+  // anywhere, and the g_facts indices used to mark accesses after the first
+  // exposing full-expression escaped=true (see VisitFunctionDecl).
   llvm::DenseSet<const VarDecl *> escapedLocals_;
+  // First full-expression after which the local can be reachable through
+  // hidden global state. Exposure during a call does not make the callee's
+  // pre-existing unknown globals alias the argument in that same expression;
+  // its ParamRegion effects model the argument itself.
+  llvm::DenseMap<const VarDecl *, uint64_t> localEscapeFullExpr_;
   llvm::DenseMap<const VarDecl *, std::vector<size_t>> localAccessFactIdx_;
   // Steensgaard-lite unification (this function only — see DESIGN.md §4;
   // no cross-function summary merging yet): per-function class ids for
@@ -310,6 +330,16 @@ private:
   // handlePointerAssignment when the RHS is a call, consumed (and erased)
   // in emitCallSite. Reset per function.
   llvm::DenseMap<const Expr *, uint32_t> pendingCallSiteReturnClassId_;
+  // Stable caller-side storage for a call result consumed directly as a
+  // member-call receiver (`factory()->f()` / `wrapper().f()`).  The inner
+  // CallSite carries the same id, allowing return-type flow to reach the
+  // outer virtual call without requiring an artificial source local.
+  llvm::DenseMap<const Expr *, uint32_t> callResultClassIds_;
+  // Exact caller-side identities for named objects and constructor
+  // subobjects. Populated before their initializer expression is walked so
+  // the CXXConstructExpr CallSite can pass the real receiver rather than an
+  // unrelated synthetic temporary.
+  llvm::DenseMap<const CXXConstructExpr *, facts_pb::Aml> constructionReceivers_;
   // Source call expression -> (full-expression id, expression node id).
   // Populated by emitCallSite while the ordinary AST walk runs, then consumed
   // by emitControlFlow to attach resolved calls to their Clang CFG blocks.
@@ -333,6 +363,7 @@ private:
   // deterministic, function-scoped id — the Go analyzer's AllocationId.
   // Reset per function alongside the other per-function state above.
   uint32_t allocIdCounter_ = 0;
+  llvm::DenseMap<const Expr *, uint32_t> allocationIds_;
   // Deferred escape tracking: maps a local whose address was taken
   // (&local) to the local pointer variable that received it (p = &local).
   // At function end, the transitive escape closure is computed: if the

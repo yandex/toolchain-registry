@@ -1,4 +1,4 @@
-// facts.proto — System-Wide CTU Checker, fact schema v5.
+// facts.proto — System-Wide CTU Checker, fact schema v6.
 //
 // SINGLE SOURCE OF TRUTH. The C++ extractor (writer) and the Go analyzer
 // (reader) are both generated from this file; there is no hand-written schema
@@ -20,8 +20,6 @@
 syntax = "proto3";
 
 package ctu.facts.v2;
-
-option go_package = "a.yandex-team.ru/junk/arkhip0v0/system-wide-checks/schema/factspb;factspb";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -156,6 +154,9 @@ message ConstLoc {}
 // sound by construction).
 message AllocationId {
   uint32 id = 1;
+  // Allocation-site counters are local to one function. Carry the owner so
+  // site 0 in two unrelated functions/TUs cannot alias after fact merging.
+  EntityId function = 2;
 }
 
 // A sound widening: when precision is exhausted the footprint degrades toward
@@ -166,6 +167,11 @@ message Widening {
     W_UNKNOWN_GLOBAL = 1;         // some unspecified named global
     W_UNKNOWN_THROUGH_PARAM = 2;  // something reachable through param_index
     W_UNKNOWN_EVERYTHING = 3;     // top: may touch any location
+    // Arbitrary storage with this effect's own read/write flags preserved.
+    // Unlike W_UNKNOWN_EVERYTHING it does not dominate and absorb precise
+    // effects: merging `unknown read` with `global write` into `unknown write`
+    // is sound but creates avoidable sequencing false positives.
+    W_UNKNOWN_STORAGE = 4;
   }
   Kind kind = 1;
   uint32 param_index = 2;  // meaningful iff kind == W_UNKNOWN_THROUGH_PARAM
@@ -182,6 +188,17 @@ message FuncTarget {
   EntityId function_id = 1;  // matches some FuncDecl.id
 }
 
+// Storage reached by dereferencing a concrete AML which is not itself a
+// ParamRegion. This is an analyzer-derived location: the extractor does not
+// emit it. It preserves effects such as **p when a wrapper passes &obj.field
+// instead of widening the entire caller footprint to unknown-everything.
+// The analyzer bounds both deref_depth and the number of these locations in a
+// footprint, so recursive wrappers still form a finite lattice.
+message DerefRegion {
+  Aml base = 1;
+  uint32 deref_depth = 2;
+}
+
 message Aml {
   oneof loc {
     NamedGlobal named_global = 1;
@@ -196,6 +213,7 @@ message Aml {
     AllocationId allocation_id = 10;
     ConstLoc const_loc = 11;
     FuncTarget func_target = 12;
+    DerefRegion deref_region = 13;
   }
 }
 
@@ -303,6 +321,14 @@ message UnifyConstraint {
     // alias edge, a RHS ParamRegion is a callback value that must be bound
     // through each direct call site's actual argument.
     R_FUNC_PTR_STORE = 5;
+    // A C++ reference binding aliases storage rather than copying a pointer
+    // value. Keep this distinct from R_FUNC_PTR_STORE: only this relation may
+    // union the two storage identities without corrupting memory footprints.
+    R_REFERENCE_ALIAS = 6;
+    // Dynamic receiver-type value flow into pointer-valued storage such as a
+    // record field or global. This is not a memory-location alias relation;
+    // only receiver_type_flow.go consumes it.
+    R_RECEIVER_TYPE_STORE = 7;
   }
   EntityId function = 1;
   Aml a = 2;
@@ -402,6 +428,41 @@ message CallSite {
   // reaching concrete dynamic-type seeds form a bounded finite set. Missing,
   // unknown, or overflowed flow always retains the conservative RTA result.
   Aml virtual_receiver = 16;
+
+  // A member-call receiver may need two caller-side identities. `args` keeps
+  // the concrete memory identity used for footprint remapping (for example,
+  // a fresh Local for a prvalue temporary). Receiver-type flow must retain
+  // the pre-refinement value-flow identity so replacing that argument does
+  // not disconnect existing dynamic-type propagation. When present, use
+  // this Aml instead of args[receiver_arg_index] for receiver-type flow only.
+  Aml receiver_type_flow_arg = 17;
+  uint32 receiver_arg_index = 18;
+  bool receiver_arg_index_set = 19;
+
+  // Canonical structural identity of the indirect callee's function type.
+  // This is the same typeFingerprint used by FuncDecl and avoids joining
+  // callback targets through diagnostic-printer strings. The coverage bit
+  // keeps current facts distinguishable from old blobs.
+  fixed64 indirect_callee_type_hash = 20;
+  fixed64 indirect_callee_type_hash_hi = 21;
+  bool has_complete_indirect_callee_type_identity = 22;
+
+  // Whether each positional argument can expose caller-owned storage to the
+  // callee. Pointer/reference arguments and object values conservatively do;
+  // scalar/enum values passed by copy do not. Undefined-callee modeling uses
+  // this to avoid pretending that `f(local_int)` can write `local_int`.
+  // The coverage bit preserves the conservative all-arguments behavior for
+  // blobs produced by older extractors. The repeated field is index-aligned
+  // with args, including the synthetic receiver slot of member calls.
+  repeated bool arg_may_reach_caller_storage = 23;
+  bool has_complete_arg_storage_reachability = 24;
+
+  // Whether this indirect call invokes a pointer-to-member function. Its
+  // signature may otherwise equal an ordinary function-pointer signature
+  // after the implicit object parameter is stripped.
+  bool indirect_callee_is_member_function = 25;
+  bool has_complete_indirect_callee_member_identity = 26;
+
 }
 
 // One basic block of a function's normal-control-flow graph. This deliberately
@@ -504,6 +565,18 @@ message FuncDecl {
   bool has_complete_override_identity = 28;
   bool is_constructor = 29;
   bool is_destructor = 30;
+  // GNU/Clang semantic memory-effect contracts. `const` is stronger than
+  // `pure`: it may inspect only its scalar arguments, while `pure` may also
+  // read pointed-to and global state; neither may write observable memory.
+  // The coverage bit distinguishes current negative evidence from old blobs.
+  bool has_memory_effect_attribute_identity = 31;
+  bool has_const_attribute = 32;
+  bool has_pure_attribute = 33;
+  // Non-static C++ member functions carry an implicit object parameter and
+  // are callable through member-function pointers, not ordinary function
+  // pointers. Keep this distinction in whole-target callback matching.
+  bool is_nonstatic_member_function = 34;
+  bool has_complete_member_function_identity = 35;
 }
 
 message VarDecl {
