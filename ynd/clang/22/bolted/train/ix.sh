@@ -1,0 +1,56 @@
+{% extends '//clang/22/template.sh' %}
+
+{% set clang_ver=22 %}
+
+{% block bld_tool %}
+{{super()}}
+bin/perf
+bin/bolt/22
+ynd/clang/22/pgo
+{% endblock %}
+
+{% block build %}
+
+cc_binary=$(readlink -f $(cat $(which ${CXX}) | grep -o '/.*/clang'))
+echo $cc_binary
+cp $cc_binary ${out}/clang-22
+
+perf record -o ${out}/perf.data -c 10000 -e cycles:u -j any,u -- \
+ninja -C {{ninja_build_dir}} -j {% block ninja_threads %}${make_thrs}{% endblock %} {{ix.fix_list(ninja_build_targets)}}
+{% endblock %}
+
+{% block install %}
+{{super()}}
+
+echo "Prepare for profile convertion"
+perf2bolt -p ${out}/perf.data -o ${out}/bolt.fdata ${out}/clang-22
+merge-fdata ${out}/bolt.fdata > ${out}/bolt.prof
+ls ${out} -alth
+
+rm -rf ${out}/perf.data ${out}/bolt.fdata ${out}/clang-22
+{% endblock %}
+
+{% block env %}
+export MERGED_BOLT_PROFILE=${out}/bolt.prof
+{% endblock %}
+
+{# for correct work 'perf record' we need to break 'jail' #}
+
+{% block script_confine %}
+{% if jail or tmpfs %}
+{% elif stalix %}
+  {% if isfile('/bin/confine') %}
+    /ix/realm/system/bin/confine
+    {{ix_dir}}
+  {% endif %}
+  {% if skipsrc or skipsrc_one %}
+  {% elif isfile('/bin/tmpfs') %}
+    /ix/realm/system/bin/tmpfs
+    {{ix_dir}}
+  {% endif %}
+{% endif %}
+{% block script_parts %}
+sh
+-s
+{% endblock %}
+{% endblock %}
