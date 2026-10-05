@@ -1,0 +1,119 @@
+Upstream: https://go.dev/cl/842585
+Commit: ce0ff94df1efcf0665ed7f13fe16d080e4425104
+Fix: https://github.com/golang/go/issues/80974
+
+cmd/cover: preserve statement counts when splitting coverage blocks
+
+diff --git a/src/cmd/cover/cover.go b/src/cmd/cover/cover.go
+index bc24c52f138a9b..82c419483d0f69 100644
+--- a/src/cmd/cover/cover.go
++++ b/src/cmd/cover/cover.go
+@@ -387,17 +387,31 @@ func insideStatement(pos token.Pos, stmts []ast.Stmt) bool {
+ // mergeRangesWithinStatements merges consecutive ranges when a later range's
+ // start position falls strictly inside a statement. This prevents counter
+ // insertion inside multi-line statements such as const (...) blocks.
+-func mergeRangesWithinStatements(ranges []Range, stmts []ast.Stmt) []Range {
+-	if len(ranges) <= 1 {
+-		return ranges
+-	}
+-	merged := []Range{ranges[0]}
+-	for _, r := range ranges[1:] {
+-		if insideStatement(r.pos, stmts) {
+-			// Extend previous range to cover this one.
+-			merged[len(merged)-1].end = r.end
++type rangeWithStatements struct {
++	Range
++	numStmt int
++}
++
++func mergeRangesWithinStatements(ranges []Range, stmts []ast.Stmt) []rangeWithStatements {
++	merged := make([]rangeWithStatements, 0, len(ranges))
++	for _, r := range ranges {
++		// Statements are sorted by source position, so use binary search to
++		// find the statements whose positions fall within this range.
++		first, _ := slices.BinarySearchFunc(stmts, r.pos, func(s ast.Stmt, p token.Pos) int {
++			return cmp.Compare(s.Pos(), p)
++		})
++		last, _ := slices.BinarySearchFunc(stmts, r.end, func(s ast.Stmt, p token.Pos) int {
++			return cmp.Compare(s.Pos(), p)
++		})
++		numStmt := last - first
++
++		if len(merged) > 0 && insideStatement(r.pos, stmts) {
++			// Extend the previous range to cover this one.
++			last := &merged[len(merged)-1]
++			last.end = r.end
++			last.numStmt += numStmt
+ 		} else {
+-			merged = append(merged, r)
++			merged = append(merged, rangeWithStatements{Range: r, numStmt: numStmt})
+ 		}
+ 	}
+ 	return merged
+@@ -952,7 +966,7 @@ func (f *File) addCounters(pos, insertPos, blockEnd token.Pos, list []ast.Stmt,
+ 				if i == 0 {
+ 					insertOffset = f.offset(insertPos)
+ 				}
+-				f.edit.Insert(insertOffset, f.newCounter(r.pos, r.end, last)+";")
++				f.edit.Insert(insertOffset, f.newCounter(r.pos, r.end, r.numStmt)+";")
+ 			}
+ 		}
+ 		list = list[last:]
+diff --git a/src/cmd/cover/cover_test.go b/src/cmd/cover/cover_test.go
+index b86ebd0d149a0b..1991f140c79957 100644
+--- a/src/cmd/cover/cover_test.go
++++ b/src/cmd/cover/cover_test.go
+@@ -864,3 +864,53 @@ func main() {
+ 	got := coverRanges(t, src)
+ 	compareRanges(t, src, got, want)
+ }
++
++// TestStatementCountsAfterCommentSplit verifies that splitting a basic block
++// at blank or comment-only lines preserves the statement count of the block.
++func TestStatementCountsAfterCommentSplit(t *testing.T) {
++	testenv.MustHaveGoBuild(t)
++
++	src := []byte(`package main
++
++func main() {
++	a := 1
++	b := 2
++
++	c := 3
++	d := 4
++
++	if a == 0 {
++		return
++	}
++
++	println(a + b + c + d)
++}`)
++	tmpdir := t.TempDir()
++	srcPath := filepath.Join(tmpdir, "test.go")
++	if err := os.WriteFile(srcPath, src, 0666); err != nil {
++		t.Fatal(err)
++	}
++	cmd := testenv.Command(t, testcover(t), "-mode=set", srcPath)
++	out, err := cmd.Output()
++	if err != nil {
++		t.Fatalf("cover failed: %v\nOutput: %s", err, out)
++	}
++
++	re := regexp.MustCompile(`(?s)NumStmt: \[\d+\]uint16\{(.*?)\n\t\}`)
++	m := re.FindSubmatch(out)
++	if m == nil {
++		t.Fatalf("NumStmt array not found in output:\n%s", out)
++	}
++	var got []int
++	for _, entry := range regexp.MustCompile(`(?m)^\s*(\d+),`).FindAllSubmatch(m[1], -1) {
++		n, err := strconv.Atoi(string(entry[1]))
++		if err != nil {
++			t.Fatal(err)
++		}
++		got = append(got, n)
++	}
++	want := []int{2, 2, 1, 1, 1}
++	if !slices.Equal(got, want) {
++		t.Errorf("NumStmt = %v, want %v", got, want)
++	}
++}

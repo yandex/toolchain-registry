@@ -42,6 +42,14 @@ https://go.dev/dl/go{{self.go_version().strip()}}.{{self.archive_name().strip()}
 sha:{{self.archive_hash().strip()}}
 {% endblock %}
 
+{% block patch %}
+{{super()}}
+
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//ynd/go/1.27/patches/cover-statement-counts.patch') | b64e}}
+EOF
+{% endblock %}
+
 {% block step_build %}
 sed -i 's/GOTOOLCHAIN=auto/GOTOOLCHAIN=local/g' go.env
 rm -r "test/fixedbugs/issue27836.dir"

@@ -32,10 +32,12 @@ export GOARCH={{self.goarch().strip()}}
 
 bin/go build -o bin ./src/cmd/pack
 bin/go build -o bin ./src/cmd/covdata
+bin/go build -o bin ./src/cmd/cover
 {% endblock %}
 
 {% block install %}
 mkdir -p ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
 cp -r ${tmp}/src/bin/pack{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
 cp -r ${tmp}/src/bin/covdata{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
+cp -r ${tmp}/src/bin/cover{{target.exe_suffix}} ${out}/pkg/tool/{{self.tool_folder_name().strip()}}
 {% endblock %}
