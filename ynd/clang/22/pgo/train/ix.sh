@@ -2,7 +2,7 @@
 
 {% block bld_tool %}
 clang/22/pgo/instrumented
-bin/llvm-profdata/22
+bin/llvm-profdata/21
 {% endblock %}
 
 {% block postinstall %}
