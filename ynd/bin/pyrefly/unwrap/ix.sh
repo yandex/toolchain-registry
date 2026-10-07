@@ -5,7 +5,7 @@ pyrefly
 {% endblock %}
 
 {% block version %}
-1.1.1
+1.3.2
 {% endblock %}
 
 {% block cargo_url %}
@@ -13,11 +13,11 @@ https://github.com/facebook/pyrefly/archive/refs/tags/{{self.version().strip()}}
 {% endblock %}
 
 {% block cargo_sha %}
-e7e2dea95907408c0d01f14052d54e0874d98d927260c34a2848ecdf31604d5e
+cbcf5f56646b0aee05dab8825bdce795b4b6e43ba480589212da73e79ab381e1
 {% endblock %}
 
 {% block cargo_fetch_sha %}
-b0de811112349a53422532ab393bdd52c7a3a97720c5bc498c1a314e6b2406bd
+7da05b862497dafa3d34e7b574a9954f4daec71fe8423eb32f3765982d705b10
 {% endblock %}
 
 {% block cargo_bins %}
