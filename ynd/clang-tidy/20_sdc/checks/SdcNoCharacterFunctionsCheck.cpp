@@ -77,9 +77,15 @@ bool SdcNoCharacterFunctionsCheck::isAllowedDecl(const FunctionDecl* FD) const {
     if (!RecordTy)
         return false;
     const RecordDecl* RD = RecordTy->getDecl();
-    return RD->getName() == "locale" &&
-           RD->getDeclContext()->isNamespace() &&
-           cast<NamespaceDecl>(RD->getDeclContext())->getName() == "std";
+    if (RD->getName() != "locale")
+        return false;
+    // libc++ declares locale in an inline ABI namespace beneath std.
+    // Ordinary nested namespaces and user namespaces named std are not std.
+    const DeclContext* DC = RD->getDeclContext();
+    while (DC->isInlineNamespace())
+        DC = DC->getParent();
+    const auto* NS = dyn_cast<NamespaceDecl>(DC);
+    return NS && NS->isStdNamespace();
 }
 
 } // namespace sdc
