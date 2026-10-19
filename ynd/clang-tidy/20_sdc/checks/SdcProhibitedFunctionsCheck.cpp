@@ -4,6 +4,10 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
+#include "clang/Lex/MacroInfo.h"
+#include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/Preprocessor.h"
+#include "llvm/ADT/StringSet.h"
 
 using namespace clang::ast_matchers;
 
@@ -28,6 +32,46 @@ bool isProhibitedQualifiedName(ArrayRef<StringRef> Prohibited, StringRef QualNam
     return false;
 }
 } // namespace
+
+// Diagnose the public macro use, irrespective of its replacement tokens.
+// This is a preprocessing restriction: it also covers empty expansions,
+// preprocessing expressions and dormant template bodies.
+class ProhibitedFunctionMacroCallbacks : public PPCallbacks {
+public:
+    ProhibitedFunctionMacroCallbacks(SdcProhibitedFunctionsCheck& Check,
+                                     const SourceManager& SM)
+        : Check(Check), SM(SM) {
+        for (StringRef Name : Check.getProhibitedFunctions()) {
+            Name = Name.substr(Name.rfind(':') + 1);
+            if (!Check.isAllowedMacro(Name))
+                Names.insert(Name);
+        }
+    }
+
+    void MacroExpands(const Token& Token, const MacroDefinition& Definition,
+                      SourceRange, const MacroArgs*) override {
+        const IdentifierInfo* Identifier = Token.getIdentifierInfo();
+        const MacroInfo* Macro = Definition.getMacroInfo();
+        if (!Identifier || !Names.contains(Identifier->getName()) || !Macro ||
+            !SM.isInSystemHeader(Macro->getDefinitionLoc()))
+            return;
+        const SourceLocation Loc = Token.getLocation();
+        if (!isWrittenInAnalyzedSource(Loc, SM))
+            return;
+        Check.diag(Loc, Check.getDiagnosticMessage(Identifier->getName()));
+    }
+
+private:
+    SdcProhibitedFunctionsCheck& Check;
+    const SourceManager& SM;
+    llvm::StringSet<> Names;
+};
+
+void SdcProhibitedFunctionsCheck::registerPPCallbacks(
+    const SourceManager& SM, Preprocessor* PP, Preprocessor*) {
+    PP->addPPCallbacks(
+        std::make_unique<ProhibitedFunctionMacroCallbacks>(*this, SM));
+}
 
 SdcProhibitedFunctionsCheck::SdcProhibitedFunctionsCheck(
     StringRef Name, ClangTidyContext* Context)

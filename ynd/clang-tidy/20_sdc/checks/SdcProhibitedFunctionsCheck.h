@@ -14,6 +14,8 @@ class SdcProhibitedFunctionsCheck : public ClangTidyCheck {
 public:
     SdcProhibitedFunctionsCheck(StringRef Name, ClangTidyContext* Context);
 
+    void registerPPCallbacks(const SourceManager& SM, Preprocessor* PP,
+                             Preprocessor* ModuleExpanderPP) override;
     void registerMatchers(ast_matchers::MatchFinder* Finder) override;
     void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
 
@@ -32,7 +34,12 @@ protected:
     // the diagnostic for this declaration.
     virtual bool isAllowedDecl(const FunctionDecl* FD) const { return false; }
 
+    // Macro names are unqualified. Ban system macros by default; a derived
+    // check may explicitly exempt names whose use needs semantic analysis.
+    virtual bool isAllowedMacro(StringRef Name) const { return false; }
+
 private:
+    friend class ProhibitedFunctionMacroCallbacks;
     AnalysisInstanceTracker AnalysisInstances;
 };
 
