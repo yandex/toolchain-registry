@@ -1,0 +1,11 @@
+--- a/clang-tools-extra/clang-tidy/CMakeLists.txt
++++ b/clang-tools-extra/clang-tidy/CMakeLists.txt
+@@ -78,6 +78,8 @@
+ add_subdirectory(zircon)
+ add_subdirectory(yandex)
++add_subdirectory(eats)
+ set(ALL_CLANG_TIDY_CHECKS
+   clangTidyYandexModule
++  clangTidyEatsModule
+   clangTidyAndroidModule
+   clangTidyAbseilModule
