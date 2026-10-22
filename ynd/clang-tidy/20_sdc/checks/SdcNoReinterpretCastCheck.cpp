@@ -30,6 +30,11 @@ namespace clang {
                 QualType DestType = Cast->getType();
                 QualType SrcType = Cast->getSubExpr()->getType();
 
+                // Dependent operands (e.g. &value, where value has type T) may not be known as pointers yet; check instantiations instead.
+                if (SrcType->isDependentType() || DestType->isDependentType()) {
+                    return;
+                }
+
                 // Exception 1: reinterpret_cast<T*>(p) where T is void, char, unsigned char, or std::byte
                 if (DestType->isPointerType() && SrcType->isPointerType()) {
                     QualType SrcPointee = SrcType->getPointeeType();
