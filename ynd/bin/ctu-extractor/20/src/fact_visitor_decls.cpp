@@ -605,6 +605,8 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     }
   }
   f->set_has_noreturn_attribute(hasExplicitNoreturn);
+  f->set_has_effective_noreturn_identity(true);
+  f->set_effective_noreturn(FD->hasAttr<CXX11NoReturnAttr>());
   f->set_source_language(Ctx.getLangOpts().CPlusPlus ? facts_pb::SL_CXX : facts_pb::SL_C);
   bool isDef = FD->isThisDeclarationADefinition();
   // Template instantiations don't carry their own body — it lives on

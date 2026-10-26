@@ -44,15 +44,24 @@
 #include "factspb/facts.pb.h"
 #include "fact_visitor.h"
 #include "source_utils.h"
+#include "baseline.h"
 
 static constexpr uint32_t kSchemaVersion = 6;
 static constexpr const char *kToolVersion = "swc-extractor/0.1";
+// Retain the legacy command-line spelling as a no-op for old build commands.
+static bool paranoidBaseline = true;
+static bool baselineCollected = false;
 
 class FactConsumer : public ASTConsumer {
 public:
   explicit FactConsumer(ASTContext &Ctx) : Visitor(Ctx) {}
   void HandleTranslationUnit(ASTContext &Ctx) override {
     Visitor.TraverseDecl(Ctx.getTranslationUnitDecl());
+    if (paranoidBaseline && Ctx.getLangOpts().CPlusPlus) {
+      collectMemoryBaselineFacts(Ctx);
+      collectSemanticBaselineFacts(Ctx);
+      baselineCollected = true;
+    }
   }
 
 private:
@@ -120,6 +129,10 @@ int main(int argc, char **argv) {
       g_sourceRoot = a.drop_front(strlen("--ctu-source-root=")).str();
       continue;  // our flag; do not forward to clang
     }
+    if (a == "--ctu-paranoid-baseline") {
+      paranoidBaseline = true;
+      continue;
+    }
     if (a == "--ctu-keep-going") {
       keepGoing = true;  // opt into exit 0 + best-effort partial blob
       continue;  // our flag; do not forward to clang
@@ -164,6 +177,7 @@ int main(int argc, char **argv) {
   // stamp it so the analyzer can't mistake this for a clean extraction.
   h->set_incomplete(!ok);
   h->set_has_complete_odr_definition_coverage(true);
+  h->set_system_baseline_version(baselineCollected ? 1 : 0);
 
   std::vector<std::string> serialized;
   serialized.reserve(g_facts.size());
@@ -179,7 +193,7 @@ int main(int argc, char **argv) {
   std::string body = serializeDet(blob);
 
   // An incomplete TU must not collapse to the 0-byte "nothing extracted" case.
-  bool haveContent = !g_facts.empty() || !ok;
+  bool haveContent = !g_facts.empty() || !ok || paranoidBaseline;
   std::string compressed;
   bool zstdOk = !haveContent || zstdCompress(body, &compressed);
   if (!zstdOk) {

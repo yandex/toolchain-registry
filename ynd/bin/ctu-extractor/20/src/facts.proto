@@ -577,6 +577,10 @@ message FuncDecl {
   // pointers. Keep this distinction in whole-target callback matching.
   bool is_nonstatic_member_function = 34;
   bool has_complete_member_function_identity = 35;
+  // Effective C++ noreturn contract, including attributes inherited from a
+  // visible prior declaration. Keep spelling provenance above for old readers.
+  bool has_effective_noreturn_identity = 36;
+  bool effective_noreturn = 37;
 }
 
 message VarDecl {
@@ -717,6 +721,16 @@ message OdrDefinition {
 // Envelope + blob
 // ---------------------------------------------------------------------------
 
+// Conservative source-level review candidate, not a proven MISRA violation.
+// coverage_gap distinguishes an unproved obligation/unsupported semantics
+// from a concrete operation that may violate a rule.
+message BaselineCandidate {
+  string rule_id = 1;
+  SourceRef loc = 2;
+  string reason = 3;
+  bool coverage_gap = 4;
+}
+
 message Fact {
   OriginClass origin = 1;
   oneof kind {
@@ -734,6 +748,7 @@ message Fact {
     OdrDefinition odr_definition = 13;
     ControlFlowBlock control_flow_block = 14;
     DynamicTypeUse dynamic_type_use = 15;
+    BaselineCandidate baseline_candidate = 16;
   }
 }
 
@@ -759,6 +774,9 @@ message BlobHeader {
   // An absent/false bit on an old blob suppresses "no definition" conclusions
   // while still permitting conclusive observed multiple-definition findings.
   bool has_complete_odr_definition_coverage = 7;
+  // Version of the opt-in conservative baseline traversal (0 = not run).
+  // This records producer capability, not proof of complete rule coverage.
+  uint32 system_baseline_version = 8;
 }
 
 // A whole per-TU fact table: one header + the canonically-sorted, deduped

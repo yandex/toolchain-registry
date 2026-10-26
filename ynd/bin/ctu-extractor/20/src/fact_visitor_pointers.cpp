@@ -347,18 +347,18 @@ bool FactVisitor::resolvePointerTargetAml(Expr *E, facts_pb::Aml *aml) {
         aml->mutable_unify_class()->set_class_id(getOrAssignUnifyClassId(VD));
         return true;
       }
-	  // A global pointer/function-pointer expression denotes stable storage
-	  // shared across functions.  Preserve its NamedGlobal identity so an
-	  // indirect call through it can consult concrete targets assigned to
-	  // that particular slot, rather than falling back to every matching
-	  // function signature in the whole target.
-	  if (VD->hasGlobalStorage())
-		return computeNamedVarAml(E, aml);
-	  // An array lvalue decays to a pointer to its first element. Keep the
-	  // whole named array/object region, not an element-specific Field path.
-	  if (VD->getType()->isArrayType()) {
-		return computeNamedVarAml(E, aml);
-	  }
+      // A global pointer/function-pointer expression denotes stable storage
+      // shared across functions.  Preserve its NamedGlobal identity so an
+      // indirect call through it can consult concrete targets assigned to
+      // that particular slot, rather than falling back to every matching
+      // function signature in the whole target.
+      if (VD->hasGlobalStorage())
+        return computeNamedVarAml(E, aml);
+      // An array lvalue decays to a pointer to its first element. Keep the
+      // whole named array/object region, not an element-specific Field path.
+      if (VD->getType()->isArrayType()) {
+        return computeNamedVarAml(E, aml);
+      }
     }
   } else if (auto *CE = dyn_cast<CallExpr>(E)) {
     // A call to a known allocator: the returned pointer's pointee is a
@@ -1149,12 +1149,31 @@ bool FactVisitor::computeNamedVarAml(Expr *E, facts_pb::Aml *aml) {
       aml->mutable_param_region()->set_deref_depth(depth);
       return true;
     }
+    // A data-pointer member is storage containing an address, not the
+    // pointee itself. The current field abstraction has no complete store
+    // bindings for aggregates (e.g. Holder h{callerPointer}). Treating *h.p
+    // as Field(Local(h), p) drops the effect when a summary excludes locals,
+    // even though h.p may point into caller-owned storage. Retain a correlated
+    // unknown-storage effect until data-pointer field bindings are available.
+    Expr *pointer = UO->getSubExpr()->IgnoreParenImpCasts();
+    if (isa<MemberExpr>(pointer) && pointer->getType()->isPointerType() &&
+        !pointer->getType()->getPointeeType()->isFunctionType()) {
+      aml->mutable_widening()->set_kind(facts_pb::Widening::W_UNKNOWN_STORAGE);
+      return true;
+    }
     // *malloc(n), *new T, etc.: the pointee of an allocator call's
     // returned pointer — resolve via the same path as pointer assignment
     // RHS resolution (reuses resolvePointerTargetAml).
     return resolvePointerTargetAml(UO->getSubExpr(), aml);
   }
   if (auto *ASE = dyn_cast<ArraySubscriptExpr>(E)) {
+    Expr *pointer = ASE->getBase()->IgnoreParenImpCasts();
+    if (isa<MemberExpr>(pointer) && pointer->getType()->isPointerType()) {
+      // p[i] accesses the pointer member's pointee, just like *p above.
+      // Actual array members remain field-sensitive in the normal path.
+      aml->mutable_widening()->set_kind(facts_pb::Widening::W_UNKNOWN_STORAGE);
+      return true;
+    }
     // Region being subscripted: pointee of a tracked pointer/param, or the
     // named array object itself (e.g. `arr[i]`, `s.arr[i]`).
     facts_pb::Aml regionAml;

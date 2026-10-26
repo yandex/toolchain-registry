@@ -32,6 +32,9 @@ set(LLVM_LINK_COMPONENTS Support)
 
 add_clang_tool(ctu-extractor
   driver.cpp
+  baseline.cpp
+  baseline_memory.cpp
+  baseline_semantics.cpp
   source_utils.cpp
   fact_visitor_decls.cpp
   fact_visitor_exprs.cpp
