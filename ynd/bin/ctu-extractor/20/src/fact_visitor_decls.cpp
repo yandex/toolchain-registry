@@ -10,6 +10,7 @@
 
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/ExprConcepts.h"
+#include "clang/Basic/Builtins.h"
 
 #include "source_utils.h"
 
@@ -629,6 +630,11 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
   f->set_is_constructor(isa<CXXConstructorDecl>(FD));
   f->set_is_destructor(isa<CXXDestructorDecl>(FD));
   f->set_has_memory_effect_attribute_identity(true);
+  f->set_has_compiler_builtin_identity(true);
+  if (FD->getBuiltinID() == Builtin::BI__builtin_is_constant_evaluated &&
+      FD->getNumParams() == 0 && !FD->isVariadic() &&
+      FD->getReturnType()->isBooleanType())
+    f->set_compiler_builtin(facts_pb::FuncDecl::CB_IS_CONSTANT_EVALUATED);
   f->set_has_const_attribute(FD->hasAttr<ConstAttr>());
   f->set_has_pure_attribute(FD->hasAttr<PureAttr>());
   f->set_has_complete_member_function_identity(true);

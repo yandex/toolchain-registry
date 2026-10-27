@@ -28,6 +28,58 @@ bool standardStringType(clang::QualType type) {
   const auto *record = type.getNonReferenceType()->getAsCXXRecordDecl();
   return record && record->getName() == "basic_string" && memoryStandardNamespace(record->getDeclContext());
 }
+bool defaultStringConcatenation(const clang::CallExpr *expression, clang::ASTContext &context) {
+  const auto *call = llvm::dyn_cast_or_null<clang::CXXOperatorCallExpr>(expression);
+  const auto *function = call ? call->getDirectCallee() : nullptr;
+  if (!call || call->getOperator() != clang::OO_Plus || call->getNumArgs() != 2 || !function ||
+      llvm::isa<clang::CXXMethodDecl>(function) || function->isVariadic() || function->getNumParams() != 2 ||
+      function->getReturnType()->isReferenceType() || !memoryStandardNamespace(function->getDeclContext()) ||
+      !context.getSourceManager().isInSystemHeader(function->getLocation()) ||
+      !baseline_library::defaultCharString(call->getType(), context)) return false;
+  bool stringOperand = false;
+  for (unsigned i = 0; i != 2; ++i) {
+    const auto type = function->getParamDecl(i)->getType();
+    if (type->isReferenceType() && baseline_library::defaultCharString(type, context) &&
+        baseline_library::defaultCharString(call->getArg(i)->getType(), context)) {
+      stringOperand = true;
+      continue;
+    }
+    if (type->isPointerType() && !type->getPointeeType().isVolatileQualified() &&
+        context.hasSameUnqualifiedType(type->getPointeeType(), context.CharTy)) continue;
+    if (context.hasSameUnqualifiedType(type, context.CharTy)) continue;
+    return false;
+  }
+  return stringOperand;
+}
+bool freshDefaultStringOwner(const clang::VarDecl *variable, clang::ASTContext &context) {
+  if (!variable || !variable->hasLocalStorage() || variable->getType()->isReferenceType() ||
+      variable->hasAttr<clang::CleanupAttr>() || !variable->hasInit() ||
+      !baseline_library::defaultCharString(variable->getType(), context)) return false;
+  const clang::Expr *initial = variable->getInit();
+  for (unsigned depth = 0; depth != 8; ++depth) {
+    initial = initial->IgnoreParenImpCasts();
+    if (const auto *cleanup = llvm::dyn_cast<clang::ExprWithCleanups>(initial)) initial = cleanup->getSubExpr();
+    else if (const auto *temporary = llvm::dyn_cast<clang::CXXBindTemporaryExpr>(initial)) {
+      if (!baseline_library::defaultCharString(temporary->getType(), context)) return false;
+      initial = temporary->getSubExpr();
+    } else break;
+  }
+  if (const auto *call = llvm::dyn_cast<clang::CallExpr>(initial))
+    return defaultStringConcatenation(call, context);
+  const auto *construction = llvm::dyn_cast<clang::CXXConstructExpr>(initial);
+  const auto *constructor = construction ? construction->getConstructor() : nullptr;
+  if (!constructor || !context.getSourceManager().isInSystemHeader(constructor->getLocation())) return false;
+  if (constructor->isDefaultConstructor()) {
+    for (const auto *argument : construction->arguments())
+      if (!llvm::isa<clang::CXXDefaultArgExpr>(argument)) return false;
+    return true;
+  }
+  if (construction->getNumArgs() < 1 || construction->getNumArgs() > 2) return false;
+  const auto *source = construction->getArg(0)->IgnoreParenImpCasts();
+  if (!llvm::isa<clang::StringLiteral>(source) &&
+      !(llvm::isa<clang::DeclRefExpr>(source) && baseline_library::defaultCharString(source->getType(), context))) return false;
+  return construction->getNumArgs() == 1 || llvm::isa<clang::CXXDefaultArgExpr>(construction->getArg(1));
+}
 bool fixedArrayType(clang::QualType type) {
   type = type.getNonReferenceType();
   if (type->isConstantArrayType()) return true;
@@ -49,6 +101,73 @@ const clang::VarDecl *directVariable(const clang::Expr *expr) {
       return directVariable(call->getArg(0));
   }
   return nullptr;
+}
+
+// This is a program-point certificate for the fresh handle, not a claim
+// about any later use. A consumed readdir result later in the scope must not
+// retroactively invalidate the null test immediately after opendir.
+class FreshDirectoryControl : public clang::RecursiveASTVisitor<FreshDirectoryControl> {
+ public:
+  bool Safe = true;
+  unsigned Nodes = 0;
+  bool VisitStmt(clang::Stmt *) { if (++Nodes > 20000) { Safe = false; return false; } return true; }
+  bool VisitGotoStmt(clang::GotoStmt *) { Safe = false; return true; }
+  bool VisitIndirectGotoStmt(clang::IndirectGotoStmt *) { Safe = false; return true; }
+  bool VisitLabelStmt(clang::LabelStmt *) { Safe = false; return true; }
+  bool VisitAsmStmt(clang::AsmStmt *) { Safe = false; return true; }
+};
+
+class FreshDirectoryInitializer : public clang::RecursiveASTVisitor<FreshDirectoryInitializer> {
+ public:
+  const clang::VarDecl *Variable;
+  bool Safe = true;
+  unsigned Nodes = 0;
+  explicit FreshDirectoryInitializer(const clang::VarDecl *variable) : Variable(variable) {}
+  bool VisitStmt(clang::Stmt *) { if (++Nodes > 1000) { Safe = false; return false; } return true; }
+  bool VisitExprWithCleanups(clang::ExprWithCleanups *) { Safe = false; return true; }
+  bool VisitCXXBindTemporaryExpr(clang::CXXBindTemporaryExpr *) { Safe = false; return true; }
+  bool VisitDeclRefExpr(clang::DeclRefExpr *reference) {
+    if (reference->getDecl() == Variable) Safe = false;
+    return true;
+  }
+};
+
+bool freshDirectoryNullTest(const clang::Expr *expression, clang::ASTContext &context) {
+  const auto *variable = baseline_library::variable(expression);
+  if (!variable || !variable->hasLocalStorage() || !variable->getType()->isPointerType() ||
+      !variable->hasInit()) return false;
+  const auto *open = llvm::dyn_cast<clang::CallExpr>(variable->getInit()->IgnoreParenImpCasts());
+  if (!open || !baseline_library::systemFunction(open->getDirectCallee(), context) ||
+      open->getDirectCallee()->getName() != "opendir") return false;
+  // Argument temporaries are destroyed after the returned pointer is stored;
+  // their callbacks could close it before the immediately following test.
+  FreshDirectoryInitializer initializer(variable);
+  if (!initializer.TraverseStmt(const_cast<clang::Expr *>(variable->getInit())) || !initializer.Safe) return false;
+  const auto parents = context.getParents(*variable);
+  const auto *declaration = parents.size() == 1 ? parents[0].get<clang::DeclStmt>() : nullptr;
+  const auto *scope = declaration ? llvm::dyn_cast_or_null<clang::CompoundStmt>(
+      baseline_library::parentStmt(declaration, context)) : nullptr;
+  if (!scope || !declaration->isSingleDecl()) return false;
+  const clang::Stmt *next = nullptr;
+  bool found = false;
+  for (const auto *statement : scope->body()) {
+    if (found) { next = statement; break; }
+    if (statement == declaration) found = true;
+  }
+  const auto *test = llvm::dyn_cast_or_null<clang::IfStmt>(next);
+  if (!test || test->getInit() || test->getConditionVariable()) return false;
+  const auto *comparison = llvm::dyn_cast<clang::BinaryOperator>(test->getCond()->IgnoreParenImpCasts());
+  if (!comparison || !comparison->isEqualityOp()) return false;
+  const auto *reference = expression->IgnoreParenImpCasts();
+  const clang::Expr *other = nullptr;
+  if (comparison->getLHS()->IgnoreParenImpCasts() == reference) other = comparison->getRHS();
+  if (comparison->getRHS()->IgnoreParenImpCasts() == reference) other = comparison->getLHS();
+  if (!other || !other->isNullPointerConstant(context, clang::Expr::NPC_NeverValueDependent) ||
+      other->HasSideEffects(context)) return false;
+  const auto *function = llvm::dyn_cast<clang::FunctionDecl>(variable->getDeclContext());
+  if (!function || !function->hasBody()) return false;
+  FreshDirectoryControl control;
+  return control.TraverseStmt(function->getBody()) && control.Safe;
 }
 
 bool standardScalarParameter(const clang::VarDecl *var) {
@@ -82,6 +201,92 @@ bool systemStreamOperation(const clang::FunctionDecl *function, clang::ASTContex
       name == "ftell" || name == "fgetpos" || name == "fileno" || name == "setbuf" || name == "setvbuf";
 }
 
+// A narrowly typed scanf model: conversion failure preserves the old value,
+// and success writes a defined value. Reject unknown formats, pointer/float
+// conversions and unbounded character outputs rather than assuming an opaque
+// external writer preserves initialization.
+bool initializedScanfOutput(const clang::UnaryOperator *address, clang::ASTContext &context) {
+  clang::DynTypedNode node = clang::DynTypedNode::create(*address);
+  const clang::CallExpr *call = nullptr;
+  for (unsigned depth = 0; depth != 6; ++depth) {
+    const auto parents = context.getParents(node);
+    if (parents.size() != 1) return false;
+    if ((call = parents[0].get<clang::CallExpr>())) break;
+    if (!parents[0].get<clang::ParenExpr>() && !parents[0].get<clang::ImplicitCastExpr>()) return false;
+    node = parents[0];
+  }
+  const auto *function = call ? call->getDirectCallee() : nullptr;
+  if (!function || !function->getIdentifier() || !function->isExternC() ||
+      !context.getSourceManager().isInSystemHeader(function->getLocation()) ||
+      (function->getName() != "sscanf" && function->getName() != "__isoc99_sscanf") ||
+      call->getNumArgs() < 2 || call->getNumArgs() > 64) return false;
+  const auto *literal = llvm::dyn_cast<clang::StringLiteral>(call->getArg(1)->IgnoreParenImpCasts());
+  if (!literal || !literal->isOrdinary()) return false;
+  const auto format = literal->getString();
+  if (format.size() > 4096) return false;
+  unsigned argument = 2;
+  bool selected = false;
+  for (size_t pos = 0; pos < format.size(); ++pos) {
+    if (format[pos] == '\0') return false;
+    if (format[pos] != '%') continue;
+    if (++pos == format.size()) return false;
+    if (format[pos] == '%') continue;
+    bool suppressed = format[pos] == '*';
+    if (suppressed && ++pos == format.size()) return false;
+    unsigned width = 0;
+    bool hasWidth = false;
+    while (pos < format.size() && format[pos] >= '0' && format[pos] <= '9') {
+      if (width > 100000) return false;
+      hasWidth = true;
+      width = width * 10 + static_cast<unsigned>(format[pos++] - '0');
+    }
+    if ((hasWidth && !width) || pos == format.size()) return false;
+    char length = 0;
+    if (format[pos] == 'h' || format[pos] == 'l') {
+      length = format[pos++];
+      if (pos < format.size() && format[pos] == length) { length = length == 'h' ? 'H' : 'L'; ++pos; }
+    }
+    if (pos == format.size()) return false;
+    const char conversion = format[pos];
+    const bool signedInteger = conversion == 'd' || conversion == 'i';
+    const bool unsignedInteger = conversion == 'o' || conversion == 'u' || conversion == 'x' || conversion == 'X';
+    const bool characters = conversion == 's' || conversion == 'c';
+    if ((!signedInteger && !unsignedInteger && !characters) || (characters && length)) return false;
+    if (suppressed) continue;
+    if (argument == call->getNumArgs()) return false;
+    const auto *output = call->getArg(argument++);
+    const auto type = output->getType();
+    if (!type->isPointerType()) return false;
+    const auto pointee = type->getPointeeType();
+    if (pointee.isConstQualified() || pointee.isVolatileQualified()) return false;
+    clang::QualType expected;
+    if (characters) {
+      expected = context.CharTy;
+      const auto *owner = directVariable(output);
+      const auto *array = owner ? context.getAsConstantArrayType(owner->getType()) : nullptr;
+      const unsigned count = hasWidth ? width : 1;
+      if (!array || (conversion == 's' && !hasWidth) ||
+          count + (conversion == 's' ? 1 : 0) > array->getSize().getLimitedValue()) return false;
+    } else {
+      switch (length) {
+        case 'H': expected = signedInteger ? context.SignedCharTy : context.UnsignedCharTy; break;
+        case 'h': expected = signedInteger ? context.ShortTy : context.UnsignedShortTy; break;
+        case 'l': expected = signedInteger ? context.LongTy : context.UnsignedLongTy; break;
+        case 'L': expected = signedInteger ? context.LongLongTy : context.UnsignedLongLongTy; break;
+        default: expected = signedInteger ? context.IntTy : context.UnsignedIntTy; break;
+      }
+      // Direct scalar storage avoids aliased/undersized destinations. Address
+      // escape elsewhere remains visible to the ordinary index.
+      const auto *unary = llvm::dyn_cast<clang::UnaryOperator>(output->IgnoreParenImpCasts());
+      const auto *owner = unary && unary->getOpcode() == clang::UO_AddrOf ? directVariable(unary->getSubExpr()) : nullptr;
+      if (!owner || owner->getType()->isReferenceType()) return false;
+    }
+    if (!context.hasSameType(pointee.getUnqualifiedType(), expected)) return false;
+    selected |= output->IgnoreParenImpCasts() == address;
+  }
+  return selected && argument == call->getNumArgs();
+}
+
 // Collect escape/mutation evidence before proving properties. A direct local
 // access is not a pointee access; escaped or reference-bound objects are kept
 // conservative because callees can end their lifetime or alter their storage.
@@ -113,6 +318,9 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
     if (const auto *subscript = llvm::dyn_cast<clang::ArraySubscriptExpr>(expression)) opaquePointer(subscript->getBase());
   }
   llvm::DenseSet<const clang::VarDecl *> Escaped, Mutated, BoundedRangeIterators, RangeBindings, ConstantRangeValues;
+  // Keep ordinary escape evidence intact for initialization and backing-buffer
+  // proofs. These additional sets qualify only the lifetime of a string owner.
+  llvm::DenseSet<const clang::VarDecl *> OwnerEscaped, StringConcatenationOwners;
   llvm::DenseMap<const clang::VarDecl *, const clang::VarDecl *> ViewRangeOwners;
   llvm::DenseSet<const clang::VarDecl *> NonCaptureEscapes, UnknownScalarMutations;
   llvm::DenseMap<const clang::VarDecl *, llvm::SmallVector<const clang::Expr *, 2>> ScalarAssignments;
@@ -141,17 +349,21 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
   llvm::DenseMap<const clang::ParmVarDecl *, llvm::SmallVector<const clang::Expr *, 2>> ImmediateLambdaArguments;
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  void escape(const clang::Expr *expr) {
+  void escape(const clang::Expr *expr, bool stringOwnerBorrow = false) {
     if (!expr) return;
-    if (auto *v = directVariable(expr)) { Escaped.insert(v); NonCaptureEscapes.insert(v); }
+    if (auto *v = directVariable(expr)) {
+      Escaped.insert(v); NonCaptureEscapes.insert(v);
+      if (stringOwnerBorrow) StringConcatenationOwners.insert(v);
+      else OwnerEscaped.insert(v);
+    }
     expr = expr->IgnoreParenImpCasts();
     if (const auto *cast = llvm::dyn_cast<clang::ExplicitCastExpr>(expr))
-      if (cast->isGLValue()) escape(cast->getSubExpr());
+      if (cast->isGLValue()) escape(cast->getSubExpr(), stringOwnerBorrow);
     if (const auto *choice = llvm::dyn_cast<clang::ConditionalOperator>(expr)) {
-      escape(choice->getTrueExpr()); escape(choice->getFalseExpr());
+      escape(choice->getTrueExpr(), stringOwnerBorrow); escape(choice->getFalseExpr(), stringOwnerBorrow);
     }
     if (const auto *comma = llvm::dyn_cast<clang::BinaryOperator>(expr))
-      if (comma->getOpcode() == clang::BO_Comma) escape(comma->getRHS());
+      if (comma->getOpcode() == clang::BO_Comma) escape(comma->getRHS(), stringOwnerBorrow);
   }
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *expression) {
     const auto *constructor = expression->getConstructor();
@@ -201,8 +413,19 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
     return true;
   }
   bool VisitUnaryOperator(clang::UnaryOperator *expr) {
-    if (expr->getOpcode() == clang::UO_AddrOf) { escape(expr->getSubExpr()); opaquePointer(expr->getSubExpr()); }
-    if (expr->isIncrementDecrementOp()) { mutate(expr->getSubExpr()); assignment(expr->getSubExpr(), nullptr); }
+    if (expr->getOpcode() == clang::UO_AddrOf) {
+      if (!initializedScanfOutput(expr, Context)) escape(expr->getSubExpr());
+      opaquePointer(expr->getSubExpr());
+    }
+    if (expr->isIncrementDecrementOp()) {
+      mutate(expr->getSubExpr());
+      const auto *variable = directVariable(expr->getSubExpr());
+      // Arithmetic updates preserve a defined scalar value. The proof still
+      // requires an initializer and checks every independent assignment;
+      // representability/overflow belongs to the arithmetic check.
+      if (variable && variable->getType()->isArithmeticType()) ScalarAssignments[variable];
+      else assignment(expr->getSubExpr(), nullptr);
+    }
     return true;
   }
   bool VisitBinaryOperator(clang::BinaryOperator *expr) {
@@ -259,10 +482,12 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
       if (capture.capturesVariable() && capture.getCaptureKind() == clang::LCK_ByRef) {
         if (const auto *variable = llvm::dyn_cast<clang::VarDecl>(capture.getCapturedVar())) {
           Escaped.insert(variable);
+          OwnerEscaped.insert(variable);
           ReferenceCaptures[variable].push_back(expression);
         } else if (const auto *binding = llvm::dyn_cast<clang::BindingDecl>(capture.getCapturedVar()))
           if (const auto *variable = llvm::dyn_cast_or_null<clang::VarDecl>(binding->getDecomposedDecl())) {
             Escaped.insert(variable);
+            OwnerEscaped.insert(variable);
             NonCaptureEscapes.insert(variable); // decomposed subobject aliases remain unknown
           }
       }
@@ -425,7 +650,9 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
             !(operatorCall && i == 0 && receiverPreserved) &&
             !(standardStringMethod && (!operatorCall || i != 0) && standardStringType(expr->getArg(i)->getType())) &&
             expr->getArg(i)->isGLValue() && !scalarByValueArgument(expr, i) &&
-            !readOnlyReferenceArgument(expr, i)) escape(expr->getArg(i));
+            !readOnlyReferenceArgument(expr, i))
+          escape(expr->getArg(i), defaultStringConcatenation(expr, Context) &&
+              baseline_library::defaultCharString(expr->getArg(i)->getType(), Context));
     if (const auto *call = llvm::dyn_cast<clang::CXXOperatorCallExpr>(expr)) {
       const auto *method = llvm::dyn_cast_or_null<clang::CXXMethodDecl>(call->getDirectCallee());
       if (method && method->getParent()->isLambda() && call->getNumArgs() == method->getNumParams() + 1) {
@@ -507,7 +734,8 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
   }
 
   bool VisitMemberExpr(clang::MemberExpr *expr) {
-    if (expr->isArrow() || !liveDirectObject(expr->getBase()))
+    if ((expr->isArrow() || !liveDirectObject(expr->getBase())) &&
+        !baseline_library::freshDirectoryEntryMember(expr, Context))
       emit("6.8.1", expr, "member-access-needs-lifetime-proof");
     if (expr->isArrow() && !nonLibraryPointer(expr->getBase()))
       emit("25.5.3", expr, "member-access-needs-library-invalidation-proof");
@@ -559,10 +787,21 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
       unresolvedEffects(expr->getExprLoc());
     if (expr->getConstructor() && expr->getConstructor()->isCopyOrMoveConstructor()) {
       emit("11.6.2", expr, "aggregate-copy-needs-member-initialization-proof");
-      emit("6.8.1", expr, "aggregate-copy-needs-source-lifetime-proof");
+      if (expr->getNumArgs() == 0 || !liveDirectObject(expr->getArg(0)))
+        emit("6.8.1", expr, "aggregate-copy-needs-source-lifetime-proof");
       if (!freshCopyDestination(expr))
         emit("8.18.1", expr, "aggregate-copy-needs-nonoverlap-proof");
     }
+    return true;
+  }
+
+  bool VisitCXXNewExpr(clang::CXXNewExpr *expr) {
+    // Guaranteed copy elision can construct a callee's return value directly
+    // into placement storage. There need not be a caller-side copy constructor
+    // expression, so this site must retain the unresolved overlap obligation.
+    if (expr->getNumPlacementArgs() && expr->hasInitializer() &&
+        expr->getAllocatedType()->isRecordType())
+      emit("8.18.1", expr, "placement-construction-needs-nonoverlap-or-exact-overlap-proof");
     return true;
   }
 
@@ -662,6 +901,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
       // enter this proof and retain their overlap candidate.
       if (parent.get<clang::CallExpr>() || parent.get<clang::CXXConstructExpr>()) return true;
       if (!parent.get<clang::ImplicitCastExpr>() && !parent.get<clang::ParenExpr>() &&
+          !parent.get<clang::CXXFunctionalCastExpr>() && !parent.get<clang::CXXStaticCastExpr>() &&
           !parent.get<clang::ExprWithCleanups>() && !parent.get<clang::CXXBindTemporaryExpr>() &&
           !parent.get<clang::MaterializeTemporaryExpr>() && !parent.get<clang::ConditionalOperator>()) return false;
       node = parent;
@@ -684,8 +924,10 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
         if (llvm::isa<clang::StringLiteral>(element->getBase()->IgnoreParenImpCasts()) &&
             (boundedArrayIndex(element) || baseline_pointer::Proof(Context).boundedSubscript(element))) return true;
     const auto *var = directVariable(expr);
+    const bool concatenationOwner = var && !Proofs.OpaqueAssembly && Proofs.StringConcatenationOwners.count(var) &&
+        !Proofs.OwnerEscaped.count(var) && freshDefaultStringOwner(var, Context);
     if (!var || var->getType()->isReferenceType() ||
-        (Proofs.Escaped.count(var) && !Proofs.onlyImmediateCapture(var))) return baseline_lifetime::Proof(Context).live(expr);
+        (Proofs.Escaped.count(var) && !Proofs.onlyImmediateCapture(var) && !concatenationOwner)) return baseline_lifetime::Proof(Context).live(expr);
     if (var->hasInit() && Context.getSourceManager().isPointWithin(
             expr->getExprLoc(), var->getInit()->getBeginLoc(), var->getInit()->getEndLoc())) return false;
     if (var->hasLocalStorage() && var->getType()->isConstantArrayType() &&
@@ -695,7 +937,8 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // Standard string operations preserve the local owning object. Escaping
     // owner references and explicit destruction/reuse were rejected above;
     // character buffers and iterators do not inherit this lifetime proof.
-    if (var->hasLocalStorage() && standardStringType(var->getType())) return true;
+    if (var->hasLocalStorage() && standardStringType(var->getType()))
+      return !Proofs.OpaqueAssembly && freshDefaultStringOwner(var, Context);
     const bool standardRecord = record && memoryStandardNamespace(record->getDeclContext());
     const bool stringView = standardRecord && record->getName() == "basic_string_view";
     const bool atomic = standardRecord && record->getName() == "atomic";
@@ -872,7 +1115,8 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // they are unresolved provenance, not a typed pointer expression.
     if (!expr || depth > 8 || expr->getType().isNull() || expr->isTypeDependent()) return false;
     if (expr->getType()->isFunctionPointerType() || expr->getType()->isMemberPointerType()) return true;
-    if (baseline_library::Proof(Context).validStream(expr)) return true;
+    if (freshDirectoryNullTest(expr, Context) || baseline_library::Proof(Context).validStream(expr) ||
+        baseline_library::Proof(Context).validDirectory(expr)) return true;
     expr = expr->IgnoreParenImpCasts();
     if (llvm::isa<clang::CXXThisExpr>(expr) || llvm::isa<clang::StringLiteral>(expr) ||
         llvm::isa<clang::PredefinedExpr>(expr) || llvm::isa<clang::CXXNullPtrLiteralExpr>(expr)) return true;
@@ -882,6 +1126,9 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
       if (const auto *function = call->getDirectCallee())
         if (function->getIdentifier() && function->getName() == "__errno_location" && function->isExternC() &&
             Context.getSourceManager().isInSystemHeader(function->getLocation())) return true;
+    if (const auto *unary = llvm::dyn_cast<clang::UnaryOperator>(expr))
+      if (unary->getOpcode() == clang::UO_Deref &&
+          baseline_library::literalRangePointer(directVariable(unary->getSubExpr()), Context) == 2) return true;
     if (auto *unary = llvm::dyn_cast<clang::UnaryOperator>(expr))
       if (unary->getOpcode() == clang::UO_AddrOf)
         if (const auto *var = directVariable(unary->getSubExpr()))
@@ -891,6 +1138,11 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
       if (field && field->getType()->isArrayType() && nonLibraryObject(member, depth + 1)) return true;
     }
     if (const auto *var = directVariable(expr)) {
+      // A cleanup callback implicitly receives the variable address and may
+      // retain it across loop iterations; initializer provenance is insufficient.
+      if (var->hasAttr<clang::CleanupAttr>()) return false;
+      const auto literalRange = baseline_library::literalRangePointer(var, Context);
+      if (literalRange == 2 || (literalRange == 1 && !Proofs.Mutated.count(var) && !Proofs.Escaped.count(var))) return true;
       if (Proofs.BoundedRangeIterators.count(var)) return true;
       if (const auto *parameter = llvm::dyn_cast<clang::ParmVarDecl>(var)) {
         const auto argument = Proofs.ImmediateLambdaArguments.find(parameter);
@@ -1003,7 +1255,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // lifetime. Its live-object entry contract is checked at each caller,
     // including an explicit candidate for copy/move assignment calls above.
     if (rule == "6.8.1" && !gap && implicitTrivialCopyBody(expr)) return;
-    emitBaselineCandidate(Context, rule, expr->getExprLoc(), reason, gap);
+    emitBaselineCandidate(Context, rule, expr->getExprLoc(), reason, gap, expr);
   }
   clang::ASTContext &Context;
   const MemoryProofInputs &Proofs;

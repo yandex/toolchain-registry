@@ -1,6 +1,7 @@
 // Compact Clang CFG extraction for CTU C++:2023 Rule 9.6.4.
 
 #include "fact_visitor.h"
+#include "initialization_flow.h"
 
 #include <algorithm>
 #include <memory>
@@ -25,6 +26,7 @@ bool isExceptionalExitStmt(const Stmt *S) {
 void FactVisitor::emitControlFlow(FunctionDecl *FD,
                                   const facts_pb::EntityId &fn) {
   if (!FD || !FD->getBody()) return;
+  emitInitializationFlow(FD, Ctx, fn);
 
   CFG::BuildOptions options;
   // Calls through ordinary automatic-object destruction are part of normal

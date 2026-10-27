@@ -6,7 +6,7 @@
 
 void emitBaselineCandidate(clang::ASTContext &ctx, llvm::StringRef rule,
                            clang::SourceLocation loc, llvm::StringRef reason,
-                           bool coverageGap = false);
+                           bool coverageGap = false, const clang::Expr *read = nullptr);
 void collectMemoryBaselineFacts(clang::ASTContext &ctx);
 void collectSemanticBaselineFacts(clang::ASTContext &ctx);
 

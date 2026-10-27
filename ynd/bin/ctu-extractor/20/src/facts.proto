@@ -581,6 +581,14 @@ message FuncDecl {
   // visible prior declaration. Keep spelling provenance above for old readers.
   bool has_effective_noreturn_identity = 36;
   bool effective_noreturn = 37;
+  // Exact frontend builtin identity, independent of names or source attributes.
+  // Absent coverage in older blobs cannot establish a builtin memory contract.
+  bool has_compiler_builtin_identity = 38;
+  enum CompilerBuiltin {
+    CB_NONE = 0;
+    CB_IS_CONSTANT_EVALUATED = 1;
+  }
+  CompilerBuiltin compiler_builtin = 39;
 }
 
 message VarDecl {
@@ -717,6 +725,102 @@ message OdrDefinition {
   bool has_complete_identity = 12;
 }
 
+// Scalar definite-initialization IR. This is a must-proof vocabulary, separate
+// from may-read/write footprints. Missing/unknown values never prove safety.
+message InitializationValue {
+  enum Kind {
+    IV_UNKNOWN = 0;
+    IV_DEFINED = 1;
+    IV_PARAMETER = 2;
+    IV_LOCAL = 3;
+    IV_COMBINE = 4;
+    IV_CALL = 5;
+    IV_OUTPUT = 6; // sole scalar output formal storage (version 2)
+    IV_CONSTRUCTOR_FIELD = 7; // exact receiver field in declaration order (version 3)
+    IV_RECEIVER_FIELD = 8; // symbolic const getter receiver dependency (version 4)
+  }
+  Kind kind = 1;
+  uint32 index = 2; // zero-based parameter or local identity
+  EntityId callee = 3; // only exact nonvirtual direct calls in version 1
+  repeated InitializationValue operands = 4; // positional call actuals / inputs
+  // Version-4 exact local object receiver for a nonvirtual const scalar getter.
+  repeated uint32 receiver_locals = 5;
+  string receiver_record_identity = 6;
+  // Version 5: ordinary function borrowing one const record reference. The
+  // positional operand at this index is IV_UNKNOWN; fields use receiver_locals.
+  bool receiver_is_parameter = 7;
+  uint32 receiver_parameter_index = 8;
+}
+
+message InitializationOperation {
+  enum Kind { IO_UNKNOWN = 0; IO_ASSIGN = 1; IO_READ = 2; IO_RETURN = 3; IO_OUTPUT_ASSIGN = 4; IO_CALL = 5; IO_FIELD_ASSIGN = 6; IO_CONSTRUCT = 7; IO_RECEIVER_CALL = 8; }
+  Kind kind = 1;
+  uint32 local = 2;
+  InitializationValue value = 3;
+  uint64 obligation_id = 4; // nonzero, function-scoped identity of one read
+  SourceRef loc = 5;
+  // Version-2 ordered standalone call. The sole output argument is represented
+  // by an unknown positional value and an exact borrowed storage binding.
+  EntityId callee = 6;
+  repeated InitializationValue arguments = 7;
+  bool has_output_actual = 8;
+  uint32 output_actual_local = 9;
+  bool output_actual_is_parameter = 10;
+  uint32 output_argument_index = 11;
+  // Version-3 exact local object construction. Destination slots correspond to
+  // direct scalar fields in declaration order; identity includes record layout.
+  repeated uint32 destination_locals = 12;
+  string constructor_record_identity = 13;
+  // Every getter invocation records its receiver, including discarded results.
+  repeated uint32 receiver_locals = 14;
+  string receiver_record_identity = 15;
+  // Version-5 explicit record-parameter binding, disjoint from output actuals.
+  bool receiver_is_parameter = 16;
+  uint32 receiver_parameter_index = 17;
+}
+
+message InitializationBlock {
+  uint32 block_id = 1;
+  repeated uint32 successors = 2;
+  repeated InitializationOperation operations = 3; // execution order, never sorted
+  bool is_entry = 4;
+}
+
+message InitializationFunction {
+  EntityId function = 1;
+  repeated InitializationBlock blocks = 2;
+  uint32 parameter_count = 3;
+  uint32 local_count = 4;
+  bool scalar_return = 5;
+  // False for unsupported control flow or truncated
+  // extraction. Such a body cannot discharge any candidate or caller obligation.
+  bool complete = 6;
+  uint32 version = 7; // 1: scalar returns; 2: isolated outputs; 3: constructor fields; 4: const getter receiver; 5: const record formal
+  SourceRef loc = 8;
+  fixed64 definition_hash = 9; // FuncDecl.body_hash, for duplicate-definition consistency
+  bool has_output_parameter = 10;
+  uint32 output_parameter_index = 11;
+  // Own effects touch only local scalars, scalar value parameters, the sole
+  // output storage, or supported receiver-field reads. Every evaluated callee
+  // must separately prove isolation; borrowed record fields cannot be mutated.
+  bool own_effects_isolated = 12;
+  repeated EntityId effect_callees = 13;
+  // Version-3 isolated constructor receiver, disjoint from output formals.
+  bool is_constructor = 14;
+  string constructor_record_identity = 15;
+  uint32 constructor_field_count = 16;
+  // Version-4 symbolic receiver inputs, separate from constructor output fields.
+  bool has_record_receiver = 17;
+  string receiver_record_identity = 18;
+  uint32 receiver_field_count = 19;
+  // Version 5 reuses symbolic receiver fields for one ordinary const Record&
+  // formal. Parameter count retains full declared arity; this index cannot be
+  // read as a scalar IV_PARAMETER or appear in scalar parameter requirements.
+  // False/zero preserves the implicit-this mode of version 4.
+  bool receiver_is_parameter = 20;
+  uint32 receiver_parameter_index = 21;
+}
+
 // ---------------------------------------------------------------------------
 // Envelope + blob
 // ---------------------------------------------------------------------------
@@ -729,6 +833,8 @@ message BaselineCandidate {
   SourceRef loc = 2;
   string reason = 3;
   bool coverage_gap = 4;
+  EntityId initialization_function = 5;
+  uint64 initialization_obligation_id = 6;
 }
 
 message Fact {
@@ -749,6 +855,7 @@ message Fact {
     ControlFlowBlock control_flow_block = 14;
     DynamicTypeUse dynamic_type_use = 15;
     BaselineCandidate baseline_candidate = 16;
+    InitializationFunction initialization_function = 17;
   }
 }
 

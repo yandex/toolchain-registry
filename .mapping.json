@@ -76,6 +76,8 @@
   "ynd/bin/ctu-extractor/20/src/fact_visitor_exprs.cpp":"toolchains/ynd/bin/ctu-extractor/20/src/fact_visitor_exprs.cpp",
   "ynd/bin/ctu-extractor/20/src/fact_visitor_pointers.cpp":"toolchains/ynd/bin/ctu-extractor/20/src/fact_visitor_pointers.cpp",
   "ynd/bin/ctu-extractor/20/src/facts.proto":"toolchains/ynd/bin/ctu-extractor/20/src/facts.proto",
+  "ynd/bin/ctu-extractor/20/src/initialization_flow.cpp":"toolchains/ynd/bin/ctu-extractor/20/src/initialization_flow.cpp",
+  "ynd/bin/ctu-extractor/20/src/initialization_flow.h":"toolchains/ynd/bin/ctu-extractor/20/src/initialization_flow.h",
   "ynd/bin/ctu-extractor/20/src/source_utils.cpp":"toolchains/ynd/bin/ctu-extractor/20/src/source_utils.cpp",
   "ynd/bin/ctu-extractor/20/src/source_utils.h":"toolchains/ynd/bin/ctu-extractor/20/src/source_utils.h",
   "ynd/bin/ctu-extractor/20/unwrap/ix.sh":"toolchains/ynd/bin/ctu-extractor/20/unwrap/ix.sh",

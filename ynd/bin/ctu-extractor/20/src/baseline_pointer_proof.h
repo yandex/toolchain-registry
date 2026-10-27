@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attr.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ParentMapContext.h"
@@ -162,7 +163,7 @@ class Proof {
     if (const auto *v = variable(e)) {
       const auto *call = v->hasInit() ? clang::dyn_cast<clang::CallExpr>(v->getInit()->IgnoreParenImpCasts()) : nullptr;
       const auto *callee = call ? call->getDirectCallee() : nullptr;
-      if (callee && callee->getIdentifier() && callee->getName() == "readlink" && callee->isExternC() &&
+      if (!v->hasAttr<clang::CleanupAttr>() && callee && callee->getIdentifier() && callee->getName() == "readlink" && callee->isExternC() &&
           C.getSourceManager().isInSystemHeader(callee->getLocation()) && call->getNumArgs() == 3 && nonnegative(v, e)) {
         auto length = call->getArg(2)->getIntegerConstantExpr(C);
         const auto *f = function(v);
@@ -191,6 +192,10 @@ class Proof {
           if (!exits(then) && !clang::isa_and_nonnull<clang::ContinueStmt>(then)) continue;
           const auto *condition = clang::dyn_cast<clang::BinaryOperator>(test->getCond()->IgnoreParenImpCasts());
           if (!condition || variable(condition->getLHS()) != v) continue;
+          // Check the converted operands: len <= 0ULL converts a negative signed
+          // result to unsigned and does not establish a nonnegative len.
+          if (!condition->getLHS()->getType()->isSignedIntegerType() ||
+              !condition->getRHS()->getType()->isSignedIntegerType()) continue;
           if (condition->getOpcode() != clang::BO_LT && condition->getOpcode() != clang::BO_LE) continue;
           auto zero = condition->getRHS()->getIntegerConstantExpr(C);
           if (zero && zero->isZero()) return true;

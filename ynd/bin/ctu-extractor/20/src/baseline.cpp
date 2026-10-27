@@ -1,9 +1,10 @@
 #include "baseline.h"
 #include "source_utils.h"
+#include "initialization_flow.h"
 
 void emitBaselineCandidate(clang::ASTContext &ctx, llvm::StringRef rule,
                            clang::SourceLocation loc, llvm::StringRef reason,
-                           bool coverageGap) {
+                           bool coverageGap, const clang::Expr *read) {
   auto &sm = ctx.getSourceManager();
   // Preserve otherwise unlocatable obligations at the translation-unit root.
   if (loc.isInvalid()) {
@@ -17,5 +18,7 @@ void emitBaselineCandidate(clang::ASTContext &ctx, llvm::StringRef rule,
   setLoc(candidate->mutable_loc(), loc, sm);
   candidate->set_reason(reason.str());
   candidate->set_coverage_gap(coverageGap);
+  if (rule == "11.6.2" && reason == "value-read-needs-initialization-proof")
+    tagInitializationRead(read, candidate);
   g_facts.push_back(std::move(fact));
 }

@@ -691,7 +691,11 @@ uint64_t FactVisitor::buildNode(Expr *E, const facts_pb::EntityId &fn, uint64_t 
     }
   } else if (auto *CCE = dyn_cast<CXXConstructExpr>(E)) {
     emitObjectConstruction(CCE, &fn);
-    ck = facts_pb::CK_CONSTRUCT_CALL;  // direct-init: args indeterminately sequenced
+    // Braced constructor arguments are evaluated left-to-right, including
+    // non-aggregate classes without an initializer_list constructor. Keep the
+    // CallSite below: its body still contributes effects to enclosing operands.
+    ck = CCE->isListInitialization() ? facts_pb::CK_INIT_LIST
+                                     : facts_pb::CK_CONSTRUCT_CALL;
     for (Expr *a : CCE->arguments()) kids.push_back({a, false});
     if (CXXConstructorDecl *Ctor = CCE->getConstructor()) {
       // `va_list ap;` is represented on some targets as a CXXConstructExpr

@@ -141,12 +141,20 @@ class Proof {
   llvm::DenseMap<const clang::VarDecl *, bool> Cached;
   llvm::DenseSet<const clang::VarDecl *> Active;
   llvm::DenseSet<const clang::FunctionDecl *> Functions;
+  llvm::DenseSet<const clang::ParmVarDecl *> DefinedParameters;
   bool definedVariable(const clang::VarDecl *v, unsigned depth) {
     if (Inputs.Assembly) return false;
     v = v->getCanonicalDecl();
     if (depth > 24 || !v->getType()->isScalarType() || v->getType()->isReferenceType() ||
-        v->getType().isVolatileQualified() || clang::isa<clang::ParmVarDecl>(v)) return false;
-    if (auto it = Cached.find(v); it != Cached.end()) return it->second;
+        v->getType().isVolatileQualified()) return false;
+    if (const auto *parameter = clang::dyn_cast<clang::ParmVarDecl>(v)) {
+      const auto &uses = Inputs.Variables[v];
+      return DefinedParameters.count(parameter) && !uses.Unknown && uses.Writes.empty();
+    }
+    // A wrapper-local initializer can depend on this invocation's arguments.
+    // Never reuse a storage result across different call contexts.
+    if (Functions.empty())
+      if (auto it = Cached.find(v); it != Cached.end()) return it->second;
     if (!Active.insert(v).second) return false;
     const auto *definition = v->getDefinition();
     if (definition) v = definition;
@@ -163,7 +171,7 @@ class Proof {
     }
     for (const auto *write : uses.Writes) if (good) good = value(write, depth + 1);
     Active.erase(v->getCanonicalDecl());
-    Cached[v->getCanonicalDecl()] = good;
+    if (Functions.empty()) Cached[v->getCanonicalDecl()] = good;
     return good;
   }
   bool value(const clang::Expr *e, unsigned depth) {
@@ -193,8 +201,26 @@ class Proof {
     if (callee->isExternC() && C.getSourceManager().isInSystemHeader(callee->getLocation()) &&
         (callee->getName() == "syscall" || callee->getName() == "getpid" || callee->getName() == "gettid")) return true;
     if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(callee)) if (method->isVirtual()) return false;
+    // Operator-call AST nodes include the implicit receiver as argument zero;
+    // ordinary member-call nodes do not. It is not a declared scalar parameter.
+    const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(callee);
+    const unsigned offset = clang::isa<clang::CXXOperatorCallExpr>(call) && method && !method->isStatic() ? 1 : 0;
     const clang::FunctionDecl *definition = nullptr;
-    if (!callee->hasBody(definition) || !Functions.insert(definition).second) return false;
+    if (!callee->hasBody(definition) || Functions.count(definition) ||
+        call->getNumArgs() != definition->getNumParams() + offset || definition->isVariadic()) return false;
+    // Bind only independently proven scalar arguments. Other parameters stay
+    // unknown, but must not prevent proving an independent return value (for
+    // example a syscall status in a wrapper taking a string_view). Reads of
+    // uninitialized arguments remain candidates at their own source location.
+    llvm::SmallVector<const clang::ParmVarDecl *, 4> parameters;
+    for (unsigned i = 0; i < definition->getNumParams(); ++i) {
+      const auto *parameter = definition->getParamDecl(i);
+      const auto type = parameter->getType();
+      if (type->isScalarType() && !type->isReferenceType() && value(call->getArg(i + offset), depth + 1))
+        parameters.push_back(parameter);
+    }
+    Functions.insert(definition);
+    for (const auto *parameter : parameters) DefinedParameters.insert(parameter);
     const auto *body = clang::dyn_cast<clang::CompoundStmt>(definition->getBody());
     // A final unconditional return excludes unmodeled scalar fallthrough.
     bool good = body && !body->body_empty() && clang::isa<clang::ReturnStmt>(body->body_back());
@@ -202,6 +228,7 @@ class Proof {
     if (good) returns.TraverseStmt(const_cast<clang::Stmt *>(definition->getBody()));
     good &= !returns.Values.empty();
     for (const auto *result : returns.Values) if (good) good = value(result, depth + 1);
+    for (const auto *parameter : parameters) DefinedParameters.erase(parameter);
     Functions.erase(definition);
     return good;
   }

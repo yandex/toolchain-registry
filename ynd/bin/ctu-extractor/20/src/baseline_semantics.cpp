@@ -2,12 +2,16 @@
 // a candidate is retained when reachability, liveness or effects are unknown.
 #include "baseline.h"
 #include "baseline_pointer_proof.h"
+#include "baseline_lifetime_proof.h"
+#include "baseline_library_proof.h"
 #include "baseline_context_proof.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
 #include "clang/Analysis/CFG.h"
@@ -405,6 +409,25 @@ class FunctionUseCollector : public clang::RecursiveASTVisitor<FunctionUseCollec
   clang::ASTContext &Context;
 };
 
+// A dependent template expression can retain BinaryOperator syntax even
+// when a known class operand requires overload resolution. Without an implicit
+// conversion, such an operand cannot participate in built-in arithmetic. Do
+// not report arithmetic UB for the unresolved operator syntax itself; effects
+// inside the eventual overloaded function remain separate analysis sites.
+bool requiresOverloadedArithmetic(const clang::Expr *operand) {
+  const auto type = operand->getType();
+  if (type->isDependentType()) return false;
+  const auto *record = type->getAsCXXRecordDecl();
+  if (!record || !(record = record->getDefinition()) || record->isDependentContext()) return false;
+  for (const auto &entry : record->getVisibleConversionFunctions()) {
+    const auto *conversion = clang::dyn_cast<clang::CXXConversionDecl>(entry);
+    // Unknown/templates and implicit (including inherited) conversions could
+    // still select a built-in operator after template substitution.
+    if (!conversion || !conversion->isExplicit()) return false;
+  }
+  return true;
+}
+
 class SemanticBaselineVisitor
     : public clang::RecursiveASTVisitor<SemanticBaselineVisitor> {
  public:
@@ -557,7 +580,10 @@ class SemanticBaselineVisitor
     if (const auto *compound = clang::dyn_cast<clang::CompoundAssignOperator>(expression))
       computationType = compound->getComputationResultType();
     const bool unsignedArithmetic = computationType->isUnsignedIntegerType();
-    if (!constant) switch (expression->getOpcode()) {
+    const bool overloaded = expression->isTypeDependent() &&
+        (requiresOverloadedArithmetic(expression->getLHS()) ||
+         requiresOverloadedArithmetic(expression->getRHS()));
+    if (!constant && !overloaded) switch (expression->getOpcode()) {
       case clang::BO_Div: case clang::BO_Rem:
       case clang::BO_DivAssign: case clang::BO_RemAssign: {
         auto divisor = expression->getRHS()->getIntegerConstantExpr(Context);
@@ -592,7 +618,130 @@ class SemanticBaselineVisitor
                 "Logical RHS may have persistent side effects; transitive effects are not proven absent");
     return true;
   }
+  llvm::DenseMap<const clang::FunctionDecl *, bool> LiteralRangeOwnerSafety;
+  bool literalRangeOwnerSafe(const clang::CXXForRangeStmt *loop) {
+    // Resolve the actual enclosing function rather than retaining mutable
+    // traversal state: visiting a local class or lambda must not reset its owner.
+    clang::DynTypedNode node = clang::DynTypedNode::create(*loop);
+    const clang::FunctionDecl *owner = nullptr;
+    for (unsigned depth = 0; depth != 256; ++depth) {
+      auto parents = Context.getParents(node);
+      if (parents.size() != 1) return false;
+      if ((owner = parents[0].get<clang::FunctionDecl>())) break;
+      node = parents[0];
+    }
+    if (!owner || !owner->hasBody()) return false;
+    auto cached = LiteralRangeOwnerSafety.find(owner);
+    if (cached != LiteralRangeOwnerSafety.end()) return cached->second;
+    class Scan : public clang::RecursiveASTVisitor<Scan> {
+     public:
+      bool Safe = true;
+      bool shouldVisitImplicitCode() const { return true; }
+      bool VisitStmt(clang::Stmt *statement) {
+        if (clang::isa<clang::AsmStmt, clang::IndirectGotoStmt,
+                       clang::CoroutineBodyStmt>(statement)) Safe = false;
+        return Safe;
+      }
+      bool VisitCallExpr(clang::CallExpr *call) {
+        const auto *callee = call->getDirectCallee();
+        if (!callee) {
+          Safe = false;
+          return false;
+        }
+        const auto *identifier = callee->getIdentifier();
+        const auto name = identifier ? identifier->getName() : llvm::StringRef();
+        if (callee->hasAttr<clang::ReturnsTwiceAttr>() || name == "setjmp" ||
+            name == "_setjmp" || name == "sigsetjmp" || name == "__sigsetjmp" ||
+            name == "__builtin_setjmp") Safe = false;
+        return Safe;
+      }
+    } scan;
+    scan.TraverseStmt(owner->getBody());
+    LiteralRangeOwnerSafety[owner] = scan.Safe;
+    return scan.Safe;
+  }
+  llvm::DenseSet<const clang::UnaryOperator *> SafeLiteralRangeOperations;
+  bool VisitCXXForRangeStmt(clang::CXXForRangeStmt *loop) {
+    if (!literalRangeOwnerSafe(loop)) return true;
+    // Prove only the compiler-owned operations of a direct literal-list range.
+    // The unnamed backing array lives through the loop; copying scalar elements
+    // cannot expose its storage. No source-written iterator operation is covered.
+    const auto *variable = loop->getLoopVariable();
+    if (!variable || variable->getType()->isReferenceType() ||
+        !variable->getType()->isScalarType()) return true;
+    const clang::Expr *range = loop->getRangeInit();
+    while (range) {
+      range = range->IgnoreParenImpCasts();
+      if (const auto *cleanup = clang::dyn_cast<clang::ExprWithCleanups>(range))
+        range = cleanup->getSubExpr();
+      else if (const auto *temporary = clang::dyn_cast<clang::MaterializeTemporaryExpr>(range))
+        range = temporary->getSubExpr();
+      else break;
+    }
+    const auto *list = clang::dyn_cast_or_null<clang::CXXStdInitializerListExpr>(range);
+    if (!list) return true;
+    const auto *record = clang::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+        list->getType()->getAsCXXRecordDecl());
+    const auto *primary = record ? record->getSpecializedTemplate() : nullptr;
+    if (!primary || primary->getName() != "initializer_list" ||
+        !Context.getSourceManager().isInSystemHeader(primary->getLocation()) ||
+        !Context.getSourceManager().isInSystemHeader(record->getLocation())) return true;
+    const clang::DeclContext *space = primary->getDeclContext();
+    while (const auto *ns = clang::dyn_cast<clang::NamespaceDecl>(space)) {
+      if (!ns->isInline()) break;
+      space = ns->getParent();
+    }
+    const auto *standard = clang::dyn_cast<clang::NamespaceDecl>(space);
+    if (!standard || standard->getName() != "std" ||
+        !standard->getParent()->isTranslationUnit()) return true;
+    const clang::Expr *array = list->getSubExpr()->IgnoreParenImpCasts();
+    if (const auto *temporary = clang::dyn_cast<clang::MaterializeTemporaryExpr>(array))
+      array = temporary->getSubExpr()->IgnoreParenImpCasts();
+    const auto *initializers = clang::dyn_cast<clang::InitListExpr>(array);
+    if (!initializers || !Context.getAsConstantArrayType(initializers->getType())) return true;
+    for (const auto *element : initializers->inits()) {
+      const auto *literal = element->IgnoreParenImpCasts();
+      if (!clang::isa<clang::IntegerLiteral, clang::FloatingLiteral,
+                      clang::CharacterLiteral, clang::CXXBoolLiteralExpr,
+                      clang::CXXNullPtrLiteralExpr, clang::StringLiteral>(literal)) return true;
+    }
+    auto declaration = [](const clang::DeclStmt *statement) -> const clang::VarDecl * {
+      return statement && statement->isSingleDecl()
+                 ? clang::dyn_cast<clang::VarDecl>(statement->getSingleDecl()) : nullptr;
+    };
+    const auto *begin = declaration(loop->getBeginStmt());
+    const auto *end = declaration(loop->getEndStmt());
+    if (!begin || !end || !begin->isImplicit() || !end->isImplicit() ||
+        !begin->getType()->isPointerType() || !end->getType()->isPointerType()) return true;
+    auto standardEndpoint = [&](const clang::VarDecl *decl, llvm::StringRef name) {
+      const auto *call = decl->hasInit()
+          ? clang::dyn_cast<clang::CXXMemberCallExpr>(decl->getInit()->IgnoreParenImpCasts()) : nullptr;
+      const auto *method = call ? call->getMethodDecl() : nullptr;
+      return method && method->getName() == name && method->isConst() &&
+          call->getNumArgs() == 0 &&
+          method->getParent()->getCanonicalDecl() == record->getCanonicalDecl() &&
+          Context.getSourceManager().isInSystemHeader(method->getLocation());
+    };
+    if (!standardEndpoint(begin, "begin") || !standardEndpoint(end, "end")) return true;
+    auto references = [](const clang::Expr *expr, const clang::VarDecl *decl) {
+      const auto *ref = expr ? clang::dyn_cast<clang::DeclRefExpr>(expr->IgnoreParenImpCasts()) : nullptr;
+      return ref && ref->getDecl() == decl;
+    };
+    const auto *condition = clang::dyn_cast_or_null<clang::BinaryOperator>(loop->getCond());
+    const auto *increment = clang::dyn_cast_or_null<clang::UnaryOperator>(loop->getInc());
+    const auto *read = variable->hasInit()
+        ? clang::dyn_cast<clang::UnaryOperator>(variable->getInit()->IgnoreParenImpCasts()) : nullptr;
+    if (!condition || condition->getOpcode() != clang::BO_NE ||
+        !references(condition->getLHS(), begin) || !references(condition->getRHS(), end) ||
+        !increment || increment->getOpcode() != clang::UO_PreInc ||
+        !references(increment->getSubExpr(), begin) || !read ||
+        read->getOpcode() != clang::UO_Deref || !references(read->getSubExpr(), begin)) return true;
+    SafeLiteralRangeOperations.insert(increment);
+    SafeLiteralRangeOperations.insert(read);
+    return true;
+  }
   bool VisitUnaryOperator(clang::UnaryOperator *expression) {
+    if (SafeLiteralRangeOperations.count(expression)) return true;
     if (expression->getOpcode() == clang::UO_Deref &&
         !clang::isa<clang::CXXThisExpr>(expression->getSubExpr()->IgnoreParenImpCasts()) &&
         !standardErrnoPointer(expression->getSubExpr(), Context))
@@ -611,6 +760,15 @@ class SemanticBaselineVisitor
         baseline_pointer::Proof(Context).boundedSubscript(expression)) return true;
     const auto *array = Context.getAsConstantArrayType(
         expression->getBase()->IgnoreParenImpCasts()->getType());
+    // A bounded terminator write through the original local character array
+    // also needs a nonescape/lifetime certificate. Do not generalize this to
+    // element reads, whose initialized-value obligations are independent.
+    const auto parents = Context.getParents(*expression);
+    const auto *assignment = parents.size() == 1 ? parents[0].get<clang::BinaryOperator>() : nullptr;
+    if (array && Context.getBaseElementType(array->getElementType())->isCharType() &&
+        assignment && assignment->getOpcode() == clang::BO_Assign && assignment->getLHS() == expression &&
+        baseline_pointer::Proof(Context).boundedSubscript(expression) &&
+        baseline_lifetime::Proof(Context).live(expression->getBase()->IgnoreParenImpCasts())) return true;
     auto index = expression->getIdx()->getIntegerConstantExpr(Context);
     if (array && index && !index->isNegative() &&
         index->getLimitedValue() < array->getSize().getLimitedValue()) return true;
@@ -620,7 +778,8 @@ class SemanticBaselineVisitor
   }
   bool VisitMemberExpr(clang::MemberExpr *expression) {
     if (expression->isArrow() &&
-        !clang::isa<clang::CXXThisExpr>(expression->getBase()->IgnoreParenImpCasts()))
+        !clang::isa<clang::CXXThisExpr>(expression->getBase()->IgnoreParenImpCasts()) &&
+        !baseline_library::freshDirectoryEntryMember(expression, Context))
       candidate("4.1.3", expression->getExprLoc(),
                 "Pointer member access requires a valid live object proof");
     return true;
