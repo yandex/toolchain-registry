@@ -1,6 +1,7 @@
 #include "bridge_header.h"
 
 #include "empty_catch_all_check.h"
+#include "pragma_once_check.h"
 
 namespace clang::tidy::eats {
 
@@ -8,6 +9,7 @@ class EatsModule : public ClangTidyModule {
 public:
     void addCheckFactories(ClangTidyCheckFactories& checkFactories) override {
         checkFactories.registerCheck<EmptyCatchAllCheck>("eats-empty-catch-all");
+        checkFactories.registerCheck<PragmaOnceCheck>("eats-pragma-once");
     }
 };
 

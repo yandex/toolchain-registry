@@ -4,6 +4,8 @@
 bridge_header.h
 empty_catch_all_check.cpp
 empty_catch_all_check.h
+pragma_once_check.cpp
+pragma_once_check.h
 tidy_module_eats.cpp
 {% endblock %}
 
