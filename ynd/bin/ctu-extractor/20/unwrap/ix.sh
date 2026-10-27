@@ -41,6 +41,8 @@ mkdir -p ${tmp}/ctu-extractor/factspb
 {% for source in [
     'CMakeLists.txt',
     'driver.cpp',
+    'initialization_flow.h',
+    'initialization_flow.cpp',
     'baseline.h',
     'baseline_pointer_proof.h',
     'baseline_context_proof.h',
