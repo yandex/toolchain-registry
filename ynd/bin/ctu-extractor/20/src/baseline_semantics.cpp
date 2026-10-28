@@ -95,7 +95,7 @@ bool nonThrowingStreamQuery(const clang::FunctionDecl *function, unsigned depth 
 bool nonThrowingQueryExpression(const clang::Stmt *statement, unsigned depth) {
   if (!statement || depth > 48) return false;
   if (const auto *call = clang::dyn_cast<clang::CallExpr>(statement)) {
-    if (!nonThrowingStreamQuery(call->getDirectCallee(), depth + 1)) return false;
+    if (!nonThrowingStreamQuery(exactDirectCallee(call), depth + 1)) return false;
   } else if (const auto *cast = clang::dyn_cast<clang::ExplicitCastExpr>(statement)) {
     if (!cast->getType()->isIntegralOrEnumerationType() ||
         !cast->getSubExpr()->getType()->isIntegralOrEnumerationType()) return false;
@@ -243,7 +243,7 @@ class PureExpressions {
     if (const auto *unary = clang::dyn_cast<clang::UnaryOperator>(expr))
       return !unary->isIncrementDecrementOp() && expression(unary->getSubExpr(), depth + 1);
     const auto *call = clang::dyn_cast<clang::CallExpr>(expr);
-    const auto *callee = call ? call->getDirectCallee() : nullptr;
+    const auto *callee = call ? exactDirectCallee(call) : nullptr;
     if (!callee) {
       const auto *lookup = call ? clang::dyn_cast<clang::UnresolvedLookupExpr>(call->getCallee()->IgnoreParenImpCasts()) : nullptr;
       if (!lookup || lookup->requiresADL() || call->getNumArgs() != 3 ||
@@ -296,7 +296,7 @@ class PureExpressions {
 
 bool standardErrnoPointer(const clang::Expr *expr, clang::ASTContext &context) {
   const auto *call = clang::dyn_cast<clang::CallExpr>(expr->IgnoreParenImpCasts());
-  const auto *callee = call ? call->getDirectCallee() : nullptr;
+  const auto *callee = call ? exactDirectCallee(call) : nullptr;
   return callee && !callee->hasBody() && callee->getIdentifier() && callee->getName() == "__errno_location" &&
       callee->isExternC() && context.getSourceManager().isInSystemHeader(callee->getLocation());
 }
@@ -339,7 +339,7 @@ bool cannotReachDoCondition(clang::Stmt *body) {
     return true;
   if (const auto *expression = clang::dyn_cast<clang::Expr>(last))
     if (const auto *call = clang::dyn_cast<clang::CallExpr>(expression->IgnoreParenImpCasts()))
-      if (const auto *callee = call->getDirectCallee())
+      if (const auto *callee = exactDirectCallee(call))
         return callee->isNoReturn() ||
             (callee->getBuiltinID() && callee->getName() == "__builtin_unreachable");
   return false;
@@ -475,9 +475,10 @@ class SemanticBaselineVisitor
   }
 
   void candidate(llvm::StringRef rule, clang::SourceLocation location,
-                 llvm::StringRef reason, bool gap = false) {
+                 llvm::StringRef reason, bool gap = false,
+                 const clang::FunctionDecl *effectCallee = nullptr) {
     if (InUnevaluated && rule != "4.1.1") return;
-    emitBaselineCandidate(Context, rule, location, reason, gap);
+    emitBaselineCandidate(Context, rule, location, reason, gap, nullptr, effectCallee);
   }
 
   void condition(const clang::Expr *expression) {
@@ -613,9 +614,21 @@ class SemanticBaselineVisitor
         break;
       default: break;
     }
-    if (!InStaticAssert && expression->isLogicalOp() && !PureExpressions(Context).expression(expression->getRHS()))
+    if (!InStaticAssert && expression->isLogicalOp() && !PureExpressions(Context).expression(expression->getRHS())) {
+      // A callee summary covers only the call, not effects in its arguments or
+      // receiver. Only anchor a plain call with independently effect-free args.
+      const clang::FunctionDecl *effectCallee = nullptr;
+      const auto *call = llvm::dyn_cast<clang::CallExpr>(expression->getRHS()->IgnoreParenImpCasts());
+      if (call && !llvm::isa<clang::CXXMemberCallExpr>(call) &&
+          !llvm::isa<clang::CXXOperatorCallExpr>(call)) {
+        bool safeArguments = true;
+        for (const auto *arg : call->arguments())
+          safeArguments = safeArguments && !arg->HasSideEffects(Context);
+        if (safeArguments) effectCallee = exactDirectCallee(call);
+      }
       candidate("8.14.1", expression->getRHS()->getExprLoc(),
-                "Logical RHS may have persistent side effects; transitive effects are not proven absent");
+                "Logical RHS may have persistent side effects; transitive effects are not proven absent", false, effectCallee);
+    }
     return true;
   }
   llvm::DenseMap<const clang::FunctionDecl *, bool> LiteralRangeOwnerSafety;
@@ -643,7 +656,7 @@ class SemanticBaselineVisitor
         return Safe;
       }
       bool VisitCallExpr(clang::CallExpr *call) {
-        const auto *callee = call->getDirectCallee();
+        const auto *callee = exactDirectCallee(call);
         if (!callee) {
           Safe = false;
           return false;

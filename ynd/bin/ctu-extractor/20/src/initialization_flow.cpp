@@ -1,4 +1,5 @@
 #include "initialization_flow.h"
+#include "baseline.h"
 
 #include <map>
 #include <memory>
@@ -23,6 +24,193 @@ bool tracked(QualType type) {
          (type->isIntegerType() || type->isRealFloatingType() ||
           type->isEnumeralType());
 }
+
+// A separate may-effect pass: accepting an expression here never supplies an
+// initialization or lifetime proof. Unsupported escape operations invalidate the
+// entire certificate instead of assuming a borrowed pointer cannot escape.
+class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
+ public:
+  BorrowEffects(FunctionDecl *fn, ASTContext &ctx,
+                facts_pb::BorrowedEffects *out) : ctx(ctx), out(out) {
+    out->set_version(1);
+    complete = !isa<CXXMethodDecl>(fn) && !fn->isVariadic() &&
+               !fn->isDependentContext() &&
+               (tracked(fn->getReturnType()) || fn->getReturnType()->isVoidType() || borrowedType(fn->getReturnType()));
+    out->set_returns_borrowed(borrowedType(fn->getReturnType()));
+    for (unsigned i = 0; i < fn->getNumParams(); ++i) {
+      auto *p = fn->getParamDecl(i);
+      parameters[p] = i;
+      bool borrowed = borrowedType(p->getType());
+      out->add_borrowed_parameters(borrowed);
+      out->add_parameter_effects(0);
+      if (!borrowed && !tracked(p->getType())) complete = false;
+    }
+    if (complete) TraverseStmt(fn->getBody());
+    for (const auto *ret : returns) {
+      auto *origin = out->add_returns();
+      const auto *e = ret->getRetValue();
+      e = e ? e->IgnoreParenImpCasts() : nullptr;
+      if (const auto *call = dyn_cast_or_null<CallExpr>(e)) {
+        auto found = callIndices.find(call);
+        if (found == callIndices.end()) { complete = false; continue; }
+        origin->set_from_call(true);
+        origin->set_call_index(found->second);
+      } else {
+        int index = -3;
+        if (e && e->getType()->isPointerType()) {
+          const auto *v = variable(e);
+          auto found = parameters.find(v);
+          if (found != parameters.end() && borrowedType(v->getType())) index = found->second;
+          else if (const auto *address = dyn_cast<UnaryOperator>(e))
+            if (address->getOpcode() == UO_AddrOf) index = storage(address->getSubExpr());
+        } else index = storage(e);
+        origin->set_parameter(index);
+        if (index < 0) complete = false;
+      }
+    }
+    out->set_complete(complete);
+  }
+  static bool borrowedType(QualType t) {
+    return !t.isVolatileQualified() &&
+           (t->isPointerType() || t->isLValueReferenceType()) &&
+           tracked(t->getPointeeType());
+  }
+  const VarDecl *variable(const Expr *e) {
+    const auto *ref = e ? dyn_cast<DeclRefExpr>(e->IgnoreParenImpCasts()) : nullptr;
+    return ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+  }
+  // -2 is private scalar storage; >=0 is a borrowed formal; -3 is unknown.
+  int storage(const Expr *e) {
+    if (!e) return -3;
+    e = e->IgnoreParens();
+    if (!tracked(e->getType())) return -3;
+    if (const auto *deref = dyn_cast<UnaryOperator>(e)) {
+      if (deref->getOpcode() != UO_Deref) return -3;
+      const auto *p = variable(deref->getSubExpr());
+      auto found = parameters.find(p);
+      if (found != parameters.end() && p->getType()->isPointerType() && borrowedType(p->getType()))
+        return found->second;
+      return -3;
+    }
+    const auto *v = variable(e);
+    if (!v || !v->hasLocalStorage()) return -3;
+    auto found = parameters.find(v);
+    if (found != parameters.end() && out->borrowed_parameters(found->second)) return found->second;
+    return tracked(v->getType()) ? -2 : -3;
+  }
+  void effect(const Expr *e, unsigned flags) {
+    int index = storage(e);
+    if (index == -3) complete = false;
+    if (index >= 0) out->set_parameter_effects(index, out->parameter_effects(index) | flags);
+  }
+  bool VisitStmt(Stmt *s) {
+    if (++nodes > 4096) { complete = false; return false; }
+    if (!isa<CompoundStmt, DeclStmt, ReturnStmt, IfStmt, ForStmt, WhileStmt,
+             DoStmt, SwitchStmt, CaseStmt, DefaultStmt, BreakStmt, ContinueStmt,
+             NullStmt, DeclRefExpr, IntegerLiteral, FloatingLiteral,
+             CharacterLiteral, CXXBoolLiteralExpr, ImplicitCastExpr,
+             ParenExpr, UnaryOperator, BinaryOperator, CallExpr,
+             ConditionalOperator, InitListExpr, CXXScalarValueInitExpr,
+             ImplicitValueInitExpr>(s)) { complete = false; return false; }
+    if (const auto *e = dyn_cast<Expr>(s))
+      if (e->getType().isNull() || e->getType().isVolatileQualified()) complete = false;
+    return true;
+  }
+  bool VisitVarDecl(VarDecl *v) {
+    if (exactFunctionPointerTarget(v)) return true;
+    if (!v->hasLocalStorage() || !tracked(v->getType()) || v->hasAttr<CleanupAttr>()) complete = false;
+    return true;
+  }
+  bool VisitDeclRefExpr(DeclRefExpr *e) {
+    const auto *v = dyn_cast<VarDecl>(e->getDecl());
+    if (!v || exactFunctionPointerTarget(v)) return true;
+    if (!v->hasLocalStorage()) complete = false;
+    if (v->getType()->isPointerType()) {
+      const Expr *top = e;
+      for (unsigned depth = 0; depth < 8; ++depth) {
+        auto parents = ctx.getParents(*top);
+        if (parents.size() != 1) break;
+        if (const auto *cast = parents[0].get<ImplicitCastExpr>()) { top = cast; continue; }
+        if (const auto *paren = parents[0].get<ParenExpr>()) { top = paren; continue; }
+        if (const auto *unary = parents[0].get<UnaryOperator>())
+          if (unary->getOpcode() == UO_Deref && storage(unary) >= 0) return true;
+        break;
+      }
+      if (!forwardedPointers.count(e)) complete = false;
+    }
+    return true;
+  }
+  bool VisitImplicitCastExpr(ImplicitCastExpr *e) {
+    if (e->getCastKind() == CK_LValueToRValue && !e->getType()->isPointerType()) effect(e->getSubExpr(), 1);
+    if (e->getCastKind() == CK_PointerToIntegral || e->getCastKind() == CK_IntegralToPointer || e->getCastKind() == CK_BitCast || e->getCastKind() == CK_LValueBitCast) complete = false;
+    return true;
+  }
+  bool VisitUnaryOperator(UnaryOperator *e) {
+    if (e->isIncrementDecrementOp()) effect(e->getSubExpr(), 3);
+    if (e->getOpcode() == UO_AddrOf && !borrowedAddresses.count(e)) complete = false;
+    if (e->getOpcode() == UO_Deref && storage(e) < 0) complete = false;
+    return true;
+  }
+  bool VisitBinaryOperator(BinaryOperator *e) {
+    if (e->isAssignmentOp()) effect(e->getLHS(), e->isCompoundAssignmentOp() ? 3 : 2);
+    if (e->getLHS()->getType()->isPointerType() || e->getRHS()->getType()->isPointerType()) complete = false;
+    return true;
+  }
+  bool VisitReturnStmt(ReturnStmt *s) {
+    if (!out->returns_borrowed()) return true;
+    returns.push_back(s);
+    const auto *e = s->getRetValue();
+    e = e ? e->IgnoreParenImpCasts() : nullptr;
+    if (const auto *ref = dyn_cast_or_null<DeclRefExpr>(e)) forwardedPointers.insert(ref);
+    if (const auto *address = dyn_cast_or_null<UnaryOperator>(e))
+      if (address->getOpcode() == UO_AddrOf) borrowedAddresses.insert(address);
+    return true;
+  }
+  bool VisitCallExpr(CallExpr *call) {
+    const auto *callee = exactDirectCallee(call);
+    if (!callee || isa<CXXMethodDecl>(callee) || callee->isVariadic() ||
+        call->getNumArgs() != callee->getNumParams() ||
+        (!tracked(call->getType()) && !call->getType()->isVoidType() && !borrowedType(call->getType()))) { complete = false; return true; }
+    callIndices[call] = out->calls_size();
+    auto *edge = out->add_calls();
+    computeFuncEntityId(const_cast<FunctionDecl *>(callee), ctx, ctx.getSourceManager(), edge->mutable_callee());
+    for (unsigned i = 0; i < callee->getNumParams(); ++i) {
+      auto type = callee->getParamDecl(i)->getType();
+      const auto *arg = call->getArg(i)->IgnoreParenImpCasts();
+      int binding = -3;
+      if (tracked(type)) binding = -1;
+      else if (borrowedType(type)) {
+        if (type->isLValueReferenceType()) binding = storage(arg);
+        else if (const auto *address = dyn_cast<UnaryOperator>(arg)) {
+          if (address->getOpcode() == UO_AddrOf) {
+            borrowedAddresses.insert(address);
+            binding = storage(address->getSubExpr());
+          }
+        } else if (const auto *ref = dyn_cast<DeclRefExpr>(arg)) {
+          const auto *p = dyn_cast<ParmVarDecl>(ref->getDecl());
+          auto found = parameters.find(p);
+          if (found != parameters.end() && p->getType()->isPointerType() && borrowedType(p->getType())) {
+            forwardedPointers.insert(ref);
+            binding = found->second;
+          }
+        }
+      }
+      if (binding == -3) complete = false;
+      edge->add_bindings(binding);
+    }
+    return true;
+  }
+ private:
+  ASTContext &ctx;
+  facts_pb::BorrowedEffects *out;
+  bool complete = true;
+  unsigned nodes = 0;
+  std::map<const VarDecl *, unsigned> parameters;
+  std::map<const CallExpr *, unsigned> callIndices;
+  std::vector<const ReturnStmt *> returns;
+  std::set<const Expr *> forwardedPointers;
+  std::set<const UnaryOperator *> borrowedAddresses;
+};
 
 const CXXRecordDecl *supportedRecord(QualType type) {
   if (type.isNull() || type.isVolatileQualified())
@@ -202,7 +390,7 @@ public:
   }
   const VarDecl *recognizeRecordArgument(const CallExpr *call,
                                          unsigned &index) const {
-    const auto *callee = call->getDirectCallee();
+    const auto *callee = exactDirectCallee(call);
     const auto *parameter = recordReceiverParameter(callee, index);
     if (!parameter || call->getNumArgs() != callee->getNumParams())
       return nullptr;
@@ -350,6 +538,18 @@ public:
         if (!tracked(parameter->getType()))
           supportedConstruction = false;
     }
+    if (construction && construction->getConstructionKind() == CXXConstructionKind::Complete &&
+        construction->getConstructor()->isCopyConstructor() &&
+        construction->getConstructor()->isTrivial() && construction->getNumArgs() == 1) {
+      const auto *ref = dyn_cast<DeclRefExpr>(construction->getArg(0)->IgnoreParenImpCasts());
+      const auto *source = ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+      auto found = objects.find(source);
+      if (found != objects.end() && found->second.record == record) {
+        supportedConstruction = true;
+        copies.emplace(construction, source);
+        reads.emplace(construction, reads.size() + 1);
+      }
+    }
     if (supportedConstruction && !objects.count(decl)) {
       Object object;
       object.record = record;
@@ -478,6 +678,7 @@ public:
     // The value of nested ++/-- would need an expression temporary. A
     // discarded standalone update only preserves its old initialization.
     if (expr->isIncrementDecrementOp()) {
+      reads.emplace(expr, reads.size() + 1);
       if (!standalone(expr))
         complete = false;
       const auto *ref =
@@ -498,8 +699,12 @@ public:
   bool VisitBinaryOperator(BinaryOperator *expr) {
     if (!expr->isAssignmentOp())
       return true;
-    if (expr->getOpcode() != BO_Assign)
-      complete = false;
+    if (expr->isCompoundAssignmentOp()) {
+      reads.emplace(expr, reads.size() + 1);
+      // Pointer arithmetic and overloaded operators need separate models.
+      if (!tracked(expr->getLHS()->getType()))
+        complete = false;
+    }
     const auto *leftRef =
         dyn_cast<DeclRefExpr>(expr->getLHS()->IgnoreParenImpCasts());
     const auto *leftVar =
@@ -520,7 +725,7 @@ public:
     return true;
   }
   bool VisitCallExpr(CallExpr *call) {
-    const auto *callee = call->getDirectCallee();
+    const auto *callee = exactDirectCallee(call);
     if (!callee) {
       complete = false;
       ownIsolated = false;
@@ -612,6 +817,7 @@ public:
     return true;
   }
   bool VisitCXXConstructExpr(CXXConstructExpr *expr) {
+    if (copies.count(expr)) return true;
     facts_pb::EntityId calleeId;
     computeFuncEntityId(expr->getConstructor(), ctx, ctx.getSourceManager(),
                         &calleeId);
@@ -669,6 +875,17 @@ public:
       out.set_kind(Value::IV_OUTPUT);
       return out;
     }
+    if (const auto *construction = dyn_cast<CXXConstructExpr>(expr)) {
+      auto copy = copies.find(construction);
+      if (copy == copies.end() || poisonAll || escapedObjects.count(copy->second)) return out;
+      out.set_kind(Value::IV_COMBINE);
+      for (auto slot : objects.find(copy->second)->second.fields) {
+        auto *field = out.add_operands();
+        field->set_kind(Value::IV_LOCAL);
+        field->set_index(slot);
+      }
+      return out;
+    }
     if (const auto *initializer = dyn_cast<CXXDefaultInitExpr>(expr))
       return value(initializer->getExpr(), depth + 1);
     if (const auto *constant = dyn_cast<ConstantExpr>(expr))
@@ -678,6 +895,17 @@ public:
     if (tracked(expr->getType()) &&
         isa<CXXScalarValueInitExpr, ImplicitValueInitExpr>(expr)) {
       out.set_kind(Value::IV_DEFINED);
+      return out;
+    }
+    if (const auto *list = dyn_cast<InitListExpr>(expr)) {
+      if (!tracked(list->getType()))
+        return out;
+      if (list->getNumInits() == 0) {
+        out.set_kind(Value::IV_DEFINED);
+        return out;
+      }
+      if (list->getNumInits() == 1)
+        return value(list->getInit(0), depth + 1);
       return out;
     }
     if (const auto *cast = dyn_cast<CastExpr>(expr)) {
@@ -698,7 +926,7 @@ public:
         out.set_kind(Value::IV_DEFINED);
       }
     } else if (const auto *call = dyn_cast<CallExpr>(expr)) {
-      auto *callee = call->getDirectCallee();
+      auto *callee = exactDirectCallee(call);
       auto getter = getterCalls.find(call);
       if (getter != getterCalls.end()) {
         if (poisonAll || escapedObjects.count(getter->second))
@@ -757,6 +985,7 @@ public:
   uint32_t localCount = 0;
   std::map<const VarDecl *, Object> objects;
   std::map<const CXXConstructExpr *, const VarDecl *> constructions;
+  std::map<const CXXConstructExpr *, const VarDecl *> copies;
   std::set<const VarDecl *> escapedObjects;
   const ParmVarDecl *output = nullptr;
   unsigned outputIndex = 0;
@@ -767,7 +996,7 @@ public:
   bool poisonAll = false;
   std::set<const VarDecl *> escaped;
   std::map<const VarDecl *, uint32_t> locals;
-  std::map<const ImplicitCastExpr *, uint64_t> reads;
+  std::map<const Expr *, uint64_t> reads;
 };
 } // namespace
 
@@ -837,6 +1066,7 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
   out->set_own_effects_isolated(flow.ownIsolated && flow.complete);
   for (const auto &entry : flow.effectCallees)
     *out->add_effect_callees() = entry.second;
+  BorrowEffects borrowed(function, ctx, out->mutable_borrowed_effects());
   out->set_definition_hash(bodyHash(function, ctx));
   out->set_parameter_count(function->getNumParams());
   out->set_local_count(flow.localCount);
@@ -844,7 +1074,7 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
   setLoc(out->mutable_loc(), function->getLocation(), ctx.getSourceManager());
   if (!cfg)
     flow.complete = false;
-  std::set<const ImplicitCastExpr *> emitted;
+  std::set<const Expr *> emitted;
   if (cfg)
     for (const auto *block : *cfg) {
       auto *target = out->add_blocks();
@@ -884,36 +1114,54 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
         if (!item)
           continue;
         const auto *stmt = item->getStmt();
-        if (const auto *cast = dyn_cast<ImplicitCastExpr>(stmt)) {
-          const auto found = flow.reads.find(cast);
+        auto emitRead = [&](const Expr *readExpr, const Expr *valueExpr) {
+          const auto found = flow.reads.find(readExpr);
           if (found == flow.reads.end())
-            continue;
-          if (!emitted.insert(cast).second) {
+            return;
+          if (!emitted.insert(readExpr).second) {
             flow.complete = false;
-            continue;
+            return;
           }
           auto *op = target->add_operations();
           op->set_kind(Operation::IO_READ);
           op->set_obligation_id(found->second);
-          *op->mutable_value() = flow.value(cast->getSubExpr());
-          setLoc(op->mutable_loc(), cast->getExprLoc(), ctx.getSourceManager());
-          if (!ambiguousAnchors.count(cast)) {
-            auto previous = anchors.find(cast);
+          *op->mutable_value() = flow.value(valueExpr);
+          setLoc(op->mutable_loc(), readExpr->getExprLoc(), ctx.getSourceManager());
+          if (!ambiguousAnchors.count(readExpr)) {
+            auto previous = anchors.find(readExpr);
             if (previous != anchors.end() &&
                 (previous->second.first.id() != id.id() ||
                  previous->second.first.id_hi() != id.id_hi() ||
                  previous->second.second != found->second)) {
               anchors.erase(previous);
-              ambiguousAnchors.insert(cast);
+              ambiguousAnchors.insert(readExpr);
             } else
-              anchors[cast] = {id, found->second};
+              anchors[readExpr] = {id, found->second};
           }
+        };
+        if (const auto *cast = dyn_cast<ImplicitCastExpr>(stmt)) {
+          emitRead(cast, cast->getSubExpr());
         } else if (const auto *construction =
                        dyn_cast<CXXConstructExpr>(stmt)) {
           auto found = flow.constructions.find(construction);
           if (found == flow.constructions.end())
             continue;
           const auto &object = flow.objects.find(found->second)->second;
+          auto copy = flow.copies.find(construction);
+          if (copy != flow.copies.end()) {
+            emitRead(construction, construction);
+            const auto &source = flow.objects.find(copy->second)->second;
+            for (unsigned i = 0; i < object.fields.size(); ++i) {
+              auto *op = target->add_operations();
+              op->set_kind(Operation::IO_ASSIGN);
+              op->set_local(object.fields[i]);
+              if (!flow.poisonAll && !flow.escapedObjects.count(copy->second)) {
+                op->mutable_value()->set_kind(Value::IV_LOCAL);
+                op->mutable_value()->set_index(source.fields[i]);
+              }
+            }
+            continue;
+          }
           auto *op = target->add_operations();
           op->set_kind(Operation::IO_CONSTRUCT);
           computeFuncEntityId(construction->getConstructor(), ctx,
@@ -931,7 +1179,7 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
             auto *op = target->add_operations();
             op->set_kind(Operation::IO_RECEIVER_CALL);
             computeFuncEntityId(
-                const_cast<FunctionDecl *>(call->getDirectCallee()), ctx,
+                const_cast<FunctionDecl *>(exactDirectCallee(call)), ctx,
                 ctx.getSourceManager(), op->mutable_callee());
             op->set_receiver_record_identity(
                 recordIdentity(object.record, ctx));
@@ -956,7 +1204,7 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
           auto *op = target->add_operations();
           op->set_kind(Operation::IO_CALL);
           computeFuncEntityId(
-              const_cast<FunctionDecl *>(call->getDirectCallee()), ctx,
+              const_cast<FunctionDecl *>(exactDirectCallee(call)), ctx,
               ctx.getSourceManager(), op->mutable_callee());
           op->set_has_output_actual(true);
           op->set_output_argument_index(binding.argument);
@@ -987,11 +1235,19 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
         } else if (const auto *assignment = dyn_cast<BinaryOperator>(stmt)) {
           if (!assignment->isAssignmentOp())
             continue;
+          Value assigned = flow.value(assignment->getRHS());
+          if (assignment->isCompoundAssignmentOp()) {
+            emitRead(assignment, assignment->getLHS());
+            assigned.Clear();
+            assigned.set_kind(Value::IV_COMBINE);
+            *assigned.add_operands() = flow.value(assignment->getLHS());
+            *assigned.add_operands() = flow.value(assignment->getRHS());
+          }
           if (const auto *field = flow.constructorField(assignment->getLHS())) {
             auto *op = target->add_operations();
             op->set_kind(Operation::IO_FIELD_ASSIGN);
             op->set_local(field->getFieldIndex());
-            *op->mutable_value() = flow.value(assignment->getRHS());
+            *op->mutable_value() = assigned;
             continue;
           }
           uint32_t fieldSlot = 0;
@@ -999,13 +1255,13 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
             auto *op = target->add_operations();
             op->set_kind(Operation::IO_ASSIGN);
             op->set_local(fieldSlot);
-            *op->mutable_value() = flow.value(assignment->getRHS());
+            *op->mutable_value() = assigned;
             continue;
           }
           if (flow.outputStorage(assignment->getLHS())) {
             auto *op = target->add_operations();
             op->set_kind(Operation::IO_OUTPUT_ASSIGN);
-            *op->mutable_value() = flow.value(assignment->getRHS());
+            *op->mutable_value() = assigned;
             continue;
           }
           const auto *ref = dyn_cast<DeclRefExpr>(
@@ -1017,10 +1273,11 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
           auto *op = target->add_operations();
           op->set_kind(Operation::IO_ASSIGN);
           op->set_local(found->second);
-          *op->mutable_value() = flow.value(assignment->getRHS());
+          *op->mutable_value() = assigned;
         } else if (const auto *update = dyn_cast<UnaryOperator>(stmt)) {
           if (!update->isIncrementDecrementOp())
             continue;
+          emitRead(update, update->getSubExpr());
           if (const auto *field = flow.constructorField(update->getSubExpr())) {
             auto *op = target->add_operations();
             op->set_kind(Operation::IO_FIELD_ASSIGN);

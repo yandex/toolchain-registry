@@ -786,6 +786,28 @@ message InitializationBlock {
   bool is_entry = 4;
 }
 
+// Independent may-effect model. Only complete, supported bodies certify effects.
+// Bindings are -1 for scalar values, -2 for private local scalar storage, or the
+// caller's zero-based borrowed formal index. Unknown bindings invalidate proof.
+message BorrowedEffectCall {
+  EntityId callee = 1;
+  repeated sint32 bindings = 2;
+}
+message BorrowedReturn {
+  sint32 parameter = 1;
+  bool from_call = 2;
+  uint32 call_index = 3;
+}
+message BorrowedEffects {
+  uint32 version = 1;
+  bool complete = 2;
+  repeated bool borrowed_parameters = 3;
+  repeated uint32 parameter_effects = 4; // bits: read=1, write=2; others reserved
+  repeated BorrowedEffectCall calls = 5;
+  bool returns_borrowed = 6;
+  repeated BorrowedReturn returns = 7;
+}
+
 message InitializationFunction {
   EntityId function = 1;
   repeated InitializationBlock blocks = 2;
@@ -793,7 +815,8 @@ message InitializationFunction {
   uint32 local_count = 4;
   bool scalar_return = 5;
   // False for unsupported control flow or truncated
-  // extraction. Such a body cannot discharge any candidate or caller obligation.
+  // extraction. Such a body cannot discharge initialization obligations; the
+  // independent borrowed_effects vocabulary has its own completeness flag.
   bool complete = 6;
   uint32 version = 7; // 1: scalar returns; 2: isolated outputs; 3: constructor fields; 4: const getter receiver; 5: const record formal
   SourceRef loc = 8;
@@ -819,6 +842,7 @@ message InitializationFunction {
   // False/zero preserves the implicit-this mode of version 4.
   bool receiver_is_parameter = 20;
   uint32 receiver_parameter_index = 21;
+  BorrowedEffects borrowed_effects = 22;
 }
 
 // ---------------------------------------------------------------------------
@@ -835,6 +859,12 @@ message BaselineCandidate {
   bool coverage_gap = 4;
   EntityId initialization_function = 5;
   uint64 initialization_obligation_id = 6;
+  // Exact, non-virtual callee for an effect/returned-origin obligation. Zero/absent means
+  // that CTU effect summaries must not discharge this candidate.
+  EntityId effect_callee = 7;
+  // One character per argument: 1 when this actual proves the recorded lifetime
+  // or bounds obligation, conditional on the callee returning it unchanged.
+  string safe_returned_arguments = 8;
 }
 
 message Fact {
