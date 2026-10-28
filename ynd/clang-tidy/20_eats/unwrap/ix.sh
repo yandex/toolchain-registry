@@ -1,12 +1,18 @@
 {% extends '//clang-tidy/20/unwrap/ix.sh' %}
 
 {% block eats_check_srcs %}
+base_class_special_members_check.cpp
+base_class_special_members_check.h
 bridge_header.h
+class_size_check.cpp
+class_size_check.h
 empty_catch_all_check.cpp
 empty_catch_all_check.h
 pragma_once_check.cpp
 pragma_once_check.h
 tidy_module_eats.cpp
+virtual_class_destructor_check.cpp
+virtual_class_destructor_check.h
 {% endblock %}
 
 {% block patch %}
