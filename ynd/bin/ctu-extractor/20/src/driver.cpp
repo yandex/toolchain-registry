@@ -23,6 +23,7 @@
 // the schema but not populated here.
 
 #include <algorithm>
+#include "initialization_flow.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -56,6 +57,7 @@ class FactConsumer : public ASTConsumer {
 public:
   explicit FactConsumer(ASTContext &Ctx) : Visitor(Ctx) {}
   void HandleTranslationUnit(ASTContext &Ctx) override {
+    collectInitializationCallers(Ctx);
     Visitor.TraverseDecl(Ctx.getTranslationUnitDecl());
     if (paranoidBaseline && Ctx.getLangOpts().CPlusPlus) {
       collectMemoryBaselineFacts(Ctx);

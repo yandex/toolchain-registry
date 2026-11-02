@@ -737,6 +737,7 @@ message InitializationValue {
     IV_CALL = 5;
     IV_OUTPUT = 6; // sole scalar output formal storage (version 2)
     IV_CONSTRUCTOR_FIELD = 7; // exact receiver field in declaration order (version 3)
+    IV_BORROWED_INPUT = 9; // version 8: read-only scalar pointee, indexed by formal
     IV_RECEIVER_FIELD = 8; // symbolic const getter receiver dependency (version 4)
   }
   Kind kind = 1;
@@ -750,10 +751,16 @@ message InitializationValue {
   // positional operand at this index is IV_UNKNOWN; fields use receiver_locals.
   bool receiver_is_parameter = 7;
   uint32 receiver_parameter_index = 8;
+  // Version 7: pre-call pointee value for the sole scalar borrowed argument.
+  InitializationValue borrowed_actual = 9;
+  uint32 borrowed_argument_index = 10;
+  string unknown_reason = 11;
+  // Version 8: positional pointee inputs; scalar positions remain IV_UNKNOWN.
+  repeated InitializationValue readonly_actuals = 12;
 }
 
 message InitializationOperation {
-  enum Kind { IO_UNKNOWN = 0; IO_ASSIGN = 1; IO_READ = 2; IO_RETURN = 3; IO_OUTPUT_ASSIGN = 4; IO_CALL = 5; IO_FIELD_ASSIGN = 6; IO_CONSTRUCT = 7; IO_RECEIVER_CALL = 8; }
+  enum Kind { IO_UNKNOWN = 0; IO_ASSIGN = 1; IO_READ = 2; IO_RETURN = 3; IO_OUTPUT_ASSIGN = 4; IO_CALL = 5; IO_FIELD_ASSIGN = 6; IO_CONSTRUCT = 7; IO_RECEIVER_CALL = 8; IO_OBSERVE_CALL = 9; IO_READONLY_CALL = 10; }
   Kind kind = 1;
   uint32 local = 2;
   InitializationValue value = 3;
@@ -777,6 +784,8 @@ message InitializationOperation {
   // Version-5 explicit record-parameter binding, disjoint from output actuals.
   bool receiver_is_parameter = 16;
   uint32 receiver_parameter_index = 17;
+  // Version 8: read-only call bindings or pre-call census pointee observations.
+  repeated InitializationValue borrowed_inputs = 18;
 }
 
 message InitializationBlock {
@@ -808,6 +817,11 @@ message BorrowedEffects {
   repeated BorrowedReturn returns = 7;
 }
 
+// Exact syntactic direct-call census for an internal, nonescaping function.
+message InitializationCaller {
+  EntityId function = 1;
+  uint32 call_count = 2;
+}
 message InitializationFunction {
   EntityId function = 1;
   repeated InitializationBlock blocks = 2;
@@ -818,7 +832,7 @@ message InitializationFunction {
   // extraction. Such a body cannot discharge initialization obligations; the
   // independent borrowed_effects vocabulary has its own completeness flag.
   bool complete = 6;
-  uint32 version = 7; // 1: scalar returns; 2: isolated outputs; 3: constructor fields; 4: const getter receiver; 5: const record formal
+  uint32 version = 7; // 1: scalar returns; 2: isolated outputs; 3: constructor fields; 4: const getter receiver; 5: const record formal; 6: closed caller proofs; 7: borrowed inputs and proof explanations; 8: read-only inputs and borrowed caller census
   SourceRef loc = 8;
   fixed64 definition_hash = 9; // FuncDecl.body_hash, for duplicate-definition consistency
   bool has_output_parameter = 10;
@@ -843,6 +857,11 @@ message InitializationFunction {
   bool receiver_is_parameter = 20;
   uint32 receiver_parameter_index = 21;
   BorrowedEffects borrowed_effects = 22;
+  // Version 6: absent/false means no complete caller coverage certificate.
+  bool closed_callers = 23;
+  repeated InitializationCaller callers = 24;
+  // Version 8: all borrowed formals are read-only; disjoint from sole output.
+  repeated uint32 readonly_parameters = 25;
 }
 
 // ---------------------------------------------------------------------------
@@ -865,6 +884,9 @@ message BaselineCandidate {
   // One character per argument: 1 when this actual proves the recorded lifetime
   // or bounds obligation, conditional on the callee returning it unchanged.
   string safe_returned_arguments = 8;
+  // Separate certificate: application-storage origin, NOT lifetime or bounds.
+  string non_library_arguments = 9;
+  string proof_failure = 10;
 }
 
 message Fact {

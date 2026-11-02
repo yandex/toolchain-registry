@@ -1291,12 +1291,48 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     computeFuncEntityId(const_cast<clang::FunctionDecl *>(callee), Context, Context.getSourceManager(), candidate->mutable_effect_callee());
     candidate->set_safe_returned_arguments(safe);
   }
+  void tagReturnedOrigin(const clang::Expr *expression) {
+    if (!expression || Proofs.OpaqueAssembly) return;
+    const clang::Expr *pointer = expression->IgnoreParenImpCasts();
+    if (const auto *member = llvm::dyn_cast<clang::MemberExpr>(pointer))
+      pointer = member->getBase()->IgnoreParenImpCasts();
+    else if (const auto *subscript = llvm::dyn_cast<clang::ArraySubscriptExpr>(pointer))
+      pointer = subscript->getBase()->IgnoreParenImpCasts();
+    else if (const auto *unary = llvm::dyn_cast<clang::UnaryOperator>(pointer)) {
+      if (unary->getOpcode() != clang::UO_Deref && !unary->isIncrementDecrementOp()) return;
+      pointer = unary->getSubExpr()->IgnoreParenImpCasts();
+    }
+    for (unsigned depth = 0; depth < 8; ++depth) {
+      const auto *variable = directVariable(pointer);
+      if (!variable) break;
+      if (!variable->hasInit() || variable->getType()->isReferenceType() ||
+          variable->getType().isVolatileQualified() ||
+          (variable->hasGlobalStorage() && !variable->getType().isConstQualified()) ||
+          Proofs.Mutated.count(variable) || Proofs.Escaped.count(variable)) return;
+      pointer = variable->getInit()->IgnoreParenImpCasts();
+    }
+    const auto *call = llvm::dyn_cast<clang::CallExpr>(pointer);
+    const auto *callee = exactDirectCallee(call);
+    if (!callee || llvm::isa<clang::CXXMethodDecl>(callee) ||
+        !callee->getReturnType()->isPointerType() || call->getNumArgs() != callee->getNumParams()) return;
+    std::string safe;
+    for (const auto *argument : call->arguments()) {
+      if (argument->HasSideEffects(Context)) return;
+      safe += nonLibraryPointer(argument) ? '1' : '0';
+    }
+    if (safe.find('1') == std::string::npos) return;
+    auto *candidate = g_facts.back().mutable_baseline_candidate();
+    computeFuncEntityId(const_cast<clang::FunctionDecl *>(callee), Context,
+                       Context.getSourceManager(), candidate->mutable_effect_callee());
+    candidate->set_non_library_arguments(safe);
+  }
   void emit(llvm::StringRef rule, const clang::Expr *expr, llvm::StringRef reason, bool gap = false) {
     // Compiler-generated trivial copying cannot itself end either object's
     // lifetime. Its live-object entry contract is checked at each caller,
     // including an explicit candidate for copy/move assignment calls above.
     if (rule == "6.8.1" && !gap && implicitTrivialCopyBody(expr)) return;
     emitBaselineCandidate(Context, rule, expr->getExprLoc(), reason, gap, expr);
+    if (rule == "25.5.3" && !gap) tagReturnedOrigin(expr);
     if (rule == "8.7.1" && !gap && reason == "pointer-arithmetic-needs-array-bounds-proof") {
       tagReturnedBounds(expr);
       return;

@@ -18,6 +18,64 @@ using Value = facts_pb::InitializationValue;
 using Operation = facts_pb::InitializationOperation;
 std::map<const Expr *, std::pair<facts_pb::EntityId, uint64_t>> anchors;
 std::set<const Expr *> ambiguousAnchors;
+std::map<const Expr *, std::string> readFailures;
+
+struct CallerCensus {
+  bool escaped = false;
+  std::map<const FunctionDecl *, unsigned> callers;
+};
+std::map<const FunctionDecl *, CallerCensus> callerCensus;
+bool censusOpaque = false;
+class CallerVisitor : public RecursiveASTVisitor<CallerVisitor> {
+ public:
+  explicit CallerVisitor(ASTContext &context) : context(context) {}
+  bool TraverseFunctionDecl(FunctionDecl *function) {
+    const auto *previous = owner;
+    owner = function;
+    bool result = RecursiveASTVisitor<CallerVisitor>::TraverseFunctionDecl(function);
+    owner = previous;
+    return result;
+  }
+  bool VisitAsmStmt(AsmStmt *) { censusOpaque = true; return true; }
+  bool VisitFileScopeAsmDecl(FileScopeAsmDecl *) { censusOpaque = true; return true; }
+  bool VisitDeclRefExpr(DeclRefExpr *ref) {
+    const auto *fn = dyn_cast<FunctionDecl>(ref->getDecl());
+    if (!fn || fn->isExternallyVisible() || isa<CXXMethodDecl>(fn) ||
+        fn->isVariadic() || fn->hasAttrs() || fn->getTemplatedKind() || censusOpaque)
+      return true;
+    if (++references > 262144 || callerCensus.size() >= 65536) {
+      censusOpaque = true;
+      return true;
+    }
+    auto &census = callerCensus[fn->getCanonicalDecl()];
+    if (census.escaped) return true;
+    const Expr *expr = ref;
+    for (unsigned depth = 0; depth < 32; ++depth) {
+      auto parents = context.getParents(*expr);
+      if (parents.size() != 1) break;
+      if (const auto *cast = parents[0].get<ImplicitCastExpr>()) { expr = cast; continue; }
+      if (const auto *paren = parents[0].get<ParenExpr>()) { expr = paren; continue; }
+      if (const auto *call = parents[0].get<CallExpr>()) {
+        if (owner && !owner->isDependentContext() && !owner->getTemplatedKind() &&
+            call->getCallee() == expr && call->getNumArgs() == fn->getNumParams()) {
+          if (census.callers.size() >= 256 ||
+              ++census.callers[owner->getCanonicalDecl()] > 16384) {
+            census.escaped = true;
+            census.callers.clear();
+          }
+          return true;
+        }
+      }
+      break;
+    }
+    census.escaped = true;
+    return true;
+  }
+ private:
+  ASTContext &context;
+  const FunctionDecl *owner = nullptr;
+  unsigned references = 0;
+};
 
 bool tracked(QualType type) {
   return !type.isNull() && !type.isVolatileQualified() &&
@@ -283,12 +341,100 @@ const ParmVarDecl *recordReceiverParameter(const FunctionDecl *function,
   return receiver;
 }
 
+// Only immutable local aliases with fully enumerated scalar reads / direct
+// scalar-borrow calls qualify. Unknown uses invalidate the entire alias.
+class LocalAliases : public RecursiveASTVisitor<LocalAliases> {
+ public:
+  explicit LocalAliases(ASTContext &ctx) : ctx(ctx) {}
+  bool VisitStmt(Stmt *) { if (++nodes > 8192) { exhausted = true; return false; } return true; }
+  bool VisitVarDecl(VarDecl *decl) {
+    if (checking || !decl->hasLocalStorage() || isa<ParmVarDecl>(decl) || !decl->hasInit() || decl->hasAttrs()) return true;
+    const auto type = decl->getType();
+    if (type.isVolatileQualified()) return true;
+    if ((!type->isPointerType() && !type->isLValueReferenceType()) || !tracked(type->getPointeeType())) return true;
+    const Expr *init = decl->getInit()->IgnoreParenImpCasts();
+    if (type->isPointerType()) {
+      const auto *address = dyn_cast<UnaryOperator>(init);
+      if (!address || address->getOpcode() != UO_AddrOf) return true;
+      init = address->getSubExpr()->IgnoreParenImpCasts();
+    }
+    const auto *ref = dyn_cast<DeclRefExpr>(init);
+    const auto *target = ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+    if (target && target->hasLocalStorage() && tracked(target->getType()) &&
+        ctx.hasSameUnqualifiedType(type->getPointeeType(), target->getType())) aliases[decl] = target;
+    return true;
+  }
+  bool VisitDeclRefExpr(DeclRefExpr *ref) {
+    if (!checking) return true;
+    const auto *decl = dyn_cast<VarDecl>(ref->getDecl());
+    if (!aliases.count(decl)) return true;
+    const Expr *expr = ref;
+    for (unsigned depth = 0; depth < 32; ++depth) {
+      auto parents = ctx.getParents(*expr);
+      if (parents.size() != 1) break;
+      if (const auto *cast = parents[0].get<ImplicitCastExpr>()) {
+        if (cast->getCastKind() == CK_LValueToRValue && tracked(cast->getType())) return true;
+        if (cast->getCastKind() != CK_LValueToRValue && cast->getCastKind() != CK_NoOp) break;
+        expr = cast; continue;
+      }
+      if (const auto *paren = parents[0].get<ParenExpr>()) { expr = paren; continue; }
+      if (const auto *deref = parents[0].get<UnaryOperator>()) {
+        if (decl->getType()->isPointerType() && deref->getOpcode() == UO_Deref) { expr = deref; continue; }
+        break;
+      }
+      if (const auto *call = parents[0].get<CallExpr>()) {
+        const auto *callee = exactDirectCallee(call);
+        if (!callee || isa<CXXMethodDecl>(callee) || callee->isVariadic() || call->getNumArgs() != callee->getNumParams()) break;
+        unsigned borrowed = 0; bool allConst = true, valid = true, actual = false;
+        for (unsigned i = 0; i < callee->getNumParams(); ++i) {
+          auto type = callee->getParamDecl(i)->getType();
+          if (type->isPointerType() || type->isLValueReferenceType()) {
+            ++borrowed;
+            allConst = allConst && type->getPointeeType().isConstQualified();
+            valid = valid && tracked(type->getPointeeType());
+            if (call->getArg(i) == expr) actual = true;
+          } else valid = valid && tracked(type);
+        }
+        if (valid && actual && (allConst || borrowed == 1)) return true;
+      }
+      break;
+    }
+    invalid.insert(decl);
+    return true;
+  }
+  void collect(Stmt *body) {
+    TraverseStmt(body); checking = true; TraverseStmt(body);
+    for (const auto *decl : invalid) aliases.erase(decl);
+    if (exhausted || aliases.size() > 512) aliases.clear();
+  }
+  std::map<const VarDecl *, const VarDecl *> aliases;
+ private:
+  ASTContext &ctx;
+  bool checking = false;
+  unsigned nodes = 0;
+  bool exhausted = false;
+  std::set<const VarDecl *> invalid;
+};
+
 class Flow : public RecursiveASTVisitor<Flow> {
 public:
   bool shouldVisitImplicitCode() const { return true; }
   Flow(FunctionDecl *function, ASTContext &ctx)
       : function(function), ctx(ctx)
   {
+    LocalAliases collected(ctx);
+    collected.collect(function->getBody());
+    aliases = std::move(collected.aliases);
+    for (const auto &alias : aliases) {
+      const auto *init = alias.first->getInit()->IgnoreParenImpCasts();
+      if (const auto *address = dyn_cast<UnaryOperator>(init))
+        if (address->getOpcode() == UO_AddrOf) borrowedAddresses.insert(address);
+      const Expr *expr = alias.first->getInit();
+      while (const auto *cast = dyn_cast<ImplicitCastExpr>(expr)) {
+        if (cast->getCastKind() != CK_NoOp) break;
+        borrowedCasts.insert(cast); expr = cast->getSubExpr();
+      }
+    }
     receiverParameter =
         recordReceiverParameter(function, receiverParameterIndex);
     if (receiverParameter)
@@ -309,6 +455,22 @@ public:
         outputIndex = i;
       } else if (!tracked(type))
         supported = false;
+    }
+    if (supported && count > 0 && !isa<CXXMethodDecl>(function)) {
+      bool allConst = true;
+      for (const auto *parameter : function->parameters()) {
+        const auto type = parameter->getType();
+        if ((type->isPointerType() || type->isReferenceType()) &&
+            !type->getPointeeType().isConstQualified()) allConst = false;
+      }
+      if (allConst) {
+        for (unsigned i = 0; i < function->getNumParams(); ++i) {
+          const auto *parameter = function->getParamDecl(i);
+          if (parameter->getType()->isPointerType() || parameter->getType()->isReferenceType()) readonlyParameters[parameter] = i;
+        }
+        output = nullptr;
+        count = 0;
+      }
     }
     if (const auto *constructor = dyn_cast<CXXConstructorDecl>(function)) {
       if (supported && count == 0 && !constructor->isDelegatingConstructor())
@@ -439,11 +601,40 @@ public:
     if (objects.count(variable))
       escapedObjects.insert(variable);
   }
+  const VarDecl *aliasStorage(const Expr *expr) const {
+    if (!expr) return nullptr;
+    expr = expr->IgnoreParenImpCasts();
+    bool pointer = false;
+    if (const auto *deref = dyn_cast<UnaryOperator>(expr)) {
+      if (deref->getOpcode() != UO_Deref) return nullptr;
+      expr = deref->getSubExpr()->IgnoreParenImpCasts(); pointer = true;
+    }
+    const auto *ref = dyn_cast<DeclRefExpr>(expr);
+    const auto *decl = ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+    auto found = aliases.find(decl);
+    return found != aliases.end() && decl->getType()->isPointerType() == pointer ? found->second : nullptr;
+  }
   struct BorrowedCall {
     unsigned argument = 0;
     const VarDecl *local = nullptr;
     bool parameter = false;
+    bool readonlyParameter = false;
+    unsigned parameterIndex = 0;
   };
+  int readonlyStorage(const Expr *expr) const {
+    if (!expr) return -1;
+    expr = expr->IgnoreParenImpCasts();
+    bool pointer = false;
+    if (const auto *deref = dyn_cast<UnaryOperator>(expr)) {
+      if (deref->getOpcode() != UO_Deref) return -1;
+      expr = deref->getSubExpr()->IgnoreParenImpCasts();
+      pointer = true;
+    }
+    const auto *ref = dyn_cast<DeclRefExpr>(expr);
+    const auto *parameter = ref ? dyn_cast<ParmVarDecl>(ref->getDecl()) : nullptr;
+    auto found = readonlyParameters.find(parameter);
+    return found != readonlyParameters.end() && parameter->getType()->isPointerType() == pointer ? int(found->second) : -1;
+  }
   bool outputStorage(const Expr *expr) const {
     if (!output || !expr)
       return false;
@@ -461,7 +652,7 @@ public:
   }
   bool recognizeBorrow(CallExpr *call, const FunctionDecl *callee,
                        BorrowedCall &binding) {
-    if (!standalone(call) || isa<CXXMethodDecl>(callee) ||
+    if (isa<CXXMethodDecl>(callee) ||
         callee->isVariadic() || call->getNumArgs() != callee->getNumParams())
       return false;
     unsigned count = 0;
@@ -477,10 +668,41 @@ public:
     }
     if (count != 1)
       return false;
+    if (!standalone(call) && !callee->getParamDecl(binding.argument)->getType()->getPointeeType().isConstQualified())
+      return false;
+    return bindBorrow(call, callee, binding);
+  }
+  bool recognizeReadonly(CallExpr *call, const FunctionDecl *callee, std::vector<BorrowedCall> &bindings) {
+    if (isa<CXXMethodDecl>(callee) || callee->isVariadic() || call->getNumArgs() != callee->getNumParams()) return false;
+    for (unsigned i = 0; i < callee->getNumParams(); ++i) {
+      const auto type = callee->getParamDecl(i)->getType();
+      if (tracked(type)) continue;
+      if ((!type->isPointerType() && !type->isLValueReferenceType()) ||
+          !tracked(type->getPointeeType()) || !type->getPointeeType().isConstQualified()) return false;
+      BorrowedCall binding;
+      binding.argument = i;
+      if (!bindBorrow(call, callee, binding)) return false;
+      bindings.push_back(binding);
+    }
+    return !bindings.empty();
+  }
+  bool bindBorrow(CallExpr *call, const FunctionDecl *callee, BorrowedCall &binding) {
     const Expr *actual = call->getArg(binding.argument)->IgnoreParenImpCasts();
     QualType parameterType = callee->getParamDecl(binding.argument)->getType();
     const UnaryOperator *address = nullptr;
     if (parameterType->isPointerType()) {
+      const auto *alias = dyn_cast<DeclRefExpr>(actual);
+      const auto *decl = alias ? dyn_cast<VarDecl>(alias->getDecl()) : nullptr;
+      if (decl && decl->getType()->isPointerType() && aliases.count(decl)) actual = decl->getInit()->IgnoreParenImpCasts();
+      const auto *reference = dyn_cast<DeclRefExpr>(actual);
+      const auto *parameter = reference ? dyn_cast<ParmVarDecl>(reference->getDecl()) : nullptr;
+      auto input = readonlyParameters.find(parameter);
+      if (input != readonlyParameters.end() && parameter->getType()->isPointerType() &&
+          ctx.hasSameUnqualifiedType(parameterType->getPointeeType(), parameter->getType()->getPointeeType())) {
+        binding.readonlyParameter = true;
+        binding.parameterIndex = input->second;
+        return true;
+      }
       if (output && output->getType()->isPointerType()) {
         const auto *ref = dyn_cast<DeclRefExpr>(actual);
         if (ref && ref->getDecl() == output) {
@@ -498,11 +720,16 @@ public:
     if (!ctx.hasSameUnqualifiedType(parameterType->getPointeeType(),
                                     actual->getType()))
       return false;
-    if (outputStorage(actual))
+    const int input = readonlyStorage(actual);
+    if (input >= 0) {
+      binding.readonlyParameter = true;
+      binding.parameterIndex = input;
+    } else if (outputStorage(actual))
       binding.parameter = true;
     else {
       const auto *ref = dyn_cast<DeclRefExpr>(actual);
       const auto *variable = ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+      if (const auto *alias = aliasStorage(actual)) variable = alias;
       if (!variable || !variable->hasLocalStorage() ||
           variable->getType()->isReferenceType() ||
           !tracked(variable->getType()))
@@ -511,6 +738,14 @@ public:
     }
     if (address)
       borrowedAddresses.insert(address);
+    if (parameterType->isReferenceType()) {
+      const Expr *argument = call->getArg(binding.argument);
+      while (const auto *cast = dyn_cast<ImplicitCastExpr>(argument)) {
+        if (!cast->isGLValue() || cast->getCastKind() != CK_NoOp) break;
+        borrowedCasts.insert(cast);
+        argument = cast->getSubExpr();
+      }
+    }
     return true;
   }
   bool VisitVarDecl(VarDecl *decl) {
@@ -560,10 +795,10 @@ public:
       objects.emplace(decl, std::move(object));
       constructions.emplace(construction, decl);
     }
-    if (decl != output && decl != receiverParameter &&
+    if (!aliases.count(decl) && decl != output && !readonlyParameters.count(dyn_cast<ParmVarDecl>(decl)) && decl != receiverParameter &&
         !tracked(decl->getType()) && !supportedConstruction)
       ownIsolated = false;
-    if (decl->getType()->isReferenceType() && decl->hasInit())
+    if (decl->getType()->isReferenceType() && decl->hasInit() && !aliases.count(decl))
       expose(decl->getInit());
     if (decl->hasLocalStorage() && tracked(decl->getType()) &&
         !locals.count(decl))
@@ -634,6 +869,7 @@ public:
         poisonAll = true;
         return;
       }
+      if (aliases.count(decl)) escaped.insert(aliases.find(decl)->second);
       if (decl->getType()->isReferenceType() && decl->hasInit())
         expose(decl->getInit(), depth + 1);
       else if (decl->hasLocalStorage() && tracked(decl->getType()))
@@ -662,18 +898,37 @@ public:
     }
   }
   bool standalone(const Expr *expr) {
-    auto parents = ctx.getParents(*expr);
-    if (parents.size() != 1)
+    // Accept discarded full expressions by their statement position, not by
+    // whether the author put braces around the body. Never accept conditions,
+    // arguments, returns or nested assignments whose value is consumed.
+    const Stmt *statement = expr;
+    for (unsigned depth = 0; depth < 64; ++depth) {
+      auto parents = ctx.getParents(*statement);
+      if (parents.size() != 1) return false;
+      if (const auto *paren = parents[0].get<ParenExpr>()) {
+        statement = paren;
+        continue;
+      }
+      if (parents[0].get<CompoundStmt>()) return true;
+      if (const auto *branch = parents[0].get<IfStmt>())
+        return branch->getThen() == statement || branch->getElse() == statement;
+      if (const auto *loop = parents[0].get<ForStmt>())
+        return loop->getInit() == statement || loop->getInc() == statement ||
+               loop->getBody() == statement;
+      if (const auto *loop = parents[0].get<WhileStmt>())
+        return loop->getBody() == statement;
+      if (const auto *loop = parents[0].get<DoStmt>())
+        return loop->getBody() == statement;
+      if (const auto *label = parents[0].get<SwitchCase>())
+        return label->getSubStmt() == statement;
       return false;
-    if (parents[0].get<CompoundStmt>())
-      return true;
-    const auto *loop = parents[0].get<ForStmt>();
-    return loop && loop->getInc() == expr;
+    }
+    return false;
   }
   bool VisitUnaryOperator(UnaryOperator *expr) {
     if (expr->getOpcode() == UO_AddrOf && !borrowedAddresses.count(expr))
       expose(expr->getSubExpr());
-    if (expr->getOpcode() == UO_Deref && !outputStorage(expr))
+    if (expr->getOpcode() == UO_Deref && !outputStorage(expr) && readonlyStorage(expr) < 0 && !aliasStorage(expr))
       ownIsolated = false;
     // The value of nested ++/-- would need an expression temporary. A
     // discarded standalone update only preserves its old initialization.
@@ -719,8 +974,7 @@ public:
     }
     // Only standalone assignments are supported. In particular x=(x=...)
     // and assignments in call arguments must not reuse stale expression values.
-    auto parents = ctx.getParents(*expr);
-    if (parents.size() != 1 || !parents[0].get<CompoundStmt>())
+    if (!standalone(expr))
       complete = false;
     return true;
   }
@@ -752,9 +1006,28 @@ public:
                           ctx.getSourceManager(), &calleeId);
       effectCallees[{calleeId.id_hi(), calleeId.id()}] = calleeId;
       BorrowedCall binding;
-      const bool borrowed = recognizeBorrow(call, callee, binding);
+      auto oldAddresses = borrowedAddresses;
+      auto oldCasts = borrowedCasts;
+      std::vector<BorrowedCall> inputs;
+      const bool readonly = recognizeReadonly(call, callee, inputs);
+      if (readonly) readonlyCalls.emplace(call, inputs);
+      else { borrowedAddresses = oldAddresses; borrowedCasts = oldCasts; }
+      const bool borrowed = !readonly && recognizeBorrow(call, callee, binding);
       if (borrowed)
         borrowedCalls.emplace(call, binding);
+      // A syntactically simple alias call may still be outside the ordered
+      // transfer model (for example a mutable call nested in an expression).
+      // Its initializer was exempted from escape poisoning, so restore that
+      // conservative behavior explicitly whenever no binding was accepted.
+      for (unsigned i = 0; i < call->getNumArgs(); ++i) {
+        if ((borrowed && i == binding.argument) ||
+            (readonly && i < callee->getNumParams() &&
+             (callee->getParamDecl(i)->getType()->isPointerType() ||
+              callee->getParamDecl(i)->getType()->isReferenceType()))) continue;
+        const auto *reference = dyn_cast<DeclRefExpr>(call->getArg(i)->IgnoreParenImpCasts());
+        const auto *variable = reference ? dyn_cast<VarDecl>(reference->getDecl()) : nullptr;
+        if (aliases.count(variable) || aliasStorage(call->getArg(i))) expose(call->getArg(i));
+      }
       if ((isa<CXXMethodDecl>(callee) && !getterObject) ||
           callee->isVariadic() ||
           (!tracked(call->getType()) && !call->getType()->isVoidType()))
@@ -762,6 +1035,7 @@ public:
       for (unsigned i = 0; i < callee->getNumParams(); ++i)
         if (!tracked(callee->getParamDecl(i)->getType()) &&
             !(borrowed && i == binding.argument) &&
+            !(readonly && (callee->getParamDecl(i)->getType()->isPointerType() || callee->getParamDecl(i)->getType()->isReferenceType())) &&
             !(recordArgumentCalls.count(call) && i == recordIndex))
           ownIsolated = false;
       const auto *identifier = callee->getIdentifier();
@@ -780,6 +1054,7 @@ public:
       for (unsigned i = 0; i < callee->getNumParams(); ++i)
         if (callee->getParamDecl(i)->getType()->isReferenceType() &&
             !(borrowed && i == binding.argument) &&
+            !(readonly && (callee->getParamDecl(i)->getType()->isPointerType() || callee->getParamDecl(i)->getType()->isReferenceType())) &&
             !(recordArgumentCalls.count(call) && i == recordIndex)) {
           if (i + offset < call->getNumArgs())
             expose(call->getArg(i + offset));
@@ -812,7 +1087,7 @@ public:
       poisonAll = true;
       ownIsolated = false;
     }
-    if (expr->isGLValue() && tracked(expr->getSubExpr()->getType()))
+    if (expr->isGLValue() && tracked(expr->getSubExpr()->getType()) && !borrowedCasts.count(expr))
       expose(expr->getSubExpr());
     return true;
   }
@@ -846,6 +1121,7 @@ public:
   }
   Value value(const Expr *expr, unsigned depth = 0) {
     Value out;
+    out.set_unknown_reason(!expr ? "no-initializer" : depth > 128 ? "expression-budget-exhausted" : "unsupported-value-expression");
     if (!expr || depth > 128)
       return out;
     expr = expr->IgnoreParens();
@@ -869,6 +1145,16 @@ public:
         out.set_kind(Value::IV_LOCAL);
         out.set_index(fieldSlot);
       }
+      return out;
+    }
+    if (const auto *alias = aliasStorage(expr)) {
+      auto found = locals.find(alias);
+      if (found != locals.end() && !poisonAll && !escaped.count(alias)) { out.set_kind(Value::IV_LOCAL); out.set_index(found->second); }
+      return out;
+    }
+    const int input = readonlyStorage(expr);
+    if (input >= 0) {
+      if (!poisonAll && ownIsolated) { out.set_kind(Value::IV_BORROWED_INPUT); out.set_index(input); }
       return out;
     }
     if (outputStorage(expr)) {
@@ -919,6 +1205,7 @@ public:
     } else if (const auto *ref = dyn_cast<DeclRefExpr>(expr)) {
       const auto *decl = dyn_cast<VarDecl>(ref->getDecl());
       auto found = locals.find(decl);
+      out.set_unknown_reason(poisonAll ? "opaque-memory-effects" : escaped.count(decl) ? "escaped-storage" : "untracked-storage");
       if (found != locals.end() && !poisonAll && !escaped.count(decl)) {
         out.set_kind(Value::IV_LOCAL);
         out.set_index(found->second);
@@ -946,6 +1233,24 @@ public:
           callee->isVariadic() || call->getNumArgs() != callee->getNumParams())
         return out;
       out.set_kind(Value::IV_CALL);
+      const auto binding = borrowedCalls.find(call);
+      if (binding != borrowedCalls.end()) {
+        out.set_borrowed_argument_index(binding->second.argument);
+        auto *actual = out.mutable_borrowed_actual();
+        if (binding->second.parameter) actual->set_kind(Value::IV_OUTPUT);
+        else {
+          auto slot = locals.find(binding->second.local);
+          if (slot != locals.end() && !poisonAll && !escaped.count(binding->second.local)) {
+            actual->set_kind(Value::IV_LOCAL);
+            actual->set_index(slot->second);
+          }
+        }
+      }
+      auto inputs = readonlyCalls.find(call);
+      if (inputs != readonlyCalls.end()) {
+        for (unsigned i = 0; i < call->getNumArgs(); ++i) out.add_readonly_actuals();
+        for (const auto &input : inputs->second) *out.mutable_readonly_actuals(input.argument) = borrowedValue(input);
+      }
       computeFuncEntityId(const_cast<FunctionDecl *>(callee), ctx,
                           ctx.getSourceManager(), out.mutable_callee());
       for (unsigned i = 0; i < call->getNumArgs(); ++i) {
@@ -972,6 +1277,19 @@ public:
     }
     return out;
   }
+  Value borrowedValue(const BorrowedCall &binding) {
+    Value actual;
+    if (binding.parameter) actual.set_kind(Value::IV_OUTPUT);
+    else if (binding.readonlyParameter) { actual.set_kind(Value::IV_BORROWED_INPUT); actual.set_index(binding.parameterIndex); }
+    else {
+      auto slot = locals.find(binding.local);
+      if (slot != locals.end() && !poisonAll && !escaped.count(binding.local)) { actual.set_kind(Value::IV_LOCAL); actual.set_index(slot->second); }
+    }
+    return actual;
+  }
+  std::map<const VarDecl *, const VarDecl *> aliases;
+  std::map<const ParmVarDecl *, unsigned> readonlyParameters;
+  std::map<const CallExpr *, std::vector<BorrowedCall>> readonlyCalls;
   FunctionDecl *function;
   ASTContext &ctx;
   bool complete = true;
@@ -994,17 +1312,28 @@ public:
   std::map<std::pair<uint64_t, uint64_t>, facts_pb::EntityId> effectCallees;
   unsigned nodes = 0;
   bool poisonAll = false;
+  std::set<const CastExpr *> borrowedCasts;
   std::set<const VarDecl *> escaped;
   std::map<const VarDecl *, uint32_t> locals;
   std::map<const Expr *, uint64_t> reads;
 };
 } // namespace
 
+void collectInitializationCallers(ASTContext &ctx) {
+  callerCensus.clear();
+  censusOpaque = false;
+  CallerVisitor(ctx).TraverseDecl(ctx.getTranslationUnitDecl());
+}
+
 void tagInitializationRead(const Expr *expr,
                            facts_pb::BaselineCandidate *candidate) {
   const auto found = anchors.find(expr);
-  if (found == anchors.end())
+  if (found == anchors.end()) {
+    const auto failure = readFailures.find(expr);
+    candidate->set_proof_failure(failure == readFailures.end() ? "no-exact-read-anchor" : failure->second);
     return;
+  }
+  candidate->set_proof_failure("initialization-proof-unavailable");
   *candidate->mutable_initialization_function() = found->second.first;
   candidate->set_initialization_obligation_id(found->second.second);
 }
@@ -1043,7 +1372,31 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
       originOf(isSystemLoc(function->getLocation(), ctx.getSourceManager())));
   auto *out = fact.mutable_initialization_function();
   *out->mutable_function() = id;
-  out->set_version(5);
+  out->set_version(8);
+  const auto census = callerCensus.find(function->getCanonicalDecl());
+  if (!censusOpaque && !function->isExternallyVisible() &&
+      !isa<CXXMethodDecl>(function) && !function->isVariadic() &&
+      !function->hasAttrs() && !function->getTemplatedKind() &&
+      census != callerCensus.end() && !census->second.escaped &&
+      !census->second.callers.empty() && census->second.callers.size() <= 256) {
+    bool scalar = true;
+    for (const auto *parameter : function->parameters())
+      scalar = scalar && (tracked(parameter->getType()) || parameter == flow.output || flow.readonlyParameters.count(parameter));
+    if (scalar) {
+      out->set_closed_callers(true);
+      for (const auto &entry : census->second.callers) {
+        auto *caller = out->add_callers();
+        computeFuncEntityId(const_cast<FunctionDecl *>(entry.first), ctx,
+                            ctx.getSourceManager(), caller->mutable_function());
+        caller->set_call_count(entry.second);
+      }
+      std::sort(out->mutable_callers()->begin(), out->mutable_callers()->end(),
+          [](const auto &a, const auto &b) {
+            return std::make_pair(a.function().id(), a.function().id_hi()) <
+                   std::make_pair(b.function().id(), b.function().id_hi());
+          });
+    }
+  }
   out->set_receiver_is_parameter(flow.receiverParameter != nullptr);
   out->set_receiver_parameter_index(
       flow.receiverParameter ? flow.receiverParameterIndex : 0);
@@ -1061,6 +1414,8 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
         std::distance(flow.constructorRecord->field_begin(),
                       flow.constructorRecord->field_end()));
   }
+  for (unsigned i = 0; i < function->getNumParams(); ++i)
+    if (flow.readonlyParameters.count(function->getParamDecl(i))) out->add_readonly_parameters(i);
   out->set_has_output_parameter(flow.output != nullptr);
   out->set_output_parameter_index(flow.output ? flow.outputIndex : 0);
   out->set_own_effects_isolated(flow.ownIsolated && flow.complete);
@@ -1173,6 +1528,24 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
           for (const auto *argument : construction->arguments())
             *op->add_arguments() = flow.value(argument);
         } else if (const auto *call = dyn_cast<CallExpr>(stmt)) {
+          const auto *observedCallee = exactDirectCallee(call);
+          const auto observed = observedCallee ? callerCensus.find(observedCallee->getCanonicalDecl()) : callerCensus.end();
+          if (!censusOpaque && observed != callerCensus.end() && !observed->second.escaped) {
+            const auto *callee = observedCallee;
+            auto *observation = target->add_operations();
+            observation->set_kind(Operation::IO_OBSERVE_CALL);
+            computeFuncEntityId(const_cast<FunctionDecl *>(callee), ctx,
+                                ctx.getSourceManager(), observation->mutable_callee());
+            for (const auto *argument : call->arguments()) {
+              *observation->add_arguments() = flow.value(argument);
+              observation->add_borrowed_inputs();
+            }
+            auto inputs = flow.readonlyCalls.find(call);
+            if (inputs != flow.readonlyCalls.end())
+              for (const auto &input : inputs->second) *observation->mutable_borrowed_inputs(input.argument) = flow.borrowedValue(input);
+            auto output = flow.borrowedCalls.find(call);
+            if (output != flow.borrowedCalls.end()) *observation->mutable_borrowed_inputs(output->second.argument) = flow.borrowedValue(output->second);
+          }
           auto getter = flow.getterCalls.find(call);
           if (getter != flow.getterCalls.end()) {
             const auto &object = flow.objects.find(getter->second)->second;
@@ -1196,6 +1569,17 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
                   receiver->second != i)
                 *argument = flow.value(call->getArg(i));
             }
+          }
+          auto inputs = flow.readonlyCalls.find(call);
+          if (inputs != flow.readonlyCalls.end()) {
+            auto *op = target->add_operations();
+            op->set_kind(Operation::IO_READONLY_CALL);
+            computeFuncEntityId(const_cast<FunctionDecl *>(observedCallee), ctx, ctx.getSourceManager(), op->mutable_callee());
+            for (const auto *argument : call->arguments()) {
+              *op->add_arguments() = flow.value(argument);
+              op->add_borrowed_inputs();
+            }
+            for (const auto &input : inputs->second) *op->mutable_borrowed_inputs(input.argument) = flow.borrowedValue(input);
           }
           auto found = flow.borrowedCalls.find(call);
           if (found == flow.borrowedCalls.end())
@@ -1316,6 +1700,9 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
         }
       }
     }
+  for (const auto &read : flow.reads)
+    if (!flow.complete || !anchors.count(read.first))
+      readFailures[read.first] = flow.complete ? "no-exact-read-anchor" : "unsupported-or-incomplete-function-cfg";
   out->set_complete(flow.complete);
   out->set_own_effects_isolated(flow.ownIsolated && flow.complete);
   g_facts.push_back(std::move(fact));
