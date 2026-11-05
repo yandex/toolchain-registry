@@ -9,12 +9,12 @@
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/Type.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
-#include "clang/Analysis/Analyses/ReachableCode.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace clang::ast_matchers;
 
@@ -23,6 +23,49 @@ namespace tidy {
 namespace sdc {
 
 namespace {
+
+bool hasReachableEnumDefault(const CFGBlock* Block, ASTContext& Ctx) {
+    const auto* Switch = dyn_cast_or_null<SwitchStmt>(Block->getTerminatorStmt());
+    if (!Switch || !Switch->isAllEnumCasesCovered()) {
+        return false;
+    }
+    const Expr* Cond = Switch->getCond();
+    const auto* Enum = Cond->IgnoreImpCasts()->getType()->getAs<EnumType>();
+    if (!Enum || !Enum->getDecl()->isFixed() || Cond->isValueDependent()) {
+        return false;
+    }
+    // Preserve pruning for switches whose condition is known. Covering all
+    // enumerators alone does not cover the values of a fixed underlying type.
+    Expr::EvalResult Value;
+    return !Cond->EvaluateAsInt(Value, Ctx);
+}
+
+void scanReachable(const CFG& Cfg, ASTContext& Ctx, llvm::BitVector& Reachable) {
+    llvm::SmallVector<const CFGBlock*, 32> Pending;
+    Pending.push_back(&Cfg.getEntry());
+    while (!Pending.empty()) {
+        const CFGBlock* Block = Pending.pop_back_val();
+        if (Reachable[Block->getBlockID()]) {
+            continue;
+        }
+        Reachable.set(Block->getBlockID());
+        const bool RestoreDefault = hasReachableEnumDefault(Block, Ctx);
+        unsigned Index = 0;
+        for (const auto& Edge : Block->succs()) {
+            const CFGBlock* Next = Edge.getReachableBlock();
+            // Clang places the default successor last, including the implicit
+            // fallthrough when there is no default label. Restore only this
+            // edge; dead statements inside the branch remain unreachable.
+            if (!Next && RestoreDefault && Index + 1 == Block->succ_size()) {
+                Next = Edge.getPossiblyUnreachableBlock();
+            }
+            if (Next && !Reachable[Next->getBlockID()]) {
+                Pending.push_back(Next);
+            }
+            ++Index;
+        }
+    }
+}
 
 // Collects every Stmt* that the rule considers exempt from the
 // "unreachable" treatment even when clang's CFG marks it unreachable.
@@ -264,7 +307,7 @@ void SdcUnreachableCodeCheck::check(const MatchFinder::MatchResult& Result) {
     }
 
     llvm::BitVector Reachable(Cfg->getNumBlockIDs());
-    reachable_code::ScanReachableFromBlock(&Cfg->getEntry(), Reachable);
+    scanReachable(*Cfg, *Result.Context, Reachable);
 
     // Dedup by file offset: a single source statement can occupy multiple
     // CFG elements/blocks, and we don't want N copies of the same warning.
