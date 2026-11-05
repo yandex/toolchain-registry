@@ -5,6 +5,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 
 using namespace clang::ast_matchers;
@@ -89,9 +90,20 @@ namespace clang {
                         return false;
                     }
 
-                    for (const CXXMethodDecl* Overridden : Method->overridden_methods()) {
-                        if (Overridden->getCanonicalDecl() == BaseFunction->getCanonicalDecl()) {
+                    // Clang records direct overrides only, while BaseFunction may
+                    // belong to any ancestor collected by collectBaseFunctions.
+                    SmallVector<const CXXMethodDecl*, 8> Pending(Method->overridden_methods());
+                    llvm::DenseSet<const CXXMethodDecl*> Visited;
+                    while (!Pending.empty()) {
+                        const CXXMethodDecl* Overridden = Pending.pop_back_val()->getCanonicalDecl();
+                        if (!Visited.insert(Overridden).second) {
+                            continue;
+                        }
+                        if (Overridden == BaseFunction->getCanonicalDecl()) {
                             return true;
+                        }
+                        for (const CXXMethodDecl* Ancestor : Overridden->overridden_methods()) {
+                            Pending.push_back(Ancestor);
                         }
                     }
                     return false;
