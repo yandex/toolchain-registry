@@ -43,17 +43,23 @@ namespace clang {
                     }
 
                     bool TraverseCXXRecordDecl(CXXRecordDecl* Declaration) {
-                        if (!Declaration || !Declaration->isThisDeclarationADefinition() || Declaration->isImplicit()) {
-                            return true;
-                        }
+                        return traverseRecordDecl(Declaration, [&] {
+                            return RecursiveASTVisitor<ShadowingVisitor>::TraverseCXXRecordDecl(Declaration);
+                        });
+                    }
 
-                        pushScope(); ClassScopeDepth_++;
-                        addBaseClassMembers(Declaration);
-                        pushScope(); ClassScopeDepth_++;
-                        bool Result = RecursiveASTVisitor<ShadowingVisitor>::TraverseCXXRecordDecl(Declaration);
-                        popScope(); ClassScopeDepth_--;
-                        popScope(); ClassScopeDepth_--;
-                        return Result;
+                    // RecursiveASTVisitor dispatches specializations directly;
+                    // their traversal does not call TraverseCXXRecordDecl.
+                    bool TraverseClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl* Declaration) {
+                        return traverseRecordDecl(Declaration, [&] {
+                            return RecursiveASTVisitor<ShadowingVisitor>::TraverseClassTemplateSpecializationDecl(Declaration);
+                        });
+                    }
+
+                    bool TraverseClassTemplatePartialSpecializationDecl(ClassTemplatePartialSpecializationDecl* Declaration) {
+                        return traverseRecordDecl(Declaration, [&] {
+                            return RecursiveASTVisitor<ShadowingVisitor>::TraverseClassTemplatePartialSpecializationDecl(Declaration);
+                        });
                     }
 
                     bool TraverseFunctionDecl(FunctionDecl* Declaration) {
@@ -244,6 +250,21 @@ namespace clang {
                     }
 
                 private:
+                    template <typename TraverseChildren>
+                    bool traverseRecordDecl(CXXRecordDecl* Declaration, TraverseChildren Traverse) {
+                        if (!Declaration || !Declaration->isThisDeclarationADefinition() || Declaration->isImplicit()) {
+                            return true;
+                        }
+
+                        pushScope(); ClassScopeDepth_++;
+                        addBaseClassMembers(Declaration);
+                        pushScope(); ClassScopeDepth_++;
+                        bool Result = Traverse();
+                        popScope(); ClassScopeDepth_--;
+                        popScope(); ClassScopeDepth_--;
+                        return Result;
+                    }
+
                     void pushScope() {
                         Scopes_.emplace_back();
                     }
@@ -372,7 +393,7 @@ namespace clang {
                     ASTContext& Context_;
                     const SourceManager& SourceMgr_;
                     SmallVector<llvm::StringMap<const NamedDecl*>, 16> Scopes_;
-                    // Number of scopes pushed by TraverseCXXRecordDecl that are
+                    // Number of scopes pushed by traverseRecordDecl that are
                     // currently on the stack.  Used to hide class-context scopes
                     // when traversing non-member (friend/free) functions.
                     size_t ClassScopeDepth_ = 0;
