@@ -10,6 +10,8 @@
   "bld/rust/96/ix.sh":"toolchains/bld/rust/96/ix.sh",
   "bld/rust/96/linux/ix.sh":"toolchains/bld/rust/96/linux/ix.sh",
   "bld/rust/96/musl/ix.sh":"toolchains/bld/rust/96/musl/ix.sh",
+  "bld/rust/97/ix.sh":"toolchains/bld/rust/97/ix.sh",
+  "bld/rust/97/linux/ix.sh":"toolchains/bld/rust/97/linux/ix.sh",
   "devtools/contrib/toolchain-registry/github_toplevel/LICENSE":"devtools/contrib/toolchain-registry/github_toplevel/LICENSE",
   "devtools/contrib/toolchain-registry/github_toplevel/README.md":"devtools/contrib/toolchain-registry/github_toplevel/README.md",
   "devtools/gdb/README.md":"devtools/gdb/README.md",
