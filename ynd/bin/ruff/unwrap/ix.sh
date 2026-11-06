@@ -5,6 +5,10 @@
 {% endblock %}
 
 {% block cargo_sha %}
+014011f1f2cf60a3d609932fab6e5d06e6717666b203470e4174616a544a9639
+{% endblock %}
+
+{% block cargo_fetch_sha %}
 a466d837b406c888f4f76e4be808658f36846288aa87f81ac89afcf078ad386a
 {% endblock %}
 
