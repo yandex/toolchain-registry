@@ -24,6 +24,13 @@ lib/shim/fake(lib_name=windows.0.53.0)
 bld/compiler
 {% endblock %}
 
+{% block setup_target_tc %}
+{% if mingw32 %}
+export CPPFLAGS=
+{% endif %}
+{{super()}}
+{% endblock %}
+
 {% block setup_tools %}
 {% if darwin %}
 ln -s $(which llvm-objcopy) rust-objcopy
