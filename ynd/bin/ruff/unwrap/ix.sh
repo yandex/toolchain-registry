@@ -26,7 +26,7 @@ bld/compiler
 
 {% block setup_target_tc %}
 {% if mingw32 %}
-export CPPFLAGS=
+export CPPFLAGS="-isystem ${CLANG_HEADERS}"
 {% endif %}
 {{super()}}
 {% endblock %}
