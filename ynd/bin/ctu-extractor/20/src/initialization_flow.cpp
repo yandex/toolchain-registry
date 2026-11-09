@@ -104,10 +104,8 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
       if (!borrowed && !tracked(p->getType())) complete = false;
     }
     if (complete) TraverseStmt(fn->getBody());
-    for (const auto *ret : returns) {
+    for (const auto *e : returns) {
       auto *origin = out->add_returns();
-      const auto *e = ret->getRetValue();
-      e = e ? e->IgnoreParenImpCasts() : nullptr;
       if (const auto *call = dyn_cast_or_null<CallExpr>(e)) {
         auto found = callIndices.find(call);
         if (found == callIndices.end()) { complete = false; continue; }
@@ -138,10 +136,18 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
     return ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
   }
   // -2 is private scalar storage; >=0 is a borrowed formal; -3 is unknown.
-  int storage(const Expr *e) {
-    if (!e) return -3;
+  int storage(const Expr *e, unsigned depth = 0) {
+    if (!e || depth > 64) return -3;
     e = e->IgnoreParens();
     if (!tracked(e->getType())) return -3;
+    if (const auto *conditional = dyn_cast<ConditionalOperator>(e)) {
+      // Only glvalues denote storage. Both arms must have the same origin;
+      // distinct private locals are also safe for caller-memory effects.
+      if (!conditional->isGLValue()) return -3;
+      int left = storage(conditional->getTrueExpr(), depth + 1);
+      int right = storage(conditional->getFalseExpr(), depth + 1);
+      return left == right ? left : -3;
+    }
     if (const auto *deref = dyn_cast<UnaryOperator>(e)) {
       if (deref->getOpcode() != UO_Deref) return -3;
       const auto *p = variable(deref->getSubExpr());
@@ -154,6 +160,8 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
     if (!v || !v->hasLocalStorage()) return -3;
     auto found = parameters.find(v);
     if (found != parameters.end() && out->borrowed_parameters(found->second)) return found->second;
+    auto alias = referenceAliases.find(v);
+    if (alias != referenceAliases.end()) return alias->second;
     return tracked(v->getType()) ? -2 : -3;
   }
   void effect(const Expr *e, unsigned flags) {
@@ -167,7 +175,7 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
              DoStmt, SwitchStmt, CaseStmt, DefaultStmt, BreakStmt, ContinueStmt,
              NullStmt, DeclRefExpr, IntegerLiteral, FloatingLiteral,
              CharacterLiteral, CXXBoolLiteralExpr, ImplicitCastExpr,
-             ParenExpr, UnaryOperator, BinaryOperator, CallExpr,
+             ParenExpr, ExplicitCastExpr, UnaryOperator, BinaryOperator, CallExpr,
              ConditionalOperator, InitListExpr, CXXScalarValueInitExpr,
              ImplicitValueInitExpr>(s)) { complete = false; return false; }
     if (const auto *e = dyn_cast<Expr>(s))
@@ -176,7 +184,21 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
   }
   bool VisitVarDecl(VarDecl *v) {
     if (exactFunctionPointerTarget(v)) return true;
-    if (!v->hasLocalStorage() || !tracked(v->getType()) || v->hasAttr<CleanupAttr>()) complete = false;
+    if (!v->hasLocalStorage() || v->hasAttr<CleanupAttr>()) { complete = false; return true; }
+    if (v->getType()->isLValueReferenceType() && borrowedType(v->getType()) && v->hasInit()) {
+      // A reference cannot be rebound. Only accept exact scalar storage,
+      // never a temporary, cast, global, field, or unknown returned reference.
+      int origin = storage(v->getInit());
+      if (origin == -3) complete = false;
+      else referenceAliases[v] = origin;
+    } else if (!tracked(v->getType())) complete = false;
+    return true;
+  }
+  bool TraverseUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *e) {
+    // Fixed-size sizeof/alignof operands are unevaluated, including calls and
+    // increments. VLA types can evaluate bound expressions and stay unknown.
+    if (++nodes > 4096 || (e->getKind() != UETT_SizeOf && e->getKind() != UETT_AlignOf) ||
+        e->getTypeOfArgument()->isVariablyModifiedType()) complete = false;
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr *e) {
@@ -198,6 +220,29 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
     }
     return true;
   }
+  // Built-in numeric conversions change values, not the memory-effect
+  // certificate. Traverse the operand normally so writes, escapes, volatile
+  // reads and transitive calls still contribute their effects. This does not
+  // prove that a narrowing conversion itself is defined or initialized.
+  bool VisitExplicitCastExpr(ExplicitCastExpr *e) {
+    if (!tracked(e->getType()) || !tracked(e->getSubExpr()->getType())) {
+      complete = false;
+      return true;
+    }
+    switch (e->getCastKind()) {
+      case CK_NoOp:
+      case CK_IntegralCast:
+      case CK_IntegralToBoolean:
+      case CK_IntegralToFloating:
+      case CK_FloatingToIntegral:
+      case CK_FloatingToBoolean:
+      case CK_FloatingCast:
+        break;
+      default:
+        complete = false;
+    }
+    return true;
+  }
   bool VisitImplicitCastExpr(ImplicitCastExpr *e) {
     if (e->getCastKind() == CK_LValueToRValue && !e->getType()->isPointerType()) effect(e->getSubExpr(), 1);
     if (e->getCastKind() == CK_PointerToIntegral || e->getCastKind() == CK_IntegralToPointer || e->getCastKind() == CK_BitCast || e->getCastKind() == CK_LValueBitCast) complete = false;
@@ -216,12 +261,26 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
   }
   bool VisitReturnStmt(ReturnStmt *s) {
     if (!out->returns_borrowed()) return true;
-    returns.push_back(s);
-    const auto *e = s->getRetValue();
-    e = e ? e->IgnoreParenImpCasts() : nullptr;
-    if (const auto *ref = dyn_cast_or_null<DeclRefExpr>(e)) forwardedPointers.insert(ref);
-    if (const auto *address = dyn_cast_or_null<UnaryOperator>(e))
-      if (address->getOpcode() == UO_AddrOf) borrowedAddresses.insert(address);
+    // Record every possible origin. The shared summary requires all leaves
+    // to resolve to the same formal, including origins returned by callees.
+    // Normal AST traversal still visits conditions and both branches for effects.
+    std::vector<const Expr *> pending{s->getRetValue()};
+    unsigned visited = 0;
+    while (!pending.empty()) {
+      if (++visited > 4096) { complete = false; break; }
+      const auto *e = pending.back();
+      pending.pop_back();
+      e = e ? e->IgnoreParenImpCasts() : nullptr;
+      if (const auto *conditional = dyn_cast_or_null<ConditionalOperator>(e)) {
+        pending.push_back(conditional->getTrueExpr());
+        pending.push_back(conditional->getFalseExpr());
+        continue;
+      }
+      returns.push_back(e);
+      if (const auto *ref = dyn_cast_or_null<DeclRefExpr>(e)) forwardedPointers.insert(ref);
+      if (const auto *address = dyn_cast_or_null<UnaryOperator>(e))
+        if (address->getOpcode() == UO_AddrOf) borrowedAddresses.insert(address);
+    }
     return true;
   }
   bool VisitCallExpr(CallExpr *call) {
@@ -264,8 +323,9 @@ class BorrowEffects : public RecursiveASTVisitor<BorrowEffects> {
   bool complete = true;
   unsigned nodes = 0;
   std::map<const VarDecl *, unsigned> parameters;
+  std::map<const VarDecl *, int> referenceAliases;
   std::map<const CallExpr *, unsigned> callIndices;
-  std::vector<const ReturnStmt *> returns;
+  std::vector<const Expr *> returns;
   std::set<const Expr *> forwardedPointers;
   std::set<const UnaryOperator *> borrowedAddresses;
 };
