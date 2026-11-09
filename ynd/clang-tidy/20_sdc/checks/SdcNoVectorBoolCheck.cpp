@@ -8,7 +8,8 @@ namespace clang::tidy::sdc {
 void SdcNoVectorBoolCheck::registerMatchers(MatchFinder *Finder) {
     // Lambda captures have compiler-generated fields whose synthetic type
     // locations can point at an ordinary use of the captured variable.
-    Finder->addMatcher(typeLoc(unless(hasAncestor(fieldDecl(isImplicit())))).bind("type"), this);
+    Finder->addMatcher(typeLoc(loc(templateSpecializationType()),
+        unless(hasAncestor(fieldDecl(isImplicit())))).bind("type"), this);
 }
 
 void SdcNoVectorBoolCheck::check(const MatchFinder::MatchResult &Result) {

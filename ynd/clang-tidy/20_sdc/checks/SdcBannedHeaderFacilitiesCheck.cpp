@@ -24,6 +24,15 @@ StringRef stripGlobalPrefix(StringRef Name) {
     return Name.starts_with("::") ? Name.drop_front(2) : Name;
 }
 
+bool isProhibitedUnqualifiedName(ArrayRef<StringRef> Prohibited, StringRef Name) {
+    for (StringRef P : Prohibited) {
+        if (stripGlobalPrefix(P).rsplit("::").second == Name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool isProhibitedQualifiedName(ArrayRef<StringRef> Prohibited, StringRef QualName) {
     StringRef Normalized = stripGlobalPrefix(QualName);
     for (StringRef P : Prohibited) {
@@ -32,6 +41,11 @@ bool isProhibitedQualifiedName(ArrayRef<StringRef> Prohibited, StringRef QualNam
         }
     }
     return false;
+}
+
+bool isProhibitedName(ArrayRef<StringRef> Prohibited, const NamedDecl* D) {
+    return isProhibitedUnqualifiedName(Prohibited, D->getName()) &&
+           isProhibitedQualifiedName(Prohibited, D->getQualifiedNameAsString());
 }
 
 const NamedDecl* findProhibitedTypedef(ArrayRef<StringRef> Prohibited,
@@ -44,8 +58,8 @@ const NamedDecl* findProhibitedTypedef(ArrayRef<StringRef> Prohibited,
         if (!Ty) return nullptr;
         if (const auto* TT = dyn_cast<TypedefType>(Ty)) {
             const TypedefNameDecl* TD = TT->getDecl();
-            if (isProhibitedQualifiedName(Prohibited,
-                                          TD->getQualifiedNameAsString())) {
+            if (isProhibitedUnqualifiedName(Prohibited, TD->getName()) &&
+                isProhibitedQualifiedName(Prohibited, TD->getQualifiedNameAsString())) {
                 return TD;
             }
             QT = TD->getUnderlyingType();
@@ -243,7 +257,10 @@ void SdcBannedHeaderFacilitiesCheck::registerMatchers(MatchFinder* Finder) {
         // Diagnose every declared object, not merely the shared type spelling
         // in declarations such as `va_list first, second`.
         Finder->addMatcher(
-            varDecl(unless(parmVarDecl()),
+            varDecl(anyOf(hasType(qualType(typedefType())),
+                        hasType(qualType(usingType())),
+                        hasType(qualType(elaboratedType()))),
+                    unless(parmVarDecl()),
                     unless(isExpansionInSystemHeader()))
                 .bind("variableTypeUse"),
             this);
@@ -285,7 +302,7 @@ void SdcBannedHeaderFacilitiesCheck::check(const MatchFinder::MatchResult& Resul
 
     if (const auto* DRE = Result.Nodes.getNodeAs<DeclRefExpr>("funcUse")) {
         const NamedDecl* ND = DRE->getDecl();
-        if (!isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString())) {
+        if (!isProhibitedName(Functions, ND)) {
             return;
         }
         FunctionUses_.push_back({ND->getNameAsString(), DRE->getBeginLoc()});
@@ -294,7 +311,7 @@ void SdcBannedHeaderFacilitiesCheck::check(const MatchFinder::MatchResult& Resul
 
     if (const auto* ULE = Result.Nodes.getNodeAs<UnresolvedLookupExpr>("unresolvedFuncUse")) {
         for (const NamedDecl* ND : ULE->decls()) {
-            if (isProhibitedQualifiedName(Functions, ND->getQualifiedNameAsString())) {
+            if (isProhibitedName(Functions, ND)) {
                 FunctionUses_.push_back({ND->getNameAsString(), ULE->getBeginLoc()});
                 break;
             }
@@ -342,8 +359,7 @@ void SdcBannedHeaderFacilitiesCheck::check(const MatchFinder::MatchResult& Resul
             if (const auto* UT = dyn_cast_or_null<UsingType>(NamedTy))
                 TT = UT->getUnderlyingType()->getAs<TypedefType>();
         const NamedDecl* ND = TT ? TT->getDecl() : nullptr;
-        if (!ND || !isProhibitedQualifiedName(
-                       Types, ND->getQualifiedNameAsString()))
+        if (!ND || !isProhibitedName(Types, ND))
             return;
         TypeUses_.push_back({ND->getNameAsString(), TL->getBeginLoc()});
         return;

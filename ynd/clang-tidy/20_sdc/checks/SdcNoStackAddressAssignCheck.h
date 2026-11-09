@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SdcCodeSelection.h"
+#include "SdcPolicyDiagnostic.h"
 #include "bridge_header.h"
 
 namespace clang {
@@ -14,7 +15,7 @@ namespace clang {
             // declared in the same block are treated as having the same
             // lifetime (per the project's decidable-subset interpretation of
             // the rule).
-            class SdcNoStackAddressAssignCheck: public ClangTidyCheck {
+            class SdcNoStackAddressAssignCheck: public SdcPolicyCheck {
             public:
                 SdcNoStackAddressAssignCheck(StringRef Name, ClangTidyContext* Context);
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;

@@ -379,7 +379,7 @@ namespace clang {
 
             SdcNoStackAddressAssignCheck::SdcNoStackAddressAssignCheck(
                 StringRef Name, ClangTidyContext* Context)
-                : ClangTidyCheck(Name, Context)
+                : SdcPolicyCheck(Name, Context)
             {
             }
 
@@ -404,7 +404,13 @@ namespace clang {
                 if (!BO) return;
 
                 ASTContext& Ctx = *Result.Context;
-                if (!isInAnalyzedCode(*BO, BO->getOperatorLoc(), Ctx)) return;
+                if (!isInAnalyzedCode(*BO, BO->getOperatorLoc(), Ctx) ||
+                    !shouldReportPolicyDiagnostic(
+                        BO->getOperatorLoc(),
+                        *Result.SourceManager
+                    )) {
+                    return;
+                }
 
                 llvm::SmallPtrSet<const VarDecl*, 16> Visiting;
                 const VarDecl* RHSVar = findAddressedVar(

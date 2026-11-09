@@ -57,6 +57,7 @@ public:
     void use(const NamedDecl *D, const DynTypedNode &N) {
         if (!D) return;
         const auto *ID = typeIdentity(D);
+        if (!Candidates.count(ID) || Used.count(ID)) return;
         llvm::SmallVector<DynTypedNode, 8> Work{N};
         llvm::SmallPtrSet<const void *, 16> Seen;
         while (!Work.empty()) {

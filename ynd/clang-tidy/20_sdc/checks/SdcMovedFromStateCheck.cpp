@@ -30,7 +30,7 @@ static bool isStdMoveOrForward(const CallExpr* CE) {
     const Expr* Callee = CE->getCallee()->IgnoreParenCasts();
 
     auto nameIs = [](const NamedDecl* D, StringRef N) {
-        return D && D->getName() == N;
+        return D && D->getIdentifier() && D->getName() == N;
     };
     auto inStd = [](const NamedDecl* D) -> bool {
         if (!D) return false;
@@ -119,7 +119,8 @@ static bool onlyBindsReference(const Expr* E, ASTContext& Ctx) {
 
 static bool isStdClearCall(const CXXMemberCallExpr* MCE) {
     const auto* MD = MCE->getMethodDecl();
-    if (!MD || MD->getName() != "clear" || MD->getNumParams() != 0)
+    if (!MD || !MD->getIdentifier() || MD->getName() != "clear" ||
+        MD->getNumParams() != 0)
         return false;
 
     for (const DeclContext* DC = MD->getDeclContext(); DC;
@@ -135,7 +136,8 @@ static bool hasSpecifiedMovedFromState(const VarDecl* VD) {
     QualType T = VD->getType().getCanonicalType();
     const auto* RD = T->getAsCXXRecordDecl();
     if (!RD) return false;
-    if (RD->getName() != "unique_ptr" && RD->getName() != "shared_ptr")
+    if (!RD->getIdentifier() ||
+        (RD->getName() != "unique_ptr" && RD->getName() != "shared_ptr"))
         return false;
     const auto* NS = dyn_cast<NamespaceDecl>(RD->getDeclContext());
     return NS && NS->isStdNamespace();

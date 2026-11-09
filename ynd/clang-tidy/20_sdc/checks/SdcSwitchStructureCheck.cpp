@@ -171,7 +171,10 @@ bool allEnumeratorsCovered(
     for (const auto* ECD : ED->enumerators()) {
         bool found = false;
         for (const auto& CV : CaseVals) {
-            if (CV == ECD->getInitVal()) { found = true; break; }
+            if (llvm::APSInt::isSameValue(CV, ECD->getInitVal())) {
+                found = true;
+                break;
+            }
         }
         if (!found) return false;
     }

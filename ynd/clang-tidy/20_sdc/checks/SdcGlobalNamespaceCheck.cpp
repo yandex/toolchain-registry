@@ -6,7 +6,11 @@
 using namespace clang::ast_matchers;
 namespace clang::tidy::sdc {
 void SdcGlobalNamespaceCheck::registerMatchers(MatchFinder *Finder) {
-    Finder->addMatcher(decl(unless(isImplicit())).bind("decl"), this);
+    Finder->addMatcher(
+        namedDecl(
+            unless(isImplicit()), hasDeclContext(translationUnitDecl())
+        ).bind("decl"),
+    this);
 }
 
 void SdcGlobalNamespaceCheck::check(const MatchFinder::MatchResult &Result) {
@@ -31,7 +35,7 @@ void SdcGlobalNamespaceCheck::check(const MatchFinder::MatchResult &Result) {
         if (LS->getLanguage() == LinkageSpecLanguageIDs::C) return;
     if (isa<NamedDecl>(D)) Message = "place this declaration in a namespace";
     L = D->getBeginLoc();
-    if (!Message.empty() && isInAnalyzedCode(*D, L, C))
+    if (!Message.empty() && shouldReportPolicyDiagnostic(L, C.getSourceManager()))
         emitPolicyDiagnostic(*this, DynTypedNode::create(*D), L, Message, C, Instances);
 }
 } // namespace clang::tidy::sdc

@@ -7,7 +7,7 @@
 using namespace clang::ast_matchers;
 namespace clang::tidy::sdc {
 void SdcFixedWidthTypesCheck::registerMatchers(MatchFinder *Finder) {
-    Finder->addMatcher(typeLoc().bind("type"), this);
+    Finder->addMatcher(typeLoc(loc(builtinType())).bind("type"), this);
 }
 
 void SdcFixedWidthTypesCheck::check(const MatchFinder::MatchResult &Result) {
@@ -15,6 +15,7 @@ void SdcFixedWidthTypesCheck::check(const MatchFinder::MatchResult &Result) {
     if (!TL) return;
     auto &C = *Result.Context;
     SourceLocation L = TL->getBeginLoc();
+    if (!shouldReportPolicyDiagnostic(L, C.getSourceManager())) return;
     bool Bad = false;
     auto B = TL->getAs<BuiltinTypeLoc>();
     if (!B) return;
@@ -44,7 +45,9 @@ void SdcFixedWidthTypesCheck::check(const MatchFinder::MatchResult &Result) {
         }
         if (N.get<Decl>()) break;
     }
-    if (Bad && isInAnalyzedCode(*TL, L, C))
-        emitPolicyDiagnostic(*this, DynTypedNode::create(*TL), L, "use a named fixed-width integer type instead of a standard integer type name", C, Instances);
+    if (Bad)
+        emitPolicyDiagnostic(
+            *this, DynTypedNode::create(*TL), L,
+            "use a named fixed-width integer type instead of a standard integer type name", C, Instances);
 }
 } // namespace clang::tidy::sdc
