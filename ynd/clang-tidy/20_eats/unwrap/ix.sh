@@ -4,8 +4,12 @@
 base_class_special_members_check.cpp
 base_class_special_members_check.h
 bridge_header.h
+catch_const_reference_check.cpp
+catch_const_reference_check.h
 class_size_check.cpp
 class_size_check.h
+complex_condition_check.cpp
+complex_condition_check.h
 default_lambda_capture_check.cpp
 default_lambda_capture_check.h
 empty_catch_all_check.cpp
@@ -14,10 +18,14 @@ header_constant_inline_check.cpp
 header_constant_inline_check.h
 lambda_size_check.cpp
 lambda_size_check.h
+magic_string_check.cpp
+magic_string_check.h
 manual_mutex_lock_check.cpp
 manual_mutex_lock_check.h
 memory_order_check.cpp
 memory_order_check.h
+namespace_alias_in_header_check.cpp
+namespace_alias_in_header_check.h
 namespace_scope_static_check.cpp
 namespace_scope_static_check.h
 parameter_count_check.cpp
