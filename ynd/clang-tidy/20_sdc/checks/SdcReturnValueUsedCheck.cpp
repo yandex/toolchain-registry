@@ -179,6 +179,7 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
             if (const auto* FD = ParentNode.get<FieldDecl>()) {
                 return true;
             }
+            if (ParentNode.get<EnumConstantDecl>()) return true;
             if (const auto* CtorInit = ParentNode.get<CXXCtorInitializer>()) {
                 return true;
             }
@@ -233,14 +234,21 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
         }
 
 
+        if (isDiscardedCorrectly(Current)) return true;
+        if (const auto* Construct = dyn_cast<CXXConstructExpr>(Current)) {
+            for (const Expr* Arg : Construct->arguments())
+                if (containsExpression(Arg, CallExpr)) return true;
+        }
         if (const auto* BinaryOp = clang::dyn_cast<BinaryOperator>(Current)) {
             if (containsExpression(BinaryOp->getLHS(), CallExpr) ||
                 containsExpression(BinaryOp->getRHS(), CallExpr)) {
-                if (BinaryOp->getOpcode() == BO_Comma &&
-                    containsExpression(BinaryOp->getLHS(), CallExpr)) {
-                    return false;
+                if (BinaryOp->getOpcode() == BO_Comma) {
+                    if (containsExpression(BinaryOp->getLHS(), CallExpr)) return false;
+                    // The RHS supplies the comma expression's result. Whether
+                    // that result is used depends on the surrounding context.
+                } else {
+                    return true;
                 }
-                return true;
             }
         } else if (const auto* UnaryOp = clang::dyn_cast<UnaryOperator>(Current)) {
             if (containsExpression(UnaryOp->getSubExpr(), CallExpr)) {
@@ -283,6 +291,8 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
                 Condition = Do->getCond();
             } else if (const auto* For = clang::dyn_cast<ForStmt>(Current)) {
                 Condition = For->getCond();
+            } else if (const auto* Switch = clang::dyn_cast<SwitchStmt>(Current)) {
+                Condition = Switch->getCond();
             }
 
             if (Condition && containsExpression(Condition, CallExpr)) {
@@ -325,16 +335,10 @@ bool SdcReturnValueUsedCheck::isDiscardedCorrectly(const Stmt* Parent) {
     if (!Parent) {
         return false;
     }
-    if (const auto* CStyleCast = clang::dyn_cast<CStyleCastExpr>(Parent)) {
-        if (CStyleCast->getTypeAsWritten()->isVoidType()) {
-            return true;
-        }
+    if (const auto* Cast = dyn_cast<ExplicitCastExpr>(Parent)) {
+        return Cast->getTypeAsWritten()->isVoidType();
     }
-    if (const auto* FunctionalCast = clang::dyn_cast<CXXFunctionalCastExpr>(Parent)) {
-        if (FunctionalCast->getTypeAsWritten()->isVoidType()) {
-            return true;
-        }
-    }
+
     return false;
 }
 

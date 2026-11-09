@@ -17,7 +17,7 @@ void SdcFixedWidthTypesCheck::check(const MatchFinder::MatchResult &Result) {
     SourceLocation L = TL->getBeginLoc();
     if (!shouldReportPolicyDiagnostic(L, C.getSourceManager())) return;
     bool Bad = false;
-    auto B = TL->getAs<BuiltinTypeLoc>();
+    auto B = TL->getUnqualifiedLoc().getAs<BuiltinTypeLoc>();
     if (!B) return;
     const auto K = B.getTypePtr()->getKind();
     Bad = K == BuiltinType::SChar || K == BuiltinType::UChar ||

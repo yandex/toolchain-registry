@@ -13,7 +13,7 @@ namespace clang {
 
             namespace {
 
-                enum class Cat { Bool, Char, Signed, Unsigned, Floating, Other };
+                enum class Cat { Signed, Unsigned, Floating, Other };
 
                 bool isCharacterCategory(QualType T) {
                     const auto* BT = T->getAs<BuiltinType>();
@@ -43,8 +43,8 @@ namespace clang {
                         if (!ED->isFixed()) return Cat::Other;
                         return categorize(ED->getIntegerType());
                     }
-                    if (T->isBooleanType()) return Cat::Bool;
-                    if (isCharacterCategory(T)) return Cat::Char;
+                    // MISRA numeric types exclude the boolean and character categories.
+                    if (T->isBooleanType() || isCharacterCategory(T)) return Cat::Other;
                     if (T->isUnsignedIntegerType()) return Cat::Unsigned;
                     if (T->isSignedIntegerType()) return Cat::Signed;
                     if (T->isFloatingType()) return Cat::Floating;
@@ -53,8 +53,6 @@ namespace clang {
 
                 const char* catName(Cat C) {
                     switch (C) {
-                        case Cat::Bool: return "bool";
-                        case Cat::Char: return "character";
                         case Cat::Signed: return "signed integer";
                         case Cat::Unsigned: return "unsigned integer";
                         case Cat::Floating: return "floating";
@@ -112,8 +110,7 @@ namespace clang {
                     }
                     // Exception 2: compile-time integral constant -> floating.
                     if (F == Cat::Floating &&
-                        (O == Cat::Signed || O == Cat::Unsigned ||
-                         O == Cat::Char || O == Cat::Bool) &&
+                        (O == Cat::Signed || O == Cat::Unsigned) &&
                         isIntegralConstant(Stripped, Ctx)) {
                         return false;
                     }

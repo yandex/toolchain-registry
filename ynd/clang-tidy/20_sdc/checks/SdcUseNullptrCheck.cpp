@@ -79,7 +79,7 @@ namespace clang {
                     Result.Nodes.getNodeAs<ImplicitCastExpr>("cast");
                 if (!CE) return;
                 const Expr* Sub = CE->getSubExpr()->IgnoreParenImpCasts();
-                if (isa<CXXNullPtrLiteralExpr>(Sub)) return;
+                if (Sub->getType()->isNullPtrType()) return;
                 // GNU __null builtin is sometimes used as a null pointer
                 // literal; treat it the same way clang-tidy's nullptr check
                 // does and still flag it - the rule wants nullptr only.

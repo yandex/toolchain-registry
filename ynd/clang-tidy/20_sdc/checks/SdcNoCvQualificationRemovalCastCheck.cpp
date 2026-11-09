@@ -47,6 +47,11 @@ namespace clang {
                     isa<AutoType>(To.getTypePtr())) {
                     return;
                 }
+                // This rule concerns the accessed type, not constructing or
+                // copying a value. A dependent constructor expression may still
+                // expose its const-qualified argument as the cast's subexpression.
+                if (!To->isPointerType() && !To->isReferenceType() &&
+                    !To->isMemberPointerType()) return;
                 auto Removal = cast_utils::findCvRemoval(From, To);
                 if (!Removal) {
                     return;

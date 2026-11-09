@@ -5,8 +5,8 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringMap.h"
 
 using namespace clang::ast_matchers;
 
@@ -22,7 +22,7 @@ namespace clang {
 
                 bool isRelevantBaseFunction(const CXXMethodDecl* Method) {
                     return Method && !isa<CXXConstructorDecl>(Method) && !isa<CXXDestructorDecl>(Method) &&
-                           !isCopyOrMoveAssignment(Method) && Method->getIdentifier();
+                           !isCopyOrMoveAssignment(Method) && !Method->getDeclName().isEmpty();
                 }
 
                 void collectBaseFunctions(const CXXRecordDecl* Record,
@@ -131,16 +131,16 @@ namespace clang {
                     return Functions;
                 }
 
-                llvm::StringMap<SmallVector<const NamedDecl*, 2>> collectDerivedConcealers(const CXXRecordDecl* Record) {
-                    llvm::StringMap<SmallVector<const NamedDecl*, 2>> Concealers;
+                llvm::DenseMap<DeclarationName, SmallVector<const NamedDecl*, 2>> collectDerivedConcealers(const CXXRecordDecl* Record) {
+                    llvm::DenseMap<DeclarationName, SmallVector<const NamedDecl*, 2>> Concealers;
                     for (const Decl* Declaration : Record->decls()) {
                         const auto* Named = dyn_cast<NamedDecl>(Declaration);
-                        if (!Named || !Named->getIdentifier()) {
+                        if (!Named || Named->getDeclName().isEmpty()) {
                             continue;
                         }
 
                         if (isDerivedFunction(Named) || isDerivedVariable(Named)) {
-                            Concealers[Named->getName()].push_back(Named);
+                            Concealers[Named->getDeclName()].push_back(Named);
                         }
                     }
                     return Concealers;
@@ -177,16 +177,18 @@ namespace clang {
                 }
 
                 llvm::DenseSet<const CXXMethodDecl*> IntroducedByUsing = collectUsingIntroducedFunctions(Record);
-                llvm::StringMap<SmallVector<const NamedDecl*, 2>> Concealers = collectDerivedConcealers(Record);
+                llvm::DenseMap<DeclarationName, SmallVector<const NamedDecl*, 2>> Concealers = collectDerivedConcealers(Record);
 
                 llvm::DenseSet<const CXXMethodDecl*> Reported;
+                llvm::DenseMap<const NamedDecl*, SmallVector<const CXXMethodDecl*, 4>> Hidden;
+                SmallVector<const NamedDecl*, 8> Order;
                 for (const CXXMethodDecl* BaseFunction : BaseFunctions) {
                     if (!BaseFunction || IntroducedByUsing.contains(BaseFunction->getCanonicalDecl()) ||
                         Reported.contains(BaseFunction->getCanonicalDecl())) {
                         continue;
                     }
 
-                    auto Found = Concealers.find(BaseFunction->getName());
+                    auto Found = Concealers.find(BaseFunction->getDeclName());
                     if (Found == Concealers.end()) {
                         continue;
                     }
@@ -207,10 +209,16 @@ namespace clang {
                         continue;
                     }
 
-                    diag(Concealer->getLocation(),
-                         "derived class function or variable conceals an inherited base class function");
-                    diag(BaseFunction->getLocation(), "concealed base class function is here", DiagnosticIDs::Note);
+                    if (!Hidden.count(Concealer)) Order.push_back(Concealer);
+                    Hidden[Concealer].push_back(BaseFunction);
                     Reported.insert(BaseFunction->getCanonicalDecl());
+                }
+                for (const NamedDecl* Concealer : Order) {
+                    diag(Concealer->getLocation(), "'%0' conceals inherited function overloads named '%1'")
+                        << Concealer->getQualifiedNameAsString() << Concealer->getNameAsString();
+                    for (const CXXMethodDecl* Base : Hidden[Concealer])
+                        diag(Base->getLocation(), "concealed base function '%0' has type %1", DiagnosticIDs::Note)
+                            << Base->getQualifiedNameAsString() << Base->getType();
                 }
             }
 

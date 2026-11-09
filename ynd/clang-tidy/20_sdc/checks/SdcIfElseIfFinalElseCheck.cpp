@@ -62,8 +62,10 @@ void SdcIfElseIfFinalElseCheck::check(
 
     // If there was at least one else-if but no terminal else: violation.
     if (hasElseIf) {
-        diag(IS->getIfLoc(),
-             "if-else-if chain shall be terminated with a final else statement");
+        diag(Current->getIfLoc(),
+             "if-else-if chain shall be terminated with a final else statement")
+            << Current->getSourceRange();
+        diag(IS->getIfLoc(), "if-else-if chain starts here", DiagnosticIDs::Note);
     }
     // Simple if with no else (hasElseIf == false): compliant, no diagnostic.
 }

@@ -16,8 +16,23 @@ public:
     explicit Inventory(ASTContext &C) : C(C) {}
     bool shouldVisitTemplateInstantiations() const { return true; }
     bool VisitFunctionDecl(FunctionDecl *F) {
-        if (!F->doesThisDeclarationHaveABody() || F->isInvalidDecl() || F->isConstexpr() ||
+        if (!F->doesThisDeclarationHaveABody() || F->isInvalidDecl() ||
             !isInAnalyzedCode(*F, F->getLocation(), C)) return true;
+        // Obvious self-calls need no interprocedural reasoning. Keep the
+        // existing restricted graph for indirect STU evidence unchanged.
+        local_evidence::walk(F->getBody(), C, [&](const Stmt* S) {
+            const auto* Call = dyn_cast<CallExpr>(S);
+            const auto* Callee = Call ? Call->getDirectCallee() : nullptr;
+            if (!Callee || !local_evidence::visibleEvaluation(Call, C)) return;
+            if (const auto* M = dyn_cast<CXXMethodDecl>(Callee))
+                if (M->isVirtual()) return;
+            if (Callee->getCanonicalDecl() == F->getCanonicalDecl())
+                SelfCalls.try_emplace(F->getCanonicalDecl(), Call);
+            if (!F->isConstexpr() && Callee->isConstexpr() &&
+                !Call->isValueDependent() && !Call->isCXX11ConstantExpr(C))
+                RuntimeConstexpr.insert(Callee->getCanonicalDecl());
+        });
+        if (F->isConstexpr()) return true;
         auto &Edges = Graph[F->getCanonicalDecl()];
         bool PastCall = false;
         local_evidence::walk(F->getBody(), C, [&](const Stmt *S) {
@@ -43,6 +58,8 @@ public:
         return true;
     }
     std::map<const FunctionDecl *, std::vector<Edge>> Graph;
+    std::map<const FunctionDecl *, const CallExpr*> SelfCalls;
+    std::set<const FunctionDecl*> RuntimeConstexpr;
 private:
     ASTContext &C;
 };
@@ -53,6 +70,18 @@ void SdcNoLocalRecursionCheck::registerMatchers(MatchFinder *Finder) {
 void SdcNoLocalRecursionCheck::check(const MatchFinder::MatchResult &Result) {
     auto &C = *Result.Context;
     Inventory I(C); I.TraverseDecl(C.getTranslationUnitDecl());
+    std::set<const FunctionDecl*> ReportedSelf;
+    for (const auto& [F, Call] : I.SelfCalls) {
+        if (F->isConstexpr() && !I.RuntimeConstexpr.count(F)) continue;
+        const auto L = Call->getExprLoc();
+        if (!isInAnalyzedCode(*Call, L, C)) continue;
+        for (const Decl* Instance : Instances.claim(*Call, L, C)) {
+            if (diagnoseAnalysisInstance(*this, Instance, C, L,
+                    "this direct call recursively calls %0", F))
+                diag(F->getLocation(), "recursive function is declared here", DiagnosticIDs::Note);
+        }
+        ReportedSelf.insert(F);
+    }
     // This fast check deliberately yields no findings on oversized graphs.
     // It never converts an exhausted analysis budget into a violation.
     if (I.Graph.size() > 4096) return;
@@ -77,6 +106,7 @@ void SdcNoLocalRecursionCheck::check(const MatchFinder::MatchResult &Result) {
     };
     for (const auto &[F, Edges] : I.Graph) if (!Index.count(F)) Connect(F);
     for (const auto &[F, Edges] : I.Graph) {
+        if (ReportedSelf.count(F)) continue;
         for (const auto &E : Edges) {
             if (!Component.count(E.To) || Component[F] != Component[E.To]) continue;
             auto L = E.Call->getExprLoc();

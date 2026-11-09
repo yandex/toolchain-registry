@@ -177,6 +177,26 @@ namespace clang {
                         return;
                     }
 
+                    // A call can consume a closure synchronously. Its arguments
+                    // are not the returned object; proving that the callee stores
+                    // them would require separate escape analysis.
+                    if (isa<CallExpr>(S)) return;
+                    if (const auto* Conditional = dyn_cast<ConditionalOperator>(S)) {
+                        findReturnedLambdas(Check, Ret, Conditional->getTrueExpr());
+                        findReturnedLambdas(Check, Ret, Conditional->getFalseExpr());
+                        return;
+                    }
+                    if (const auto* Binary = dyn_cast<BinaryOperator>(S)) {
+                        if (Binary->getOpcode() == BO_Comma)
+                            findReturnedLambdas(Check, Ret, Binary->getRHS());
+                        return;
+                    }
+                    // Follow value-preserving wrappers and construction of the
+                    // returned wrapper (e.g. std::function), not arbitrary operand
+                    // trees such as a lambda used as a conditional's condition.
+                    if (!isa<ExprWithCleanups, MaterializeTemporaryExpr,
+                             CXXBindTemporaryExpr, CastExpr, ParenExpr,
+                             CXXConstructExpr, InitListExpr>(S)) return;
                     for (const Stmt* Child : S->children()) {
                         findReturnedLambdas(Check, Ret, Child);
                     }

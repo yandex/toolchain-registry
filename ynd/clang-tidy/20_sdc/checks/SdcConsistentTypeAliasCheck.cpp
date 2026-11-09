@@ -51,6 +51,38 @@ namespace clang {
                     QualType SA = stripElaborated(A);
                     QualType SB = stripElaborated(B);
                     if (SA == SB) return true;
+                    // Qualification can appear beneath references, pointers,
+                    // arrays and template arguments. Preserve alias identity at
+                    // every level instead of canonicalizing away typedef sugar.
+                    if (const auto* PA = dyn_cast<PointerType>(SA)) {
+                        const auto* PB = dyn_cast<PointerType>(SB);
+                        return PB && sameAlias(PA->getPointeeType(), PB->getPointeeType(), PP);
+                    }
+                    if (const auto* RA = dyn_cast<ReferenceType>(SA)) {
+                        const auto* RB = dyn_cast<ReferenceType>(SB);
+                        return RB && SA->getTypeClass() == SB->getTypeClass() &&
+                            sameAlias(RA->getPointeeType(), RB->getPointeeType(), PP);
+                    }
+                    if (const auto* AA = dyn_cast<ArrayType>(SA)) {
+                        const auto* AB = dyn_cast<ArrayType>(SB);
+                        return AB && sameAlias(AA->getElementType(), AB->getElementType(), PP);
+                    }
+                    if (const auto* TA = dyn_cast<TemplateSpecializationType>(SA)) {
+                        const auto* TB = dyn_cast<TemplateSpecializationType>(SB);
+                        if (TB && TA->getTemplateName().getAsTemplateDecl() ==
+                                      TB->getTemplateName().getAsTemplateDecl() &&
+                            TA->template_arguments().size() == TB->template_arguments().size()) {
+                            for (unsigned I = 0; I < TA->template_arguments().size(); ++I) {
+                                const auto& AArg = TA->template_arguments()[I];
+                                const auto& BArg = TB->template_arguments()[I];
+                                if (AArg.getKind() != BArg.getKind()) return false;
+                                if (AArg.getKind() == TemplateArgument::Type) {
+                                    if (!sameAlias(AArg.getAsType(), BArg.getAsType(), PP)) return false;
+                                } else if (!AArg.structurallyEquals(BArg)) return false;
+                            }
+                            return true;
+                        }
+                    }
                     return SA.getAsString(PP) == SB.getAsString(PP);
                 }
 

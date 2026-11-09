@@ -129,10 +129,10 @@ namespace clang {
                     QualType OT = preCastType(UO->getSubExpr());
                     if (!isInteger(OT)) return; // overloaded / dependent
                     if (!isUnsigned(OT)) {
-                        diag(UO->getOperatorLoc(),
+                        diag(UO->getSubExpr()->getExprLoc(),
                              "operand of '~' must be of unsigned type "
                              "(operand has type %0)")
-                            << UO->getSubExpr()->IgnoreImpCasts()->getType();
+                            << UO->getSubExpr()->IgnoreImpCasts()->getType() << UO->getSubExpr()->getSourceRange();
                     }
                     return;
                 }
@@ -147,16 +147,16 @@ namespace clang {
 
                 if (isBinaryBitwiseOpcode(Op)) {
                     if (!isUnsigned(LT)) {
-                        diag(BO->getOperatorLoc(),
+                        diag(BO->getLHS()->getExprLoc(),
                              "left operand of bitwise operator must be of "
                              "unsigned type (operand has type %0)")
-                            << BO->getLHS()->IgnoreImpCasts()->getType();
+                            << BO->getLHS()->IgnoreImpCasts()->getType() << BO->getLHS()->getSourceRange();
                     }
                     if (!isUnsigned(RT)) {
-                        diag(BO->getOperatorLoc(),
+                        diag(BO->getRHS()->getExprLoc(),
                              "right operand of bitwise operator must be of "
                              "unsigned type (operand has type %0)")
-                            << BO->getRHS()->IgnoreImpCasts()->getType();
+                            << BO->getRHS()->IgnoreImpCasts()->getType() << BO->getRHS()->getSourceRange();
                     }
                     return;
                 }
@@ -169,10 +169,10 @@ namespace clang {
                             BO->getLHS(), BO->getRHS(), Ctx);
                     }
                     if (!LhsOk) {
-                        diag(BO->getOperatorLoc(),
+                        diag(BO->getLHS()->getExprLoc(),
                              "left operand of shift must be of unsigned type "
                              "(operand has type %0)")
-                            << BO->getLHS()->IgnoreImpCasts()->getType();
+                            << BO->getLHS()->IgnoreImpCasts()->getType() << BO->getLHS()->getSourceRange();
                     }
 
                     // ----- RHS -----
@@ -181,19 +181,19 @@ namespace clang {
                     if (tryConstInt(BO->getRHS(), Ctx, RV)) {
                         // Constant RHS: must be in [0, W-1].
                         if (!RV.isNonNegative() || (W > 0 && RV.uge(W))) {
-                            diag(BO->getOperatorLoc(),
+                            diag(BO->getRHS()->getExprLoc(),
                                  "shift amount %0 is outside the valid range "
                                  "[0, %1] for the left operand's type")
                                 << toString(RV, /*Radix=*/10)
-                                << static_cast<int>(W ? W - 1 : 0);
+                                << static_cast<int>(W ? W - 1 : 0) << BO->getRHS()->getSourceRange();
                         }
                     } else {
                         // Non-constant RHS: must be unsigned.
                         if (!isUnsigned(RT)) {
-                            diag(BO->getOperatorLoc(),
+                            diag(BO->getRHS()->getExprLoc(),
                                  "non-constant right operand of shift must "
                                  "be of unsigned type (operand has type %0)")
-                                << BO->getRHS()->IgnoreImpCasts()->getType();
+                                << BO->getRHS()->IgnoreImpCasts()->getType() << BO->getRHS()->getSourceRange();
                         }
                     }
                     return;

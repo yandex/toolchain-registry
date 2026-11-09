@@ -1,11 +1,34 @@
 #include "SdcNoPragmaCheck.h"
 #include "SdcPreprocessorFileCollector.h"
+#include "llvm/ADT/DenseMap.h"
 namespace clang::tidy::sdc {
 namespace {
 class Callbacks final : public PreprocessorFileCollector {
 public:
     Callbacks(SdcNoPragmaCheck &Check, Preprocessor &PP)
         : PreprocessorFileCollector(PP), Check(Check) {}
+    void MacroExpands(const Token&, const MacroDefinition& Definition,
+                      SourceRange Range, const MacroArgs*) override {
+        const MacroInfo* MI = Definition.getMacroInfo();
+        if (!MI) return;
+        for (const Token& T : MI->tokens()) {
+            if (Lexer::getSpelling(T, SM, PP.getLangOpts()) != "_Pragma") continue;
+            auto DefinitionLoc = SM.getSpellingLoc(T.getLocation());
+            auto Use = SM.getExpansionLoc(Range.getBegin());
+            if (SM.isInSystemHeader(Use)) continue;
+            Examples.try_emplace(DefinitionLoc.getRawEncoding(), Use);
+        }
+    }
+    void pragmaOperator(SourceLocation Location) {
+        // Related notes must not make an otherwise filtered header diagnostic
+        // visible merely because an invocation occurs in the main file.
+        if (!Check.shouldReportPolicyDiagnostic(Location, SM)) return;
+        Check.diag(Location, "do not use the _Pragma operator");
+        auto It = Examples.find(Location.getRawEncoding());
+        if (It != Examples.end())
+            Check.diag(It->second, "this macro invocation expands to the prohibited _Pragma operator",
+                       DiagnosticIDs::Note);
+    }
     void EndOfMainFile() override {
         for (FileID FID : Files) {
             auto Start = SM.getLocForStartOfFile(FID);
@@ -31,18 +54,19 @@ public:
                         if (Name == "define")
                             for (size_t J = I+2; J < End; ++J)
                                 if (Spelling(J) == "_Pragma")
-                                    Check.diag(Tokens[J].getLocation(), "do not use the _Pragma operator");
+                                    pragmaOperator(Tokens[J].getLocation());
                     }
                     I = End; continue;
                 }
                 if (Spelling(I) == "_Pragma")
-                    Check.diag(Tok.getLocation(), "do not use the _Pragma operator");
+                    pragmaOperator(Tok.getLocation());
                 ++I;
             }
         }
     }
 private:
     SdcNoPragmaCheck &Check;
+    llvm::DenseMap<unsigned, SourceLocation> Examples;
 };
 } // namespace
 void SdcNoPragmaCheck::registerPPCallbacks(const SourceManager &, Preprocessor *PP, Preprocessor *) {
