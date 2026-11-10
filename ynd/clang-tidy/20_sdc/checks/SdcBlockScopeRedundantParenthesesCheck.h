@@ -16,11 +16,11 @@ namespace clang {
                                          Preprocessor* ModuleExpanderPP) override;
                 void registerMatchers(ast_matchers::MatchFinder* Finder) override;
                 void check(const ast_matchers::MatchFinder::MatchResult& Result) override;
-                void recordMacroWithRedundantParens(StringRef Name);
-                bool macroHasRedundantParens(StringRef Name) const;
+                void recordParenParameter(SourceLocation Location);
+                bool isParenParameter(SourceLocation Location) const;
 
             private:
-                std::set<std::string> MacrosWithRedundantParens_;
+                std::set<unsigned> ParenParameters_;
             };
 
         } // namespace sdc

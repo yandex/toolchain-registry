@@ -2,7 +2,6 @@
 
 #include "SdcPolicyDiagnostic.h"
 #include "SdcCodeSelection.h"
-#include <set>
 
 namespace clang {
 namespace tidy {
@@ -34,7 +33,6 @@ private:
 
     const Stmt* getParentIgnoreParensAndCasts(const Stmt* S, ASTContext* Context);
 
-    std::set<const CallExpr*> CtorInitCalls;
     AnalysisInstanceTracker AnalysisInstances;
 };
 

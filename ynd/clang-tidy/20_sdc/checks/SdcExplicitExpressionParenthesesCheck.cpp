@@ -23,7 +23,14 @@ int rank(BinaryOperatorKind O) {
     }
 }
 int expressionRank(const Expr *E) {
-    E = E->IgnoreImpCasts();
+    // Preserve explicit parentheses while peeling compiler-generated wrappers.
+    while (true) {
+        E = E->IgnoreImpCasts();
+        if (const auto *M = dyn_cast<MaterializeTemporaryExpr>(E)) E = M->getSubExpr();
+        else if (const auto *B = dyn_cast<CXXBindTemporaryExpr>(E)) E = B->getSubExpr();
+        else if (const auto *C = dyn_cast<ExprWithCleanups>(E)) E = C->getSubExpr();
+        else break;
+    }
     if (const auto *B = dyn_cast<BinaryOperator>(E)) return rank(B->getOpcode());
     if (const auto *O = dyn_cast<CXXOperatorCallExpr>(E)) {
         if (O->getNumArgs() == 2 && O->isInfixBinaryOp())

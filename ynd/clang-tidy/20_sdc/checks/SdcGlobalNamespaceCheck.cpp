@@ -16,7 +16,7 @@ void SdcGlobalNamespaceCheck::registerMatchers(MatchFinder *Finder) {
 void SdcGlobalNamespaceCheck::check(const MatchFinder::MatchResult &Result) {
     auto &C = *Result.Context;
     const auto *D = Result.Nodes.getNodeAs<Decl>("decl");
-    if (!D || isa<TranslationUnitDecl>(D)) return;
+    if (!D || isa<TranslationUnitDecl, ParmVarDecl>(D)) return;
     const auto *V = dyn_cast<VarDecl>(D);
     const auto *F = dyn_cast<FunctionDecl>(D);
     SourceLocation L = D->getLocation();

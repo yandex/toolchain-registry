@@ -1,3 +1,5 @@
+#include "SdcNoCommentLineSplicingCheck.h"
+#include "SdcSmartPointerRawConstructorCheck.h"
 #include "bridge_header.h"
 
 #include "taxi_async_use_after_free_check.h"
@@ -286,6 +288,8 @@ public:
         CheckFactories.registerCheck<sdc::SdcNoOffsetofCheck>("sdc-no-offsetof");
         CheckFactories.registerCheck<sdc::SdcNoPointerExceptionCheck>("sdc-no-pointer-exception");
         CheckFactories.registerCheck<sdc::SdcNoPointerToIntegralCastCheck>("sdc-no-pointer-to-integral-cast");
+        CheckFactories.registerCheck<sdc::SdcNoCommentLineSplicingCheck>("sdc-no-comment-line-splicing");
+        CheckFactories.registerCheck<sdc::SdcSmartPointerRawConstructorCheck>("sdc-smart-pointer-raw-constructor");
         CheckFactories.registerCheck<sdc::SdcNoPragmaCheck>("sdc-no-pragma");
         CheckFactories.registerCheck<sdc::SdcNoReinterpretCastCheck>("sdc-no-reinterpret-cast");
         CheckFactories.registerCheck<sdc::SdcNoReturnStackAddressCheck>("sdc-no-return-stack-address");

@@ -251,6 +251,10 @@ SdcNoPointerExceptionCheck.cpp
 SdcNoPointerExceptionCheck.h
 SdcNoPointerToIntegralCastCheck.cpp
 SdcNoPointerToIntegralCastCheck.h
+SdcNoCommentLineSplicingCheck.cpp
+SdcNoCommentLineSplicingCheck.h
+SdcSmartPointerRawConstructorCheck.cpp
+SdcSmartPointerRawConstructorCheck.h
 SdcNoPragmaCheck.cpp
 SdcNoPragmaCheck.h
 SdcNoReinterpretCastCheck.cpp

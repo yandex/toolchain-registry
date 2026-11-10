@@ -61,42 +61,6 @@ namespace clang {
                     return !Source.empty() && sourceHasParenWrappedName(Source, Name);
                 }
 
-                bool macroReplacementHasParenWrappedParameter(const MacroInfo* Macro) {
-                    if (!Macro || !Macro->isFunctionLike()) {
-                        return false;
-                    }
-
-                    const auto isMacroParameter = [&](const Token& Token) {
-                        const IdentifierInfo* Identifier = Token.getIdentifierInfo();
-                        return Identifier && Macro->getParameterNum(Identifier) >= 0;
-                    };
-
-                    auto Tokens = Macro->tokens();
-                    for (size_t I = 1; I + 1 < Tokens.size(); ++I) {
-                        if (Tokens[I - 1].is(tok::l_paren) && isMacroParameter(Tokens[I]) &&
-                            Tokens[I + 1].is(tok::r_paren)) {
-                            // Only consider this a declarator-context paren wrap when
-                            // the '(' is preceded by something that looks like a type
-                            // specifier (identifier, keyword, *, &, >) rather than an
-                            // operator.  Standard C macro operator-precedence guards
-                            // such as `!(COND)` or aggregate initialisers like
-                            // `{loc, (MSG)}` must not be mistaken for a declaration
-                            // paren wrapping a variable name.
-                            if (I >= 2) {
-                                tok::TokenKind PrevKind = Tokens[I - 2].getKind();
-                                if (PrevKind == tok::exclaim    ||  // !(PARAM)
-                                    PrevKind == tok::comma      ||  // {x, (PARAM)}
-                                    PrevKind == tok::l_brace    ||  // {(PARAM)}
-                                    PrevKind == tok::l_paren) {     // ((PARAM))
-                                    continue;
-                                }
-                            }
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
                 class RedundantParenthesesPPCallbacks: public PPCallbacks {
                 public:
                     explicit RedundantParenthesesPPCallbacks(SdcBlockScopeRedundantParenthesesCheck* Check)
@@ -105,12 +69,15 @@ namespace clang {
                     }
 
                     void MacroDefined(const Token& MacroNameTok, const MacroDirective* MD) override {
-                        if (!MD || !macroReplacementHasParenWrappedParameter(MD->getMacroInfo())) {
-                            return;
-                        }
-
-                        if (const IdentifierInfo* Identifier = MacroNameTok.getIdentifierInfo()) {
-                            Check_->recordMacroWithRedundantParens(Identifier->getName());
+                        if (!MD) return;
+                        const MacroInfo* Macro = MD->getMacroInfo();
+                        if (!Macro || !Macro->isFunctionLike()) return;
+                        auto Tokens = Macro->tokens();
+                        for (size_t I = 1; I + 1 < Tokens.size(); ++I) {
+                            const auto* Identifier = Tokens[I].getIdentifierInfo();
+                            if (Identifier && Macro->getParameterNum(Identifier) >= 0 &&
+                                Tokens[I - 1].is(tok::l_paren) && Tokens[I + 1].is(tok::r_paren))
+                                Check_->recordParenParameter(Tokens[I].getLocation());
                         }
                     }
 
@@ -135,41 +102,21 @@ namespace clang {
                         return false;
                     }
 
-                    // Path 1 (macro-driven): only apply when this variable's
-                    // *name token* itself originated as a macro argument that
-                    // landed in a `( param )` slot of the macro's body. Without
-                    // the argument-origin check we would flag every variable
-                    // declared inside any macro whose body happens to contain
-                    // a `( param )` token sequence anywhere.
-                    //
-                    // Additional guard: if the variable is declared inside a
-                    // lambda whose DEFINITION is itself inside a macro argument
-                    // (e.g. INSTANTIATE_TEST_SUITE_P(prefix, suite, []{N;}())),
-                    // the lambda is the argument expression — the variable N is
-                    // NOT the paren-wrapped argument, it merely lives inside it.
-                    //
-                    // Contrast: DECLARE_PAREN_OBJECT(int, x) called inside a
-                    // lambda body — there the lambda is the caller, not the
-                    // argument. The lambda's own location is NOT in a macro-arg
-                    // expansion, so Path 1 still fires correctly.
-                    {
-                        bool lambdaIsArgument = false;
-                        if (const auto* MD =
-                                dyn_cast<CXXMethodDecl>(Variable->getDeclContext())) {
-                            if (MD->getParent()->isLambda()) {
-                                SourceLocation LambdaLoc =
-                                    MD->getParent()->getBeginLoc();
-                                if (LambdaLoc.isValid() &&
-                                    SM.isMacroArgExpansion(LambdaLoc)) {
-                                    lambdaIsArgument = true;
-                                }
-                            }
+                    // Track the exact replacement-list occurrence that produced
+                    // the declarator name, not other parameters of the same macro.
+                    bool LambdaArgument = false;
+                    if (const auto* Method = dyn_cast<CXXMethodDecl>(Variable->getDeclContext())) {
+                        if (Method->getParent()->isLambda())
+                            LambdaArgument = SM.isMacroArgExpansion(Method->getParent()->getBeginLoc());
+                    }
+                    SourceLocation Expansion = Loc;
+                    while (!LambdaArgument && Expansion.isMacroID()) {
+                        if (SM.isMacroArgExpansion(Expansion)) {
+                            SourceLocation Parameter = SM.getSpellingLoc(
+                                SM.getImmediateExpansionRange(Expansion).getBegin());
+                            if (Check.isParenParameter(Parameter)) return true;
                         }
-                        if (!lambdaIsArgument && !MacroName.empty() &&
-                            Loc.isMacroID() && SM.isMacroArgExpansion(Loc) &&
-                            Check.macroHasRedundantParens(MacroName)) {
-                            return true;
-                        }
+                        Expansion = SM.getImmediateSpellingLoc(Expansion);
                     }
 
                     // For macro-body VarDecls, check the expansion call-site.
@@ -256,12 +203,12 @@ namespace clang {
                 diag(Variable->getLocation(), "block scope object declarations shall not use redundant parentheses around the object name");
             }
 
-            void SdcBlockScopeRedundantParenthesesCheck::recordMacroWithRedundantParens(StringRef Name) {
-                MacrosWithRedundantParens_.insert(Name.str());
+            void SdcBlockScopeRedundantParenthesesCheck::recordParenParameter(SourceLocation Location) {
+                ParenParameters_.insert(Location.getRawEncoding());
             }
 
-            bool SdcBlockScopeRedundantParenthesesCheck::macroHasRedundantParens(StringRef Name) const {
-                return MacrosWithRedundantParens_.find(Name.str()) != MacrosWithRedundantParens_.end();
+            bool SdcBlockScopeRedundantParenthesesCheck::isParenParameter(SourceLocation Location) const {
+                return ParenParameters_.count(Location.getRawEncoding()) != 0;
             }
 
         } // namespace sdc

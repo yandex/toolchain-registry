@@ -74,7 +74,7 @@ namespace clang {
                 //     where the parameter is pointer-to-function;
                 //   * ReturnStmt - returning a pointer-to-function value.
                 if (P.get<CXXStaticCastExpr>()) return;
-                if (P.get<VarDecl>()) return;
+                if (P.get<VarDecl>() || P.get<FieldDecl>() || P.get<CXXCtorInitializer>() || P.get<CXXConstructorDecl>()) return;
                 if (const auto* BO = P.get<BinaryOperator>()) {
                     if (BO->isAssignmentOp()) return;
                 }

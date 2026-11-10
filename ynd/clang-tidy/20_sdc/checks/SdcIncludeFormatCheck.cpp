@@ -39,15 +39,9 @@ public:
                              SrcMgr::CharacteristicKind /*FileType*/) override {
         if (::sdc::pp::isSystemHeader(HashLoc, SM)) return;
 
-        // When the include filename was produced by macro expansion, the
-        // FilenameRange begin location is inside the macro's expansion buffer
-        // (isMacroID() == true).  That is the non-compliant form.
-        if (FilenameRange.getBegin().isMacroID()) {
-            Check.diag(HashLoc,
-                       "#include shall be followed by <filename> or \"filename\"; "
-                       "macro-based includes expand to an invalid form");
-            return;
-        }
+        // InclusionDirective is called after successful header-name expansion.
+        // A macro that produces a valid quoted/angled filename is compliant.
+        if (FilenameRange.getBegin().isMacroID()) return;
 
         // For direct includes, verify the text starts with " or <.
         StringRef Text = Lexer::getSourceText(FilenameRange, SM, LO);

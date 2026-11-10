@@ -44,31 +44,10 @@ void SdcIntegerLiteralSuffixLongLongCheck::check(
         return;
     }
 
-    // examples explicitly assume long is 32-bit. Implement
-    // the rule platform-independently by checking whether the literal's
-    // value would force the [lex.icon] ladder to (un)signed long long on a
-    // 32-bit-long platform. Otherwise on 64-bit-long Linux the rule would
-    // never fire on values that ARE long long.
-    llvm::APInt Value = L->getValue();
-    if (Value.getActiveBits() > 64) {
-        return; // defensively skip implausibly-wide literals
-    }
-    uint64_t V = Value.getZExtValue();
-
-    uint64_t Threshold;
-    if (Parsed.base == ParsedIntegerLiteralSuffix::Base::Decimal && !Parsed.hasU) {
-        // Decimal-with-L ladder: long -> long long. On 32-bit long the type
-        // is long long when value exceeds signed-32-bit max.
-        Threshold = 0x7FFFFFFFULL;
-    } else {
-        // Every other base/suffix combo's ladder has unsigned long in it on
-        // the way to long long, so long long kicks in past unsigned-32-bit max.
-        Threshold = 0xFFFFFFFFULL;
-    }
-
-    if (V <= Threshold) {
-        return;
-    }
+    // Use the actual target type, not the width assumed by an example.
+    QualType Type = L->getType();
+    if (!Type->isSpecificBuiltinType(BuiltinType::LongLong) &&
+        !Type->isSpecificBuiltinType(BuiltinType::ULongLong)) return;
 
     diag(L->getBeginLoc(),
          "integer literal of type long long shall not use a single L or l "

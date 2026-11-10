@@ -92,6 +92,56 @@ namespace clang {
                     return nullptr;
                 }
 
+                // Follow only directly invoked lambda bodies visible in this TU.
+                // Other calls require separate interprocedural escape analysis.
+                const VarDecl* findReturnedAutomatic(const Expr* E,
+                                                     const FunctionDecl* Owner,
+                                                     bool Pointer, unsigned Depth = 0);
+
+                const VarDecl* findLambdaReturn(const Stmt* S,
+                                                const FunctionDecl* Owner,
+                                                bool Pointer, unsigned Depth) {
+                    if (!S || isa<LambdaExpr>(S)) return nullptr;
+                    if (const auto* Return = dyn_cast<ReturnStmt>(S))
+                        return findReturnedAutomatic(Return->getRetValue(), Owner, Pointer, Depth);
+                    for (const Stmt* Child : S->children())
+                        if (const auto* V = findLambdaReturn(Child, Owner, Pointer, Depth)) return V;
+                    return nullptr;
+                }
+
+                const VarDecl* findReturnedAutomatic(const Expr* E,
+                                                     const FunctionDecl* Owner,
+                                                     bool Pointer, unsigned Depth) {
+                    if (!E || !Owner || Depth > 16) return nullptr;
+                    const auto* V = Pointer ? findAddressedAutomaticObject(E) : findBaseAutomaticObject(E);
+                    if (V && V->getDeclContext() == Owner) return V;
+                    E = peel(E);
+                    if (const auto* Cleanup = dyn_cast<ExprWithCleanups>(E))
+                        return findReturnedAutomatic(Cleanup->getSubExpr(), Owner, Pointer, Depth + 1);
+                    if (const auto* Q = dyn_cast<ConditionalOperator>(E)) {
+                        if (const auto* Found = findReturnedAutomatic(Q->getTrueExpr(), Owner, Pointer, Depth + 1)) return Found;
+                        return findReturnedAutomatic(Q->getFalseExpr(), Owner, Pointer, Depth + 1);
+                    }
+                    const auto* Call = dyn_cast<CXXOperatorCallExpr>(E);
+                    if (!Call || Call->getOperator() != OO_Call || Call->getNumArgs() == 0) return nullptr;
+                    const Expr* Object = peel(Call->getArg(0));
+                    if (const auto* M = dyn_cast<MaterializeTemporaryExpr>(Object)) Object = peel(M->getSubExpr());
+                    if (const auto* B = dyn_cast<CXXBindTemporaryExpr>(Object)) Object = peel(B->getSubExpr());
+                    const auto* Lambda = dyn_cast<LambdaExpr>(Object);
+                    if (!Lambda) return nullptr;
+                    const auto* Callee = dyn_cast_or_null<CXXMethodDecl>(Call->getDirectCallee());
+                    if (!Callee || !(Pointer ? Callee->getReturnType()->isPointerType() :
+                                              Callee->getReturnType()->isReferenceType())) return nullptr;
+                    const auto* Returned = findLambdaReturn(Callee->getBody(), Owner, Pointer, Depth + 1);
+                    if (!Returned) return nullptr;
+                    // A by-value capture denotes the closure's member, not the
+                    // original local object identified by the DeclRefExpr.
+                    for (const auto& Capture : Lambda->captures())
+                        if (Capture.capturesVariable() && Capture.getCapturedVar() == Returned &&
+                            Capture.getCaptureKind() == LCK_ByRef) return Returned;
+                    return nullptr;
+                }
+
                 void diagnoseAddressReturn(ClangTidyCheck& Check,
                                            const ReturnStmt* Ret,
                                            const VarDecl* VD) {
@@ -237,7 +287,7 @@ namespace clang {
                          *Ret, Ret->getReturnLoc(), *Result.Context)) {
                     (void)Instance;
                     if (!FuncRetTy.isNull() && FuncRetTy->isPointerType()) {
-                        if (const VarDecl* VD = findAddressedAutomaticObject(E)) {
+                        if (const VarDecl* VD = findReturnedAutomatic(E, FD, true)) {
                             diagnoseAddressReturn(*this, Ret, VD);
                             // Continue below: the same return can also construct a
                             // wrapper from a bad lambda, and both facts are useful.
@@ -250,7 +300,7 @@ namespace clang {
                     // statements inside a returned lambda body are not mistaken for
                     // an outer dangling-reference return.
                     if (!FuncRetTy.isNull() && FuncRetTy->isReferenceType()) {
-                        if (const VarDecl* VD = findBaseAutomaticObject(E)) {
+                        if (const VarDecl* VD = findReturnedAutomatic(E, FD, false)) {
                             diagnoseReferenceReturn(*this, Ret, VD);
                         }
                     }

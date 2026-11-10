@@ -52,7 +52,8 @@ namespace clang {
                     return;
                 }
 
-                if (isPermittedVoidDiscard(Cast)) {
+                if ((FromFunctionPointer && To->isBooleanType()) ||
+                    isPermittedVoidDiscard(Cast)) {
                     return;
                 }
 

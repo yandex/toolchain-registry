@@ -47,35 +47,27 @@ void SdcReturnValueUsedCheck::registerMatchers(MatchFinder* Finder) {
             unless(isExpansionInSystemHeader())).bind("member_call"),
         this);
 
-    // Match ALL function calls inside EVERY constructor member initializer
-    Finder->addMatcher(
-        cxxConstructorDecl(
-            unless(isExpansionInSystemHeader()),
-            forEachConstructorInitializer(
-                cxxCtorInitializer(
-                    withInitializer(
-                        findAll(callExpr().bind("ctor_init_call"))
-                    )
-                )
-            )
-        ),
-        this);
+
 }
 
 
 void SdcReturnValueUsedCheck::check(const MatchFinder::MatchResult& Result) {
-    // Check if this is a call in a constructor initializer (these are always "used")
-    if (const auto* CtorInitCall = Result.Nodes.getNodeAs<CallExpr>("ctor_init_call")) {
-        // Add this call to the set of constructor initializer calls
-        CtorInitCalls.insert(CtorInitCall);
-        return;
-    }
-
-    if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("call_expr")) {
-        // Skip if this call is used in a constructor initializer
-        if (CtorInitCalls.count(Call) > 0) {
-            return;
+    // Synthesized special-member bodies contain calls the user did not write.
+    for (const char* Binding : {"call_expr", "operator_call", "member_call"}) {
+        if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>(Binding)) {
+            auto Node = DynTypedNode::create(*Call);
+            while (true) {
+                auto Parents = Result.Context->getParents(Node);
+                if (Parents.empty()) break;
+                Node = Parents[0];
+                if (const auto* Function = Node.get<FunctionDecl>()) {
+                    if (Function->isImplicit() || Function->isDefaulted()) return;
+                    break;
+                }
+            }
         }
+    }
+    if (const auto* Call = Result.Nodes.getNodeAs<CallExpr>("call_expr")) {
         checkUnusedFunctionCall(Call, Result);
     } else if (const auto* OperatorCall = Result.Nodes.getNodeAs<CXXOperatorCallExpr>("operator_call")) {
         checkUnusedLambdaCall(OperatorCall, Result);
@@ -147,6 +139,29 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
         return false;
     }
 
+    // A statement expression is an expression boundary, unlike a function
+    // body. Even its non-final statements are unevaluated inside sizeof.
+    auto UnevaluatedParents = Parents;
+    while (!UnevaluatedParents.empty()) {
+        const auto& Node = UnevaluatedParents[0];
+        if (Node.get<UnaryExprOrTypeTraitExpr>() || Node.get<CXXNoexceptExpr>()) return true;
+        if (const auto* Block = Node.get<CompoundStmt>()) {
+            auto Outer = Result.Context->getParents(*Block);
+            if (Outer.empty() || !Outer[0].get<StmtExpr>()) break;
+        }
+        if (Node.get<LambdaExpr>() || Node.get<FunctionDecl>()) break;
+        const auto* S = Node.get<Stmt>();
+        if (!S) break;
+        UnevaluatedParents = Result.Context->getParents(*S);
+    }
+    auto StopsAtBlock = [&](const CompoundStmt* Block) {
+        if (!Block) return false;
+        auto Outer = Result.Context->getParents(*Block);
+        return Outer.empty() || !Outer[0].get<StmtExpr>() || Block->body_empty() ||
+               !isa<Expr>(Block->body_back()) ||
+               !containsExpression(Block->body_back(), CallExpr);
+    };
+
     // Check if the return value is explicitly discarded with void cast at the immediate level
     if (const auto* ImmediateStmt = Parents.begin()->get<Stmt>()) {
         if (isDiscardedCorrectly(ImmediateStmt)) {
@@ -163,6 +178,7 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
                 }
             }
         }
+        if (StopsAtBlock(UpwardParents.begin()->get<CompoundStmt>())) break;
         const auto* ParentStmt = UpwardParents.begin()->get<Stmt>();
         if (!ParentStmt) break;
         UpwardParents = Result.Context->getParents(*ParentStmt);
@@ -172,6 +188,11 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
         auto DeclParents = Parents;
         while (!DeclParents.empty()) {
             const auto& ParentNode = *DeclParents.begin();
+            if (const auto* Ctor = ParentNode.get<CXXConstructorDecl>()) {
+                for (const auto* Init : Ctor->inits())
+                    if (containsExpression(Init->getInit(), CallExpr)) return true;
+            }
+            if (StopsAtBlock(ParentNode.get<CompoundStmt>()) || ParentNode.get<FunctionDecl>()) break;
 
             if (const auto* VD = ParentNode.get<VarDecl>()) {
                 return true;
@@ -223,6 +244,7 @@ bool SdcReturnValueUsedCheck::isReturnValueUsed(
     const Stmt* Current = Parents.begin()->get<Stmt>();
 
     while (Current) {
+        if (StopsAtBlock(dyn_cast<CompoundStmt>(Current))) break;
         if (clang::isa<UnaryExprOrTypeTraitExpr>(Current) ||
             clang::isa<CXXNoexceptExpr>(Current) ||
             clang::isa<CXXTypeidExpr>(Current)) {
