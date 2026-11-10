@@ -1,0 +1,544 @@
+--- a/authfd.c
++++ b/authfd.c
+@@ -95,7 +95,7 @@
+ 	sunaddr.sun_family = AF_UNIX;
+ 	strlcpy(sunaddr.sun_path, authsocket, sizeof(sunaddr.sun_path));
+ 
+-	if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
++	if ((sock = w32_afunix_socket(&sunaddr)) == -1)
+ 		return SSH_ERR_SYSTEM_ERROR;
+ 
+ 	/* close on exec */
+--- a/contrib/win32/openssh/config.h.vs
++++ b/contrib/win32/openssh/config.h.vs
+@@ -1531,6 +1531,12 @@
+ /* Use PIPES instead of a socketpair() */
+ #define USE_PIPES 1
+ 
++/* Define name for the ssh-agent Windows named pipe */
++#define AGENT_PIPE_ID L"\\\\.\\pipe\\openssh-ssh-agent"
++
++/* define 1 if afunix.h is available */
++#define HAVE_AFUNIX_H 1
++
+ /* Define if you want to sanitize fds */
+ /* #undef USE_SANITISE_STDFD */
+ 
+--- a/contrib/win32/win32compat/socketio.c
++++ b/contrib/win32/win32compat/socketio.c
+@@ -38,6 +38,10 @@
+ #include "inc\utf.h"
+ #include "misc_internal.h"
+ #include "debug.h"
++#include "../../../config.h"
++#ifdef HAVE_AFUNIX_H
++#include <afunix.h>
++#endif
+ 
+ #define INTERNAL_SEND_BUFFER_SIZE 70*1024 //70KB
+ #define INTERNAL_RECV_BUFFER_SIZE 70*1024 //70KB
+@@ -118,7 +122,12 @@
+ 	}
+ 
+ 	/* create accepting socket */
++	#ifdef HAVE_AFUNIX_H
++	context->accept_socket = socket(addr.ss_family, SOCK_STREAM, IPPROTO_IP);
++	#else
+ 	context->accept_socket = socket(addr.ss_family, SOCK_STREAM, IPPROTO_TCP);
++	#endif
++
+ 	if (context->accept_socket == INVALID_SOCKET) {
+ 		errno = errno_from_WSALastError();
+ 		debug3("acceptEx - socket() ERROR:%d, io:%p", WSAGetLastError(), pio);
+@@ -756,6 +765,9 @@
+ int
+ socketio_connectex(struct w32_io* pio, const struct sockaddr* name, int namelen)
+ {
++	#ifdef HAVE_AFUNIX_H
++	struct sockaddr_un tmp_unix;
++	#endif
+ 
+ 	struct sockaddr_in tmp_addr4;
+ 	struct sockaddr_in6 tmp_addr6;
+@@ -778,6 +790,13 @@
+ 		tmp_addr4.sin_port = 0;
+ 		tmp_addr = (SOCKADDR*)&tmp_addr4;
+ 		tmp_addr_len = sizeof(tmp_addr4);
++	#ifdef HAVE_AFUNIX_H
++	} else if (name->sa_family == AF_UNIX) {
++		ZeroMemory(&tmp_unix, sizeof(tmp_unix));
++		tmp_unix.sun_family = AF_UNIX;
++		tmp_addr = (SOCKADDR*)&tmp_unix;
++		tmp_addr_len = sizeof(tmp_unix);
++	#endif
+ 	} else {
+ 		errno = ENOTSUP;
+ 		debug3("connectex - ERROR: unsuppored address family:%d, io:%p", name->sa_family, pio);
+--- a/contrib/win32/win32compat/ssh-agent/agent.c
++++ b/contrib/win32/win32compat/ssh-agent/agent.c
+@@ -47,8 +47,6 @@
+ static HANDLE ioc_port = NULL;
+ static BOOL debug_mode = FALSE;
+ 
+-#define AGENT_PIPE_ID L"\\\\.\\pipe\\openssh-ssh-agent"
+-
+ static HANDLE event_stop_agent;
+ static OVERLAPPED ol;
+ static 	HANDLE pipe;
+--- a/contrib/win32/win32compat/w32fd.c
++++ b/contrib/win32/win32compat/w32fd.c
+@@ -55,6 +55,7 @@
+ #include "misc_internal.h"
+ #include "debug.h"
+ #include "userenv.h"
++#include "../../../config.h"
+ 
+ /* internal table that stores the fd to w32_io mapping*/
+ struct w32fd_table {
+@@ -274,6 +275,8 @@
+ BOOL
+ w32_io_is_io_available(struct w32_io* pio, BOOL rd)
+ {
++	if (pio->type == PIPE_LISTENER_FD)
++		return rd ? fileio_pipe_listener_available(pio) : FALSE;
+ 	if (pio->type == SOCK_FD)
+ 		return socketio_is_io_available(pio, rd);
+ 	else
+@@ -283,6 +286,8 @@
+ void
+ w32_io_on_select(struct w32_io* pio, BOOL rd)
+ {
++	if (pio->type == PIPE_LISTENER_FD)
++		return;
+ 	if ((pio->type == SOCK_FD))
+ 		socketio_on_select(pio, rd);
+ 	else
+@@ -316,9 +321,9 @@
+ 	errno = 0;
+ 	if (min_index == -1)
+ 		return -1;
+-	
++
+ 	if (domain == AF_UNIX && type == SOCK_STREAM) {
+-		pio = fileio_afunix_socket();		
++		pio = fileio_afunix_socket();
+ 		if (pio == NULL)
+ 			return -1;
+ 		pio->type = NONSOCK_FD;
+@@ -327,7 +332,85 @@
+ 		if (pio == NULL)
+ 			return -1;
+ 		pio->type = SOCK_FD;
+-	}	
++	}
++
++	fd_table_set(pio, min_index);
++	debug4("socket:%d, socktype:%d, io:%p, fd:%d ", pio->sock, type, pio, min_index);
++	return min_index;
++}
++
++int
++w32_afunix_socket(struct sockaddr_un* addr)
++{
++	#ifdef HAVE_AFUNIX_H
++	/*
++		If HAVE_AFUNIX_H is defined, we can be dealing with the ssh-agent named pipe or
++		a AF_UNIX socket if ssh forwarding is enabled. If the addr->sun_path is the
++		the well known named pipe, we open the socket with w32_fileio.
++	*/
++	char pipeid[sizeof AGENT_PIPE_ID];
++
++	if ((wcstombs(pipeid, AGENT_PIPE_ID, sizeof(pipeid)) != (size_t) -1 &&
++	    strcmp(addr->sun_path, pipeid) == 0) ||
++	    strncmp(addr->sun_path, "\\\\.\\pipe\\", 9) == 0)
++		return w32_fileio_socket(SOCK_STREAM, 0);
++	else
++		return w32_unix_socket(SOCK_STREAM, 0);
++	#else
++		return w32_socket(AF_UNIX, SOCK_STREAM, 0);
++	#endif
++}
++
++int
++w32_namedpipe_listener(const char *name)
++{
++	int fd = fd_table_get_min_index();
++	struct w32_io *pio;
++
++	if (fd == -1)
++		return -1;
++	if ((pio = fileio_pipe_listener(name)) == NULL)
++		return -1;
++	pio->type = PIPE_LISTENER_FD;
++	fd_table_set(pio, fd);
++	return fd;
++}
++
++int
++w32_unix_socket(int type, int protocol)
++{
++	int domain = AF_UNIX;
++	int min_index = fd_table_get_min_index();
++	struct w32_io* pio = NULL;
++
++	errno = 0;
++	if (min_index == -1)
++		return -1;
++
++	pio = socketio_socket(domain, type, protocol);
++	if (pio == NULL)
++		return -1;
++	pio->type = SOCK_FD;
++
++	fd_table_set(pio, min_index);
++	debug4("socket:%d, socktype:%d, io:%p, fd:%d ", pio->sock, type, pio, min_index);
++	return min_index;
++}
++
++int
++w32_fileio_socket(int type, int protocol)
++{
++	int min_index = fd_table_get_min_index();
++	struct w32_io* pio = NULL;
++
++	errno = 0;
++	if (min_index == -1)
++		return -1;
++
++	pio = fileio_afunix_socket();
++	if (pio == NULL)
++		return -1;
++	pio->type = NONSOCK_FD;
+ 
+ 	fd_table_set(pio, min_index);
+ 	debug4("socket:%d, socktype:%d, io:%p, fd:%d ", pio->sock, type, pio, min_index);
+@@ -338,6 +421,18 @@
+ w32_accept(int fd, struct sockaddr* addr, int* addrlen)
+ {
+ 	CHECK_FD(fd);
++	if (fd_table.w32_ios[fd]->type == PIPE_LISTENER_FD) {
++		int min_index = fd_table_get_min_index();
++		struct w32_io *pio;
++
++		if (min_index == -1)
++			return -1;
++		if ((pio = fileio_pipe_accept(fd_table.w32_ios[fd])) == NULL)
++			return -1;
++		pio->type = NONSOCK_FD;
++		fd_table_set(pio, min_index);
++		return min_index;
++	}
+ 	CHECK_SOCK_IO(fd_table.w32_ios[fd]);
+ 	int min_index = fd_table_get_min_index();
+ 	struct w32_io* pio = NULL;
+@@ -397,6 +492,8 @@
+ w32_listen(int fd, int backlog)
+ {
+ 	CHECK_FD(fd);
++	if (fd_table.w32_ios[fd]->type == PIPE_LISTENER_FD)
++		return 0;
+ 	if (fd_table.w32_ios[fd]->type == NONSOCK_FD) {
+ 		errno = ENOTSUP;
+ 		verbose("Unix domain server sockets are not supported");
+@@ -458,6 +555,8 @@
+ {
+ 	debug4("shutdown - fd:%d how:%d", fd, how);
+ 	CHECK_FD(fd);
++	if (fd_table.w32_ios[fd]->type == NONSOCK_FD)
++		return 0;
+ 	CHECK_SOCK_IO(fd_table.w32_ios[fd]);
+ 	return socketio_shutdown(fd_table.w32_ios[fd], how);
+ }
+@@ -656,6 +755,8 @@
+ 	
+ 	if (pio->type == SOCK_FD)
+ 		r = socketio_close(pio);
++	else if (pio->type == PIPE_LISTENER_FD)
++		r = fileio_pipe_listener_close(pio);
+ 	else
+ 		r = fileio_close(pio);		
+ 
+@@ -796,7 +897,8 @@
+ 	for (int i = 0; i < fds; i++) {
+ 		if (readfds && FD_ISSET(i, readfds)) {
+ 			w32_io_on_select(fd_table.w32_ios[i], TRUE);
+-			if ((fd_table.w32_ios[i]->type == SOCK_FD) &&
++			if (((fd_table.w32_ios[i]->type == SOCK_FD) ||
++			    (fd_table.w32_ios[i]->type == PIPE_LISTENER_FD)) &&
+ 			    (fd_table.w32_ios[i]->internal.state == SOCK_LISTENING)) {
+ 				if (num_events == SELECT_EVENT_LIMIT) {
+ 					debug3("select - ERROR: max #events breach");
+--- a/contrib/win32/win32compat/w32fd.h
++++ b/contrib/win32/win32compat/w32fd.h
+@@ -55,7 +55,8 @@
+ 	 *   In the above case, stdout passed to ssh.exe is a handle to 
+ 	 *   a pipe opened in non-overlapped mode 
+ 	 */
+-	NONSOCK_SYNC_FD = 3 
++	NONSOCK_SYNC_FD = 3,
++	PIPE_LISTENER_FD = 4
+ };
+ 
+ enum w32_io_sock_state {
+@@ -125,6 +126,7 @@
+ #define FILETYPE(pio) (GetFileType(WINHANDLE(pio)))
+ extern HANDLE main_thread;
+ 
++int w32_afunix_socket(struct sockaddr_un* addr);
+ BOOL w32_io_is_blocking(struct w32_io*);
+ BOOL w32_io_is_io_available(struct w32_io* pio, BOOL rd);
+ int wait_for_any_event(HANDLE* events, int num_events, DWORD milli_seconds);
+@@ -149,6 +151,8 @@
+ int socketio_shutdown(struct w32_io* pio, int how);
+ int socketio_close(struct w32_io* pio);
+ 
++int w32_namedpipe_listener(const char *name);
++
+ /*POSIX mimic'ing file API and file helper API*/
+ BOOL fileio_is_io_available(struct w32_io* pio, BOOL rd);
+ void fileio_on_select(struct w32_io* pio, BOOL rd);
+@@ -156,6 +160,10 @@
+ int fileio_pipe(struct w32_io* pio[2], int);
+ struct w32_io* fileio_afunix_socket();
+ int fileio_connect(struct w32_io*, char*);
++struct w32_io* fileio_pipe_listener(const char *name);
++struct w32_io* fileio_pipe_accept(struct w32_io *pio);
++BOOL fileio_pipe_listener_available(struct w32_io *pio);
++int fileio_pipe_listener_close(struct w32_io *pio);
+ struct w32_io* fileio_open(const char *pathname, int flags, mode_t mode);
+ int fileio_read(struct w32_io* pio, void *dst, size_t max);
+ int fileio_write_wrapper(struct w32_io* pio, const void* buf, size_t bytes_to_copy);
+@@ -167,4 +175,4 @@
+ FILE* fileio_fdopen(struct w32_io* pio, const char *mode);
+ ssize_t fileio_readlink(const char *path, char *buf, size_t bufsiz);
+ int fileio_symlink(const char *target, const char *linkpath);
+-int fileio_link(const char *oldpath, const char *newpath);
+\ No newline at end of file
++int fileio_link(const char *oldpath, const char *newpath);
+--- a/contrib/win32/win32compat/fileio.c
++++ b/contrib/win32/win32compat/fileio.c
+@@ -119,6 +119,179 @@
+ 	return ret;
+ }
+ 
++struct pipe_listener_context {
++	wchar_t *name;
++	PSECURITY_DESCRIPTOR security_descriptor;
++};
++
++static int
++pipe_listener_start(struct w32_io *pio)
++{
++	struct pipe_listener_context *ctx = pio->internal.context;
++	SECURITY_ATTRIBUTES sa;
++	BOOL connected;
++	DWORD error;
++
++	memset(&sa, 0, sizeof(sa));
++	sa.nLength = sizeof(sa);
++	sa.lpSecurityDescriptor = ctx->security_descriptor;
++	pio->handle = CreateNamedPipeW(ctx->name,
++	    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
++	    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
++	    PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES,
++	    64 * 1024, 64 * 1024, 0, &sa);
++	if (pio->handle == INVALID_HANDLE_VALUE) {
++		errno = errno_from_Win32LastError();
++		return -1;
++	}
++	memset(&pio->read_overlapped, 0, sizeof(pio->read_overlapped));
++	if ((pio->read_overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL)) == NULL) {
++		errno = errno_from_Win32LastError();
++		CloseHandle(pio->handle);
++		pio->handle = INVALID_HANDLE_VALUE;
++		return -1;
++	}
++	connected = ConnectNamedPipe(pio->handle, &pio->read_overlapped);
++	if (connected) {
++		pio->read_details.remaining = 1;
++	} else {
++		error = GetLastError();
++		if (error == ERROR_PIPE_CONNECTED) {
++			pio->read_details.remaining = 1;
++			SetEvent(pio->read_overlapped.hEvent);
++		}
++		else if (error != ERROR_IO_PENDING) {
++			errno = errno_from_Win32Error(error);
++			CloseHandle(pio->read_overlapped.hEvent);
++			CloseHandle(pio->handle);
++			pio->read_overlapped.hEvent = NULL;
++			pio->handle = INVALID_HANDLE_VALUE;
++			return -1;
++		}
++	}
++	pio->read_details.pending = pio->read_details.remaining == 0;
++	return 0;
++}
++
++struct w32_io*
++fileio_pipe_listener(const char *name)
++{
++	struct pipe_listener_context *ctx = NULL;
++	struct w32_io *pio = NULL;
++	PSID sid = NULL;
++	LPWSTR sid_string = NULL;
++	wchar_t sddl[SDDL_LENGTH];
++
++	if ((sid = get_sid(NULL)) == NULL ||
++	    !ConvertSidToStringSidW(sid, &sid_string))
++		goto fail;
++	if (swprintf_s(sddl, SDDL_LENGTH,
++	    L"O:%sD:P(A;;GA;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)",
++	    sid_string, sid_string) < 0)
++		goto fail;
++	if ((ctx = calloc(1, sizeof(*ctx))) == NULL ||
++	    (pio = calloc(1, sizeof(*pio))) == NULL ||
++	    (ctx->name = utf8_to_utf16(name)) == NULL)
++		goto fail;
++	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,
++	    SDDL_REVISION_1, &ctx->security_descriptor, NULL))
++		goto fail;
++	pio->internal.context = ctx;
++	pio->internal.state = SOCK_LISTENING;
++	pio->handle = INVALID_HANDLE_VALUE;
++	if (pipe_listener_start(pio) != 0)
++		goto fail;
++	free(sid);
++	LocalFree(sid_string);
++	return pio;
++fail:
++	if (sid != NULL)
++		free(sid);
++	if (sid_string != NULL)
++		LocalFree(sid_string);
++	if (ctx != NULL) {
++		free(ctx->name);
++		if (ctx->security_descriptor != NULL)
++			LocalFree(ctx->security_descriptor);
++		free(ctx);
++	}
++	free(pio);
++	if (errno == 0)
++		errno = EACCES;
++	return NULL;
++}
++
++BOOL
++fileio_pipe_listener_available(struct w32_io *pio)
++{
++	DWORD transferred;
++
++	if (pio->read_details.remaining != 0)
++		return TRUE;
++	if (GetOverlappedResult(pio->handle, &pio->read_overlapped,
++	    &transferred, FALSE))
++		return TRUE;
++	if (GetLastError() == ERROR_IO_INCOMPLETE)
++		return FALSE;
++	pio->read_details.error = GetLastError();
++	return TRUE;
++}
++
++struct w32_io*
++fileio_pipe_accept(struct w32_io *listener)
++{
++	struct w32_io *accepted;
++
++	while (!fileio_pipe_listener_available(listener)) {
++		if (!w32_io_is_blocking(listener)) {
++			errno = EAGAIN;
++			return NULL;
++		}
++		if (wait_for_any_event(&listener->read_overlapped.hEvent,
++		    1, INFINITE) == -1)
++			return NULL;
++	}
++	if (listener->read_details.error != 0) {
++		errno = errno_from_Win32Error(listener->read_details.error);
++		listener->read_details.error = 0;
++		return NULL;
++	}
++	if ((accepted = calloc(1, sizeof(*accepted))) == NULL) {
++		errno = ENOMEM;
++		return NULL;
++	}
++	accepted->handle = listener->handle;
++	listener->handle = INVALID_HANDLE_VALUE;
++	CloseHandle(listener->read_overlapped.hEvent);
++	listener->read_overlapped.hEvent = NULL;
++	listener->read_details.pending = FALSE;
++	listener->read_details.remaining = 0;
++	if (pipe_listener_start(listener) != 0)
++		debug3("failed to create next forwarded-agent pipe instance: %d", errno);
++	return accepted;
++}
++
++int
++fileio_pipe_listener_close(struct w32_io *pio)
++{
++	struct pipe_listener_context *ctx = pio->internal.context;
++
++	if (pio->handle != INVALID_HANDLE_VALUE) {
++		CancelIo(pio->handle);
++		CloseHandle(pio->handle);
++	}
++	if (pio->read_overlapped.hEvent != NULL)
++		CloseHandle(pio->read_overlapped.hEvent);
++	if (ctx != NULL) {
++		free(ctx->name);
++		if (ctx->security_descriptor != NULL)
++			LocalFree(ctx->security_descriptor);
++		free(ctx);
++	}
++	free(pio);
++	return 0;
++}
++
+ int
+ fileio_connect(struct w32_io* pio, char* name) 
+ {
+--- a/misc.c
++++ b/misc.c
+@@ -2095,8 +2095,7 @@
+ 		return -1;
+ 	}
+ 
+-	sock = socket(PF_UNIX, SOCK_STREAM, 0);
+-	if (sock == -1) {
++	if ((sock = w32_afunix_socket(&sunaddr)) == -1) {
+ 		saved_errno = errno;
+ 		error_f("socket: %.100s", strerror(errno));
+ 		errno = saved_errno;
+--- a/misc-agent.c
++++ b/misc-agent.c
+@@ -209,6 +209,19 @@
+ 	*sockp = -1;
+ 	*pathp = NULL;
+ 
++#ifdef WINDOWS
++	if (strcmp(tag, "sshd") == 0) {
++		xasprintf(&path, "\\\\.\\pipe\\openssh-agent-forward-%08x-%08x",
++		    GetCurrentProcessId(), arc4random());
++		if ((sock = w32_namedpipe_listener(path)) == -1) {
++			free(path);
++			return -1;
++		}
++		*sockp = sock;
++		*pathp = path;
++		return 0;
++	}
++#endif
+ 	if (agent_prepare_sockdir(homedir) != 0)
+ 		return -1; /* error already logged */
+ 	if ((path = agent_socket_template(homedir, tag)) == NULL)
+--- a/mux.c
++++ b/mux.c
+@@ -2398,7 +2398,7 @@
+ 		fatal("ControlPath too long ('%s' >= %u bytes)", path,
+ 		    (unsigned int)sizeof(addr.sun_path));
+ 
+-	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) == -1)
++	if ((sock = w32_afunix_socket(&addr)) == -1)
+ 		fatal_f("socket(): %s", strerror(errno));
+ 
+ 	if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
