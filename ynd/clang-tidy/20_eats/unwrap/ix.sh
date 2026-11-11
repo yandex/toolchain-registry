@@ -10,12 +10,18 @@ class_size_check.cpp
 class_size_check.h
 complex_condition_check.cpp
 complex_condition_check.h
+class_file_name_check.cpp
+class_file_name_check.h
 default_lambda_capture_check.cpp
 default_lambda_capture_check.h
 empty_catch_all_check.cpp
 empty_catch_all_check.h
+file_path_check.cpp
+file_path_check.h
 header_constant_inline_check.cpp
 header_constant_inline_check.h
+include_style_check.cpp
+include_style_check.h
 lambda_size_check.cpp
 lambda_size_check.h
 magic_string_check.cpp
@@ -28,6 +34,8 @@ namespace_alias_in_header_check.cpp
 namespace_alias_in_header_check.h
 namespace_scope_static_check.cpp
 namespace_scope_static_check.h
+namespace_path_check.cpp
+namespace_path_check.h
 parameter_count_check.cpp
 parameter_count_check.h
 pragma_once_check.cpp
