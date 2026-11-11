@@ -28,30 +28,32 @@ namespace clang::tidy::eats {
 
     class EatsModule: public ClangTidyModule {
     public:
+        // A check is named by the key of its rule in the Eats backend codestyle,
+        // EATS_<AREA>_<NAME>: see taxi/eda/clang_tidy/checks/README.md.
         void addCheckFactories(ClangTidyCheckFactories& checkFactories) override {
-            checkFactories.registerCheck<BaseClassSpecialMembersCheck>("eats-base-class-special-members");
-            checkFactories.registerCheck<CatchConstReferenceCheck>("eats-catch-const-reference");
-            checkFactories.registerCheck<ClassSizeCheck>("eats-class-size");
-            checkFactories.registerCheck<ComplexConditionCheck>("eats-complex-condition");
-            checkFactories.registerCheck<DefaultLambdaCaptureCheck>("eats-default-lambda-capture");
-            checkFactories.registerCheck<EmptyCatchAllCheck>("eats-empty-catch-all");
-            checkFactories.registerCheck<HeaderConstantInlineCheck>("eats-header-constant-inline");
-            checkFactories.registerCheck<LambdaSizeCheck>("eats-lambda-size");
-            checkFactories.registerCheck<MagicStringCheck>("eats-magic-string");
-            checkFactories.registerCheck<ManualMutexLockCheck>("eats-manual-mutex-lock");
-            checkFactories.registerCheck<MemoryOrderCheck>("eats-memory-order");
-            checkFactories.registerCheck<NamespaceAliasInHeaderCheck>("eats-namespace-alias-in-header");
-            checkFactories.registerCheck<NamespaceScopeStaticCheck>("eats-namespace-scope-static");
-            checkFactories.registerCheck<ParameterCountCheck>("eats-parameter-count");
-            checkFactories.registerCheck<PragmaOnceCheck>("eats-pragma-once");
-            checkFactories.registerCheck<VirtualClassDestructorCheck>("eats-virtual-class-destructor");
-            checkFactories.registerCheck<SizeTypeCheck>("eats-size-type");
-            checkFactories.registerCheck<StringViewFieldCheck>("eats-string-view-field");
-            checkFactories.registerCheck<TodoFormatCheck>("eats-todo-format");
-            checkFactories.registerCheck<UnscopedEnumCheck>("eats-unscoped-enum");
-            checkFactories.registerCheck<UsingNamespaceOutsideFunctionCheck>("eats-using-namespace-outside-function");
-            checkFactories.registerCheck<VariantVisitCheck>("eats-variant-visit");
-            checkFactories.registerCheck<VolatileCheck>("eats-volatile");
+            checkFactories.registerCheck<BaseClassSpecialMembersCheck>("EATS_CPP_BASE_CLASS_SPECIAL_MEMBERS");
+            checkFactories.registerCheck<CatchConstReferenceCheck>("EATS_CPP_CATCH_CONST_REFERENCE");
+            checkFactories.registerCheck<ClassSizeCheck>("EATS_CPP_CLASS_SIZE");
+            checkFactories.registerCheck<ComplexConditionCheck>("EATS_CPP_COMPLEX_CONDITION");
+            checkFactories.registerCheck<DefaultLambdaCaptureCheck>("EATS_CPP_LAMBDA_CAPTURE");
+            checkFactories.registerCheck<EmptyCatchAllCheck>("EATS_CPP_EMPTY_CATCH_ALL");
+            checkFactories.registerCheck<HeaderConstantInlineCheck>("EATS_CPP_HEADER_CONSTANTS");
+            checkFactories.registerCheck<LambdaSizeCheck>("EATS_CPP_LAMBDA_SIZE");
+            checkFactories.registerCheck<MagicStringCheck>("EATS_CPP_MAGIC_LITERALS");
+            checkFactories.registerCheck<ManualMutexLockCheck>("EATS_CPP_MUTEX_LOCKING");
+            checkFactories.registerCheck<MemoryOrderCheck>("EATS_CPP_MEMORY_ORDER");
+            checkFactories.registerCheck<NamespaceAliasInHeaderCheck>("EATS_CPP_NAMESPACE_ALIAS");
+            checkFactories.registerCheck<NamespaceScopeStaticCheck>("EATS_CPP_ANONYMOUS_NAMESPACE");
+            checkFactories.registerCheck<ParameterCountCheck>("EATS_COMMON_MAX_PARAMS");
+            checkFactories.registerCheck<PragmaOnceCheck>("EATS_CPP_PRAGMA_ONCE");
+            checkFactories.registerCheck<VirtualClassDestructorCheck>("EATS_CPP_VIRTUAL_DESTRUCTOR");
+            checkFactories.registerCheck<SizeTypeCheck>("EATS_CPP_INTEGER_TYPES");
+            checkFactories.registerCheck<StringViewFieldCheck>("EATS_CPP_STRING_VIEW_LIFETIME");
+            checkFactories.registerCheck<TodoFormatCheck>("EATS_CPP_TODO_FORMAT");
+            checkFactories.registerCheck<UnscopedEnumCheck>("EATS_CPP_ENUM_CLASS");
+            checkFactories.registerCheck<UsingNamespaceOutsideFunctionCheck>("EATS_CPP_USING_NAMESPACE");
+            checkFactories.registerCheck<VariantVisitCheck>("EATS_CPP_VARIANT_VISIT");
+            checkFactories.registerCheck<VolatileCheck>("EATS_CPP_VOLATILE");
         }
     };
 
