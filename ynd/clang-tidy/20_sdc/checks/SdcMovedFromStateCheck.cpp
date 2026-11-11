@@ -6,6 +6,7 @@
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Type.h"
 #include "clang/Analysis/Analyses/ExprMutationAnalyzer.h"
@@ -157,7 +158,90 @@ class MovedFromVisitor : public RecursiveASTVisitor<MovedFromVisitor> {
     ClangTidyCheck& Check;
 
     // VD → source location of the move that put it in the moved-from state.
-    using MoveState = llvm::DenseMap<const VarDecl*, SourceLocation>;
+    struct MoveInfo {
+        SourceLocation Location;
+        llvm::DenseMap<const VarDecl*, bool> Booleans;
+        const ForStmt* LastIteration = nullptr;
+    };
+    using MoveState = llvm::DenseMap<const VarDecl*, MoveInfo>;
+    const ForStmt* ActiveLastIteration = nullptr;
+    llvm::SmallVector<const ForStmt*, 4> ForLoops;
+
+    void recordMove(const VarDecl* VD, SourceLocation Location) {
+        MoveInfo Info;
+        Info.Location = Location;
+        Info.LastIteration = ActiveLastIteration;
+        MovedFrom[VD] = std::move(Info);
+    }
+
+    // Facts are attached to moved paths, rather than the merged execution
+    // state. E.g. moving x and then setting processed=true makes !processed
+    // incompatible with that move even when an unmoved path also reaches it.
+    void filterBoolean(const Expr* E, bool Value) {
+        E = E->IgnoreParenImpCasts();
+        if (const auto* U = dyn_cast<UnaryOperator>(E)) {
+            if (U->getOpcode() == UO_LNot) { filterBoolean(U->getSubExpr(), !Value); return; }
+        }
+        const auto* VD = getDirectVarDecl(E);
+        if (!VD || !VD->getType()->isBooleanType()) return;
+        llvm::SmallVector<const VarDecl*, 4> Remove;
+        for (const auto& [Object, Info] : MovedFrom) {
+            auto I = Info.Booleans.find(VD);
+            if (I != Info.Booleans.end() && I->second != Value) Remove.push_back(Object);
+        }
+        for (const VarDecl* Object : Remove) MovedFrom.erase(Object);
+    }
+
+    llvm::DenseSet<const VarDecl*> EscapingFlags;
+
+    void assignBoolean(const VarDecl* VD, const Expr* RHS) {
+        if (!VD || !VD->isLocalVarDecl() || VD->getType().isVolatileQualified() ||
+            EscapingFlags.contains(VD) || !VD->getType()->isBooleanType()) return;
+        auto Value = RHS ? RHS->getIntegerConstantExpr(Ctx) : std::nullopt;
+        for (auto& [Object, Info] : MovedFrom) {
+            if (Value) Info.Booleans[VD] = *Value != 0;
+            else Info.Booleans.erase(VD);
+        }
+    }
+
+    const ForStmt* lastIterationGuard(const Expr* E) {
+        if (ForLoops.empty()) return nullptr;
+        const ForStmt* Loop = ForLoops.back();
+        const auto* Cond = dyn_cast_or_null<BinaryOperator>(Loop->getCond());
+        const auto* Inc = dyn_cast_or_null<UnaryOperator>(Loop->getInc());
+        const auto* Eq = dyn_cast<BinaryOperator>(E->IgnoreParenImpCasts());
+        if (!Cond || Cond->getOpcode() != BO_LT || !Inc || !Inc->isIncrementOp() ||
+            !Eq || Eq->getOpcode() != BO_EQ) return nullptr;
+        const VarDecl* Index = getDirectVarDecl(Cond->getLHS());
+        if (!Index || !Index->getType()->isUnsignedIntegerType() ||
+            getDirectVarDecl(Inc->getSubExpr()) != Index) return nullptr;
+        const auto* Add = dyn_cast<BinaryOperator>(Eq->getLHS()->IgnoreParenImpCasts());
+        if (!Add || Add->getOpcode() != BO_Add || getDirectVarDecl(Add->getLHS()) != Index ||
+            !Ctx.hasSameUnqualifiedType(Add->getType(), Index->getType()) ||
+            !Ctx.hasSameUnqualifiedType(Cond->getRHS()->getType(), Index->getType())) return nullptr;
+        auto One = Add->getRHS()->getIntegerConstantExpr(Ctx);
+        if (!One || *One != 1) return nullptr;
+        llvm::FoldingSetNodeID Bound, GuardBound;
+        Cond->getRHS()->IgnoreParenImpCasts()->Profile(Bound, Ctx, true);
+        Eq->getRHS()->IgnoreParenImpCasts()->Profile(GuardBound, Ctx, true);
+        if (Bound != GuardBound) return nullptr;
+        // Restrict the proof to a stable bound and an unmodified induction
+        // variable. In particular, a mutable container's size is not stable.
+        ExprMutationAnalyzer Mutations(*Loop->getBody(), Ctx);
+        if (Mutations.isMutated(Index)) return nullptr;
+        const Expr* Limit = Cond->getRHS()->IgnoreParenImpCasts();
+        const VarDecl* BoundVar = getDirectVarDecl(Limit);
+        if (const auto* Call = dyn_cast<CXXMemberCallExpr>(Limit)) {
+            const auto* Method = Call->getMethodDecl();
+            if (!Method || !Method->isConst() || Method->getName() != "size" || Call->getNumArgs()) return nullptr;
+            const auto* Record = Method->getParent();
+            if (!Record->getIdentifier() || Record->getName() != "vector" || !Record->isInStdNamespace()) return nullptr;
+            BoundVar = getDirectVarDecl(Call->getImplicitObjectArgument());
+            if (!BoundVar || !BoundVar->getType().getNonReferenceType().isConstQualified()) return nullptr;
+        } else if (!BoundVar && !Limit->getIntegerConstantExpr(Ctx)) return nullptr;
+        if (BoundVar && Mutations.isMutated(BoundVar)) return nullptr;
+        return Loop;
+    }
     MoveState MovedFrom;
     bool Reachable = true;
 
@@ -185,8 +269,18 @@ class MovedFromVisitor : public RecursiveASTVisitor<MovedFromVisitor> {
             return;
         }
         Into.Reachable = true;
-        for (const auto& [VD, Location] : From.Moved)
-            Into.Moved.try_emplace(VD, Location);
+        for (const auto& [VD, Info] : From.Moved) {
+            auto [I, Inserted] = Into.Moved.try_emplace(VD, Info);
+            if (Inserted) continue;
+            auto& Existing = I->second;
+            if (Existing.LastIteration != Info.LastIteration) Existing.LastIteration = nullptr;
+            llvm::SmallVector<const VarDecl*, 4> Forget;
+            for (const auto& [Flag, Value] : Existing.Booleans) {
+                auto F = Info.Booleans.find(Flag);
+                if (F == Info.Booleans.end() || F->second != Value) Forget.push_back(Flag);
+            }
+            for (const VarDecl* Flag : Forget) Existing.Booleans.erase(Flag);
+        }
     }
 
     // Loop re-traversal deliberately visits some AST nodes more than once.
@@ -208,8 +302,34 @@ public:
     }
 
     void run(const FunctionDecl* FD) {
-        if (const Stmt* Body = FD->getBody())
+        struct FlagUses : RecursiveASTVisitor<FlagUses> {
+            ASTContext& Ctx;
+            llvm::DenseSet<const VarDecl*>& Escaping;
+            FlagUses(ASTContext& C, llvm::DenseSet<const VarDecl*>& E) : Ctx(C), Escaping(E) {}
+            bool VisitDeclRefExpr(DeclRefExpr* E) {
+                const auto* VD = dyn_cast<VarDecl>(E->getDecl());
+                if (!VD || !VD->getType()->isBooleanType()) return true;
+                DynTypedNode N = DynTypedNode::create(*E);
+                while (true) {
+                    auto Parents = Ctx.getParents(N);
+                    if (Parents.size() != 1) break;
+                    const auto& P = Parents[0];
+                    if (P.get<ParenExpr>()) { N = P; continue; }
+                    if (const auto* Cast = P.get<ImplicitCastExpr>())
+                        if (Cast->getCastKind() == CK_LValueToRValue) return true;
+                    if (const auto* Assign = P.get<BinaryOperator>())
+                        if (Assign->getOpcode() == BO_Assign && Assign->getLHS() == N.get<Expr>()) return true;
+                    break;
+                }
+                Escaping.insert(VD);
+                return true;
+            }
+        };
+        if (const Stmt* Body = FD->getBody()) {
+            FlagUses Uses(Ctx, EscapingFlags);
+            Uses.TraverseStmt(const_cast<Stmt*>(Body));
             TraverseStmt(const_cast<Stmt*>(Body));
+        }
     }
 
     // ── CallExpr: detect std::move/forward and use-of-moved-from ─────────────
@@ -224,7 +344,7 @@ public:
                 !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0 && CE->getNumArgs() != 0)
                     checkUse(CE->getArg(0));
-                MovedFrom[VD] = CE->getBeginLoc();
+                recordMove(VD, CE->getBeginLoc());
                 // Do NOT recurse into the argument — we don't want to
                 // flag the DeclRefExpr inside the move call as a "use".
                 return true;
@@ -248,7 +368,7 @@ public:
                 !hasSpecifiedMovedFromState(VD)) {
                 if (MovedFrom.count(VD) != 0)
                     checkUse(SC->getSubExpr());
-                MovedFrom[VD] = SC->getBeginLoc();
+                recordMove(VD, SC->getBeginLoc());
                 return true; // Don't recurse into operand
             }
         }
@@ -373,9 +493,14 @@ public:
             return true;
         }
         const auto Entry = flow();
+        const ForStmt* PreviousLast = ActiveLastIteration;
+        if (const ForStmt* Last = lastIterationGuard(S->getCond())) ActiveLastIteration = Last;
+        filterBoolean(S->getCond(), true);
         if (!TraverseStmt(S->getThen())) return false;
+        ActiveLastIteration = PreviousLast;
         auto Exit = flow();
         restore(Entry);
+        filterBoolean(S->getCond(), false);
         if (!TraverseStmt(S->getElse())) return false;
         join(Exit, flow());
         restore(Exit);
@@ -452,7 +577,8 @@ public:
     // increment/condition and break directly to the exit. Range bindings and
     // body-local declarations are recreated each iteration.
     bool traverseLoop(Stmt* Body, Stmt* Condition, Stmt* Increment,
-                      Stmt* ConditionVariable, Stmt* LoopVariable, bool IsDo) {
+                      Stmt* ConditionVariable, Stmt* LoopVariable, bool IsDo,
+                      const ForStmt* CurrentLoop = nullptr) {
         Controls.push_back({true, {}, {}});
         FlowState Exit;
         auto Test = [&]() {
@@ -471,16 +597,38 @@ public:
             join(Next, Controls.back().Continues);
             restore(Next);
             if (!Reachable) break;
+            if (CurrentLoop) {
+                // These moved paths reach the loop exit after incrementing
+                // the last index. Retain them at exit, not on the back edge.
+                FlowState Last = flow();
+                Last.Moved.clear();
+                llvm::SmallVector<const VarDecl*, 4> Remove;
+                for (const auto& [VD, Info] : MovedFrom) {
+                    if (Info.LastIteration == CurrentLoop) {
+                        auto Exiting = Info;
+                        Exiting.LastIteration = nullptr;
+                        Last.Moved[VD] = Exiting;
+                        Remove.push_back(VD);
+                    }
+                }
+                if (!Remove.empty()) join(Exit, Last);
+                for (const VarDecl* VD : Remove) MovedFrom.erase(VD);
+            }
             if (!TraverseStmt(Increment) || !Test()) return false;
         }
         join(Exit, Controls.pop_back_val().Breaks);
+        for (auto& [VD, Info] : Exit.Moved)
+            if (Info.LastIteration == CurrentLoop) Info.LastIteration = nullptr;
         restore(Exit);
         return true;
     }
     bool TraverseForStmt(ForStmt* S) {
         if (!TraverseStmt(S->getInit())) return false;
-        return traverseLoop(S->getBody(), S->getCond(), S->getInc(),
-                            S->getConditionVariableDeclStmt(), nullptr, false);
+        ForLoops.push_back(S);
+        bool Result = traverseLoop(S->getBody(), S->getCond(), S->getInc(),
+                                   S->getConditionVariableDeclStmt(), nullptr, false, S);
+        ForLoops.pop_back();
+        return Result;
     }
     bool TraverseCXXForRangeStmt(CXXForRangeStmt* S) {
         if (!TraverseStmt(S->getInit()) || !TraverseStmt(S->getRangeStmt()) ||
@@ -502,6 +650,7 @@ public:
     // because the previous iteration's distinct object was moved.
     bool VisitVarDecl(VarDecl* VD) {
         MovedFrom.erase(VD);
+        assignBoolean(VD, VD->getInit());
         return true;
     }
 
@@ -512,6 +661,7 @@ public:
                 if (!TraverseStmt(BO->getRHS()) ||
                     !TraverseStmt(BO->getLHS())) return false;
                 MovedFrom.erase(Destination);
+                assignBoolean(Destination, BO->getRHS());
                 return true;
             }
         }
@@ -539,7 +689,7 @@ public:
                 if (const auto* VD = dyn_cast<VarDecl>(DRE->getDecl())) {
                     if (isTrackableMovedObject(VD) &&
                         !hasSpecifiedMovedFromState(VD)) {
-                        MovedFrom[VD] = CE->getBeginLoc();
+                        recordMove(VD, CE->getBeginLoc());
                         return true;
                     }
                 }
@@ -578,7 +728,7 @@ private:
                    "%0 used while in a potentially moved-from state "
                    "(moved from here)")
             << VD;
-        Check.diag(It->second, "move occurred here",
+        Check.diag(It->second.Location, "move occurred here",
                    DiagnosticIDs::Note);
     }
 

@@ -3,6 +3,8 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ParentMapContext.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
@@ -13,22 +15,8 @@ namespace clang {
 
             namespace {
 
-                // Decidable definition of "transient": the lambda's lifetime
-                // is bounded within the enclosing full-expression by purely
-                // syntactic means - no need to look across translation units
-                // or inspect what a callee does.
-                //
-                //   (1) IIFE: the lambda is the object operand of an
-                //       immediately invoked operator() call (i.e. `lam()`
-                //       written at the source level).
-                //   (2) Discarded: the lambda is the operand of a cast to
-                //       void.
-                //
-                // Anything else - including passing as a function-call
-                // argument - cannot be decidably proven transient and is
-                // treated as non-transient.
-                // Strip parens, implicit casts, and temporary-materialization
-                // wrappers to reach the underlying LambdaExpr (if any).
+                // Transparent temporary wrappers do not extend a callback's
+                // lifetime beyond the surrounding full-expression.
                 const Expr* peelToLambda(const Expr* E) {
                     if (!E) return nullptr;
                     E = E->IgnoreParenImpCasts();
@@ -38,6 +26,97 @@ namespace clang {
                     }
                     return E;
                 }
+
+                class CallbackUseAnalysis {
+                    ASTContext& Ctx;
+                    llvm::SmallPtrSet<const ParmVarDecl*, 16> Active;
+
+                    bool knownSynchronous(const FunctionDecl* FD, unsigned Index) {
+                        const DeclContext* DC = FD->getDeclContext();
+                        while (const auto* NS = dyn_cast<NamespaceDecl>(DC)) {
+                            if (!NS->isInline()) break;
+                            DC = NS->getParent();
+                        }
+                        const auto* NS = dyn_cast<NamespaceDecl>(DC);
+                        if (!NS || !NS->isStdNamespace() || !FD->getIdentifier()) return false;
+                        // Standard contracts, independent of implementation
+                        // adapters that may keep a local copy of the predicate.
+                        return (FD->getName() == "any_of" &&
+                                (FD->getNumParams() == 3 || FD->getNumParams() == 4) &&
+                                Index + 1 == FD->getNumParams()) ||
+                               (FD->getName() == "erase_if" && FD->getNumParams() == 2 && Index == 1);
+                    }
+
+                    struct Uses : RecursiveASTVisitor<Uses> {
+                        CallbackUseAnalysis& Analysis;
+                        const ParmVarDecl* Parameter;
+                        bool Safe = true;
+                        Uses(CallbackUseAnalysis& A, const ParmVarDecl* P) : Analysis(A), Parameter(P) {}
+                        bool VisitDeclRefExpr(DeclRefExpr* E) {
+                            if (E->getDecl() == Parameter && !Analysis.consumed(E)) Safe = false;
+                            return Safe;
+                        }
+                    };
+
+                    bool parameter(const FunctionDecl* FD, unsigned Index) {
+                        if (!FD || Index >= FD->getNumParams()) return false;
+                        if (const auto* Method = dyn_cast<CXXMethodDecl>(FD))
+                            if (Method->isVirtual()) return false; // The runtime override may store it.
+                        if (knownSynchronous(FD, Index)) return true;
+                        const FunctionDecl* Definition = nullptr;
+                        if (!FD->hasBody(Definition)) return false;
+                        const ParmVarDecl* P = Definition->getParamDecl(Index);
+                        // Cyclic forwarding needs a separate fixed-point proof.
+                        if (Active.size() >= 64 || !Active.insert(P).second) return false;
+                        Uses Visitor(*this, P);
+                        Visitor.TraverseStmt(const_cast<Stmt*>(Definition->getBody()));
+                        Active.erase(P);
+                        return Visitor.Safe;
+                    }
+
+                public:
+                    explicit CallbackUseAnalysis(ASTContext& C) : Ctx(C) {}
+                    bool consumed(const Expr* E) {
+                        DynTypedNode N = DynTypedNode::create(*E);
+                        while (true) {
+                            auto Parents = Ctx.getParents(N);
+                            if (Parents.size() != 1) return false;
+                            const auto& P = Parents[0];
+                            if (P.get<ParenExpr>() || P.get<ImplicitCastExpr>() ||
+                                P.get<MaterializeTemporaryExpr>() || P.get<CXXBindTemporaryExpr>() ||
+                                P.get<FullExpr>()) { N = P; continue; }
+                            if (const auto* Construct = P.get<CXXConstructExpr>()) {
+                                if (!Construct->getConstructor()->isCopyOrMoveConstructor()) return false;
+                                N = P;
+                                continue;
+                            }
+                            if (const auto* Call = P.get<CallExpr>()) {
+                                const Expr* Child = N.get<Expr>();
+                                if (Call->getCallee() == Child) return true;
+                                if (const auto* Op = dyn_cast<CXXOperatorCallExpr>(Call)) {
+                                    if (Op->getOperator() == OO_Call && Op->getArg(0) == Child) return true;
+                                }
+                                const FunctionDecl* FD = Call->getDirectCallee();
+                                if (!FD) return false;
+                                // Moving/forwarding the parameter is transparent;
+                                // its eventual consumer still must be proven safe.
+                                if (FD->getIdentifier() &&
+                                    (FD->getName() == "move" || FD->getName() == "forward")) {
+                                    const auto* NS = dyn_cast<NamespaceDecl>(FD->getDeclContext());
+                                    if (NS && NS->isStdNamespace() && Call->getNumArgs() == 1) {
+                                        N = P;
+                                        continue;
+                                    }
+                                }
+                                unsigned Offset = isa<CXXOperatorCallExpr>(Call) &&
+                                    isa<CXXMethodDecl>(FD) && !cast<CXXMethodDecl>(FD)->isStatic() ? 1 : 0;
+                                for (unsigned I = Offset; I < Call->getNumArgs(); ++I)
+                                    if (Call->getArg(I) == Child) return parameter(FD, I - Offset);
+                            }
+                            return false;
+                        }
+                    }
+                };
 
                 bool isTransientLambda(const LambdaExpr* LE, ASTContext& Ctx) {
                     DynTypedNode N = DynTypedNode::create(*LE);
@@ -66,7 +145,7 @@ namespace clang {
                                     return true;
                                 }
                             }
-                            return false;
+                            return CallbackUseAnalysis(Ctx).consumed(LE);
                         }
                         // IIFE, dependent form: when the lambda is generic
                         // and/or sits inside a template, the call to it is
@@ -78,7 +157,7 @@ namespace clang {
                             if (peelToLambda(CE->getCallee()) == LE) {
                                 return true;
                             }
-                            return false;
+                            return CallbackUseAnalysis(Ctx).consumed(LE);
                         }
                         // Discard via cast-to-void.
                         if (const auto* CC = P.get<CStyleCastExpr>()) {

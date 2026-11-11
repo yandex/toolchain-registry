@@ -6,10 +6,8 @@ namespace clang {
     namespace tidy {
         namespace sdc {
 
-            // Diagnoses lambdas that capture `this` implicitly (via [=] or
-            // [&]) unless the lambda is "transient" - here defined as a
-            // lambda passed directly as a function-call argument, which is
-            // consumed within that full-expression.
+            // Diagnoses implicit this captures unless the callback is invoked
+            // immediately or its consumers are proven not to retain it.
             class SdcNoImplicitThisCaptureCheck: public ClangTidyCheck {
             public:
                 SdcNoImplicitThisCaptureCheck(StringRef Name, ClangTidyContext* Context);

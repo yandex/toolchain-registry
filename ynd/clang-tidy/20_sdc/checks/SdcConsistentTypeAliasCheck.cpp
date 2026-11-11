@@ -2,7 +2,10 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/DeclTemplate.h"
+#include "clang/AST/Expr.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include <optional>
 
 using namespace clang::ast_matchers;
 
@@ -12,78 +15,117 @@ namespace clang {
 
             namespace {
 
-                // QualType equality preserves typedef sugar - distinct typedef
-                // nodes for the same canonical type compare unequal, which is
-                // exactly what this rule wants. We compare the unqualified
-                // QualType so that top-level cv-qualifiers - which are
-                // discarded from the function signature for parameters - do
-                // not cause false positives.
-                //
-                // Fallback: when the pointer comparison fails, compare the
-                // printed representations. Inline namespaces (e.g. libcxx's
-                // std::__1) can make the *same* typedef resolve to different
-                // Type* nodes in different declaration contexts even within the
-                // same translation unit.  Printing is stable and reflects what
-                // a programmer actually writes, so it correctly treats
-                // `::std::string` vs `::std::string` as identical while still
-                // flagging genuinely different aliases like `int32_t` vs `int`.
-                //
-                // Strip ElaboratedType wrappers before comparison.  When a
-                // class-member typedef/alias is written with its class qualifier
-                // in an out-of-class method definition (e.g. `Projector::CloudPtr`
-                // in the .cpp vs `CloudPtr` in the .h), Clang wraps the same
-                // underlying TypeAliasType in an ElaboratedType to carry the
-                // qualifier.  That makes the two QualTypes unequal even though
-                // they refer to the exact same alias declaration.
-                QualType stripElaborated(QualType Q) {
+                // Strip spelling and substitution wrappers, but stop at real
+                // typedef/alias declarations. Canonicalizing the whole type
+                // would also erase the alias changes this check diagnoses.
+                QualType stripTypeWrappers(QualType Q) {
                     Q = Q.getUnqualifiedType();
-                    while (const auto* ET =
-                               dyn_cast<ElaboratedType>(Q.getTypePtr())) {
-                        Q = ET->getNamedType().getUnqualifiedType();
+                    while (true) {
+                        if (const auto* ET = dyn_cast<ElaboratedType>(Q))
+                            Q = ET->getNamedType().getUnqualifiedType();
+                        else if (const auto* ST = dyn_cast<SubstTemplateTypeParmType>(Q))
+                            Q = ST->getReplacementType().getUnqualifiedType();
+                        else if (const auto* UT = dyn_cast<UsingType>(Q))
+                            Q = UT->getUnderlyingType().getUnqualifiedType();
+                        else break;
                     }
                     return Q;
                 }
 
-                bool sameAlias(QualType A, QualType B, const PrintingPolicy& PP) {
+                bool sameAlias(QualType A, QualType B, ASTContext& Ctx) {
                     if (A.getUnqualifiedType() == B.getUnqualifiedType())
                         return true;
                     // Strip class-qualification wrappers and retry.
-                    QualType SA = stripElaborated(A);
-                    QualType SB = stripElaborated(B);
+                    QualType SA = stripTypeWrappers(A);
+                    QualType SB = stripTypeWrappers(B);
                     if (SA == SB) return true;
+                    if (isa<TypedefType>(SA) || isa<TypedefType>(SB)) {
+                        const auto* TA = dyn_cast<TypedefType>(SA);
+                        const auto* TB = dyn_cast<TypedefType>(SB);
+                        return TA && TB && TA->getDecl()->getCanonicalDecl() == TB->getDecl()->getCanonicalDecl();
+                    }
                     // Qualification can appear beneath references, pointers,
                     // arrays and template arguments. Preserve alias identity at
                     // every level instead of canonicalizing away typedef sugar.
                     if (const auto* PA = dyn_cast<PointerType>(SA)) {
                         const auto* PB = dyn_cast<PointerType>(SB);
-                        return PB && sameAlias(PA->getPointeeType(), PB->getPointeeType(), PP);
+                        return PB && sameAlias(PA->getPointeeType(), PB->getPointeeType(), Ctx);
                     }
                     if (const auto* RA = dyn_cast<ReferenceType>(SA)) {
                         const auto* RB = dyn_cast<ReferenceType>(SB);
                         return RB && SA->getTypeClass() == SB->getTypeClass() &&
-                            sameAlias(RA->getPointeeType(), RB->getPointeeType(), PP);
+                            sameAlias(RA->getPointeeType(), RB->getPointeeType(), Ctx);
                     }
                     if (const auto* AA = dyn_cast<ArrayType>(SA)) {
                         const auto* AB = dyn_cast<ArrayType>(SB);
-                        return AB && sameAlias(AA->getElementType(), AB->getElementType(), PP);
+                        return AB && sameAlias(AA->getElementType(), AB->getElementType(), Ctx);
                     }
-                    if (const auto* TA = dyn_cast<TemplateSpecializationType>(SA)) {
-                        const auto* TB = dyn_cast<TemplateSpecializationType>(SB);
-                        if (TB && TA->getTemplateName().getAsTemplateDecl() ==
-                                      TB->getTemplateName().getAsTemplateDecl() &&
-                            TA->template_arguments().size() == TB->template_arguments().size()) {
-                            for (unsigned I = 0; I < TA->template_arguments().size(); ++I) {
-                                const auto& AArg = TA->template_arguments()[I];
-                                const auto& BArg = TB->template_arguments()[I];
-                                if (AArg.getKind() != BArg.getKind()) return false;
-                                if (AArg.getKind() == TemplateArgument::Type) {
-                                    if (!sameAlias(AArg.getAsType(), BArg.getAsType(), PP)) return false;
+                    auto Template = [](QualType T, ArrayRef<TemplateArgument>& Args) -> const TemplateDecl* {
+                        if (const auto* ST = dyn_cast<TemplateSpecializationType>(T)) {
+                            Args = ST->template_arguments();
+                            return ST->getTemplateName().getAsTemplateDecl();
+                        }
+                        if (const auto* RT = dyn_cast<RecordType>(T)) {
+                            if (const auto* Spec = dyn_cast<ClassTemplateSpecializationDecl>(RT->getDecl())) {
+                                Args = Spec->getTemplateArgs().asArray();
+                                return Spec->getSpecializedTemplate();
+                            }
+                        }
+                        return nullptr;
+                    };
+                    ArrayRef<TemplateArgument> AArgs, BArgs;
+                    const TemplateDecl* AT = Template(SA, AArgs);
+                    const TemplateDecl* BT = Template(SB, BArgs);
+                    if (AT && BT && AT->getCanonicalDecl() == BT->getCanonicalDecl() && AArgs.size() == BArgs.size()) {
+                        for (unsigned I = 0; I < AArgs.size(); ++I) {
+                            const auto& AArg = AArgs[I];
+                            const auto& BArg = BArgs[I];
+                            if (AArg.getKind() == TemplateArgument::Type && BArg.getKind() == TemplateArgument::Type) {
+                                if (!sameAlias(AArg.getAsType(), BArg.getAsType(), Ctx)) return false;
+                            } else {
+                                auto Integral = [&](const TemplateArgument& Arg) -> std::optional<llvm::APSInt> {
+                                    if (Arg.getKind() == TemplateArgument::Integral) return Arg.getAsIntegral();
+                                    if (Arg.getKind() == TemplateArgument::Expression)
+                                        return Arg.getAsExpr()->getIntegerConstantExpr(Ctx);
+                                    return std::nullopt;
+                                };
+                                auto AV = Integral(AArg), BV = Integral(BArg);
+                                if (AV && BV) {
+                                    if (llvm::APSInt::compareValues(*AV, *BV) != 0) return false;
+                                } else if (AArg.getKind() == TemplateArgument::Expression &&
+                                           BArg.getKind() == TemplateArgument::Expression) {
+                                    llvm::FoldingSetNodeID AI, BI;
+                                    AArg.getAsExpr()->Profile(AI, Ctx, true);
+                                    BArg.getAsExpr()->Profile(BI, Ctx, true);
+                                    if (AI != BI) return false;
                                 } else if (!AArg.structurallyEquals(BArg)) return false;
                             }
-                            return true;
                         }
+                        return true;
                     }
-                    return SA.getAsString(PP) == SB.getAsString(PP);
+                    // A substituted specialization may be represented by its
+                    // record type, while a written specialization retains sugar.
+                    // Compare the template and arguments before falling back to
+                    // printing; never erase a typedef to obtain this match.
+                    const auto* RA = dyn_cast<RecordType>(SA);
+                    const auto* RB = dyn_cast<RecordType>(SB);
+                    if (RA && RB) return RA->getDecl()->getCanonicalDecl() == RB->getDecl()->getCanonicalDecl();
+                    if (const auto* TA = dyn_cast<TemplateTypeParmType>(SA)) {
+                        const auto* TB = dyn_cast<TemplateTypeParmType>(SB);
+                        return TB && TA->getDepth() == TB->getDepth() &&
+                            TA->getIndex() == TB->getIndex() && TA->isParameterPack() == TB->isParameterPack();
+                    }
+                    return SA.getAsString(Ctx.getPrintingPolicy()) == SB.getAsString(Ctx.getPrintingPolicy());
+                }
+
+                bool isWrittenDeclaration(const FunctionDecl* FD) {
+                    if (FD->isImplicit()) return false;
+                    const FunctionDecl* Pattern = FD->getInstantiatedFromMemberFunction();
+                    if (!Pattern) Pattern = FD->getTemplateInstantiationPattern();
+                    // Clang can mark the synthesized member explicit-specialization
+                    // and relocate its name to the first specialization while
+                    // retaining the pattern's source range and canonical types.
+                    return !Pattern || FD->getBeginLoc() != Pattern->getBeginLoc();
                 }
 
                 StringRef kindNoun(const NamedDecl* D) {
@@ -119,7 +161,7 @@ namespace clang {
 
             void SdcConsistentTypeAliasCheck::check(
                 const MatchFinder::MatchResult& Result) {
-                const PrintingPolicy& PP = Result.Context->getPrintingPolicy();
+                ASTContext& Ctx = *Result.Context;
 
                 if (const auto* First = Result.Nodes.getNodeAs<VarDecl>("var")) {
                     if (!First->isFirstDecl()) return;
@@ -127,7 +169,7 @@ namespace clang {
                     for (const Decl* R : First->redecls()) {
                         const auto* VD = cast<VarDecl>(R);
                         if (VD == First) continue;
-                        if (!sameAlias(Anchor, VD->getType(), PP)) {
+                        if (!sameAlias(Anchor, VD->getType(), Ctx)) {
                             diag(VD->getTypeSpecStartLoc(),
                                  "%0 %1 is redeclared with type %2; the "
                                  "first declaration used %3")
@@ -143,26 +185,23 @@ namespace clang {
 
                 if (const auto* First = Result.Nodes.getNodeAs<FunctionDecl>("fn")) {
                     if (!First->isFirstDecl()) return;
-                    // Skip compiler-generated implicit declarations (e.g. the
-                    // implicit operator new / operator new[] built-in). Their
-                    // parameters use bare fundamental types (e.g. `unsigned long`)
-                    // rather than typedef aliases (`std::size_t`), so comparing
-                    // them against explicit library redeclarations always reports
-                    // a false mismatch, and their source location is invalid so
-                    // the "previous declaration here" note points nowhere.
-                    if (First->isImplicit()) return;
-                    // Function templates and their instantiations: we anchor
-                    // on the pattern; redecls of the pattern are what we want.
-                    // For implicit instantiations there are no redeclarations
-                    // at the source level, so the loop is a no-op.
+                    const FunctionDecl* Chain = First;
+                    const FunctionDecl* Written = nullptr;
+                    for (const FunctionDecl* R : Chain->redecls()) {
+                        if (!isWrittenDeclaration(R)) continue;
+                        if (!Written || Result.SourceManager->isBeforeInTranslationUnit(
+                                R->getBeginLoc(), Written->getBeginLoc())) Written = R;
+                    }
+                    if (!Written) return;
+                    First = Written;
                     QualType AnchorRet = First->getReturnType();
                     unsigned NumParams = First->getNumParams();
-                    for (const FunctionDecl* R : First->redecls()) {
+                    for (const FunctionDecl* R : Chain->redecls()) {
                         if (R == First) continue;
                         // Skip compiler-generated redeclarations (e.g. implicit
                         // template instantiations) — they have no written source
                         // location and would produce a locationless diagnostic.
-                        if (R->isImplicit()) continue;
+                        if (!isWrittenDeclaration(R)) continue;
                         if (R->getNumParams() != NumParams) {
                             // Mismatch in arity means this is actually a
                             // different overload that happens to share the
@@ -170,7 +209,7 @@ namespace clang {
                             // code, but skip defensively.
                             continue;
                         }
-                        if (!sameAlias(AnchorRet, R->getReturnType(), PP)) {
+                        if (!sameAlias(AnchorRet, R->getReturnType(), Ctx)) {
                             SourceLocation RetLoc =
                                 R->getReturnTypeSourceRange().getBegin();
                             // Guard against invalid source locations (e.g. for
@@ -191,7 +230,7 @@ namespace clang {
                         for (unsigned I = 0; I < NumParams; ++I) {
                             const ParmVarDecl* PA = First->getParamDecl(I);
                             const ParmVarDecl* PR = R->getParamDecl(I);
-                            if (!sameAlias(PA->getType(), PR->getType(), PP)) {
+                            if (!sameAlias(PA->getType(), PR->getType(), Ctx)) {
                                 diag(PR->getTypeSpecStartLoc(),
                                      "parameter %0 of %1 is redeclared with "
                                      "type %2; the first declaration used %3")
