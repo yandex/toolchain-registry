@@ -19,48 +19,6 @@ namespace clang {
         namespace sdc {
             namespace {
 
-                bool isIdentifierChar(char C) {
-                    return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
-                }
-
-                bool sourceHasParenWrappedName(StringRef Source, StringRef Name) {
-                    size_t Pos = Source.find(Name);
-                    while (Pos != StringRef::npos) {
-                        bool LeftBoundary = Pos == 0 || !isIdentifierChar(Source[Pos - 1]);
-                        size_t End = Pos + Name.size();
-                        bool RightBoundary = End >= Source.size() || !isIdentifierChar(Source[End]);
-                        if (LeftBoundary && RightBoundary) {
-                            int Prev = static_cast<int>(Pos) - 1;
-                            while (Prev >= 0 && std::isspace(static_cast<unsigned char>(Source[Prev]))) {
-                                --Prev;
-                            }
-
-                            size_t Next = End;
-                            while (Next < Source.size() && std::isspace(static_cast<unsigned char>(Source[Next]))) {
-                                ++Next;
-                            }
-
-                            if (Prev >= 0 && Next < Source.size() && Source[Prev] == '(' && Source[Next] == ')') {
-                                return true;
-                            }
-                        }
-                        Pos = Source.find(Name, Pos + 1);
-                    }
-                    return false;
-                }
-
-                bool rangeHasParenWrappedName(SourceLocation Begin, SourceLocation End, StringRef Name,
-                                              const SourceManager& SM, const LangOptions& LangOpts) {
-                    if (Begin.isInvalid() || End.isInvalid()) {
-                        return false;
-                    }
-
-                    CharSourceRange Range = CharSourceRange::getTokenRange(
-                        SM.getSpellingLoc(Begin), SM.getSpellingLoc(End));
-                    StringRef Source = Lexer::getSourceText(Range, SM, LangOpts);
-                    return !Source.empty() && sourceHasParenWrappedName(Source, Name);
-                }
-
                 class RedundantParenthesesPPCallbacks: public PPCallbacks {
                 public:
                     explicit RedundantParenthesesPPCallbacks(SdcBlockScopeRedundantParenthesesCheck* Check)
@@ -85,7 +43,7 @@ namespace clang {
                     SdcBlockScopeRedundantParenthesesCheck* Check_;
                 };
 
-                bool hasRedundantParensAroundName(const VarDecl* Variable, StringRef MacroName,
+                bool hasRedundantParensAroundName(const VarDecl* Variable,
                                                   const SourceManager& SM, const LangOptions& LangOpts,
                                                   const SdcBlockScopeRedundantParenthesesCheck& Check) {
                     SourceLocation Loc = Variable->getLocation();
@@ -96,35 +54,32 @@ namespace clang {
                     StringRef Name = Variable->getName();
                     // A name-less VarDecl (e.g. the synthetic outer decl of a
                     // structured binding `auto [a, b] = ...`) has an empty
-                    // name; the substring search would find spurious matches
+                    // name; there is no declarator identifier to inspect
                     // and the `[a, b]` syntax is required, not optional.
                     if (Name.empty()) {
                         return false;
                     }
 
-                    // Track the exact replacement-list occurrence that produced
-                    // the declarator name, not other parameters of the same macro.
-                    bool LambdaArgument = false;
-                    if (const auto* Method = dyn_cast<CXXMethodDecl>(Variable->getDeclContext())) {
-                        if (Method->getParent()->isLambda())
-                            LambdaArgument = SM.isMacroArgExpansion(Method->getParent()->getBeginLoc());
-                    }
+                    // Parenthesizing a whole statement/lambda argument does
+                    // not parenthesize the names declared inside it. Only a
+                    // complete single-token argument can supply the name.
                     SourceLocation Expansion = Loc;
-                    while (!LambdaArgument && Expansion.isMacroID()) {
+                    while (Expansion.isMacroID()) {
                         if (SM.isMacroArgExpansion(Expansion)) {
+                            unsigned Length = Lexer::MeasureTokenLength(
+                                SM.getSpellingLoc(Expansion), SM, LangOpts);
+                            bool Whole = SM.isAtStartOfImmediateMacroExpansion(Expansion) &&
+                                SM.isAtEndOfImmediateMacroExpansion(Expansion.getLocWithOffset(Length));
                             SourceLocation Parameter = SM.getSpellingLoc(
                                 SM.getImmediateExpansionRange(Expansion).getBegin());
-                            if (Check.isParenParameter(Parameter)) return true;
+                            // The nearest complete argument supplies the
+                            // declarator name. Outer forwarding-call parentheses
+                            // have already been consumed by preprocessing.
+                            if (Whole) return Check.isParenParameter(Parameter);
                         }
                         Expansion = SM.getImmediateSpellingLoc(Expansion);
                     }
-
-                    // For macro-body VarDecls, check the expansion call-site.
-                    if (Loc.isMacroID()) {
-                        return rangeHasParenWrappedName(SM.getExpansionLoc(Loc), SM.getExpansionLoc(Loc), Name, SM, LangOpts);
-                    }
-
-                    // For non-macro declarations: directly inspect the source
+                    // For literal names (including inside macro blocks), inspect the source
                     // buffer characters immediately adjacent to the name token.
                     //
                     // All previous range-based approaches accumulated fragile
@@ -189,13 +144,7 @@ namespace clang {
                     return;
                 }
 
-                StringRef MacroName;
-                if (Variable->getLocation().isMacroID()) {
-                    MacroName = Lexer::getImmediateMacroName(Variable->getLocation(), *Result.SourceManager,
-                                                             Result.Context->getLangOpts());
-                }
-
-                if (!hasRedundantParensAroundName(Variable, MacroName, *Result.SourceManager,
+                if (!hasRedundantParensAroundName(Variable, *Result.SourceManager,
                                                   Result.Context->getLangOpts(), *this)) {
                     return;
                 }
