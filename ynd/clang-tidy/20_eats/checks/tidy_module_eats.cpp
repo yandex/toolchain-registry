@@ -21,10 +21,12 @@
 #include "virtual_class_destructor_check.h"
 #include "size_type_check.h"
 #include "string_view_field_check.h"
+#include "strong_types_check.h"
 #include "todo_format_check.h"
 #include "unscoped_enum_check.h"
 #include "using_namespace_outside_function_check.h"
 #include "variant_visit_check.h"
+#include "variable_postfix_check.h"
 #include "volatile_check.h"
 
 namespace clang::tidy::eats {
@@ -55,10 +57,12 @@ namespace clang::tidy::eats {
             checkFactories.registerCheck<VirtualClassDestructorCheck>("EATS_CPP_VIRTUAL_DESTRUCTOR");
             checkFactories.registerCheck<SizeTypeCheck>("EATS_CPP_INTEGER_TYPES");
             checkFactories.registerCheck<StringViewFieldCheck>("EATS_CPP_STRING_VIEW_LIFETIME");
+            checkFactories.registerCheck<StrongTypesCheck>("EATS_CPP_STRONG_TYPES");
             checkFactories.registerCheck<TodoFormatCheck>("EATS_CPP_TODO_FORMAT");
             checkFactories.registerCheck<UnscopedEnumCheck>("EATS_CPP_ENUM_CLASS");
             checkFactories.registerCheck<UsingNamespaceOutsideFunctionCheck>("EATS_CPP_USING_NAMESPACE");
             checkFactories.registerCheck<VariantVisitCheck>("EATS_CPP_VARIANT_VISIT");
+            checkFactories.registerCheck<VariablePostfixCheck>("EATS_CPP_VARIABLE_SUFFIXES");
             checkFactories.registerCheck<VolatileCheck>("EATS_CPP_VOLATILE");
         }
     };

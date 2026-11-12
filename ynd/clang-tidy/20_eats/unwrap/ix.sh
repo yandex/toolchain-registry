@@ -14,6 +14,8 @@ class_file_name_check.cpp
 class_file_name_check.h
 default_lambda_capture_check.cpp
 default_lambda_capture_check.h
+declaration_utils.cpp
+declaration_utils.h
 empty_catch_all_check.cpp
 empty_catch_all_check.h
 file_path_check.cpp
@@ -44,6 +46,8 @@ size_type_check.cpp
 size_type_check.h
 string_view_field_check.cpp
 string_view_field_check.h
+strong_types_check.cpp
+strong_types_check.h
 tidy_module_eats.cpp
 virtual_class_destructor_check.cpp
 virtual_class_destructor_check.h
@@ -55,6 +59,8 @@ using_namespace_outside_function_check.cpp
 using_namespace_outside_function_check.h
 variant_visit_check.cpp
 variant_visit_check.h
+variable_postfix_check.cpp
+variable_postfix_check.h
 volatile_check.cpp
 volatile_check.h
 {% endblock %}
