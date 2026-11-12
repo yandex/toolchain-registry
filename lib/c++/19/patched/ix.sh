@@ -2,13 +2,13 @@
 
 {% block fetch %}
 {{super()}}
-https://github.com/llvm/llvm-project/commit/e9f851de24baefd5710c3cac6ef3cafaea0eeb9d.diff
-sha:4ac449da0572330877a6f54e402bd7dce73fee0e8bc0d27adebb9a82e01aad8e
+https://github.com/llvm/llvm-project/commit/e9f851de24baefd5710c3cac6ef3cafaea0eeb9d.diff?full_index=1
+sha:ff7d1ab8d00b782061b8d772b07ec2144444e6fe7006868acc5cba9bf4e77b7c
 {% endblock %}
 
 {% block patch %}
 {{super()}}
-patch -p1 < ${src}/e9f851de24baefd5710c3cac6ef3cafaea0eeb9d.diff
+patch -p1 < "${src}/e9f851de24baefd5710c3cac6ef3cafaea0eeb9d.diff?full_index=1"
 {% endblock %}
 
 {% block install %}
