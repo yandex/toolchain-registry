@@ -7,6 +7,7 @@
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 // Same-array proofs deliberately require a bounded position, not just a shared
 // allocation name: p + 100 must not become safe merely because p is in an array.
@@ -36,6 +37,45 @@ struct Position {
 class Proof {
  public:
   explicit Proof(clang::ASTContext &context) : C(context) {}
+  // Reuse the same write/escape validation and dominating-guard bounds as
+  // arithmetic safety proofs. Parameter reads, stable local copies and literal
+  // endpoints enter this interface; arbitrary constexpr calls are not ranges.
+  bool invariantComparison(const clang::BinaryOperator *e) {
+    if (!e || !e->isComparisonOp()) return false;
+    if (!positiveRangeOperand(e->getLHS()) || !positiveRangeOperand(e->getRHS())) return false;
+    llvm::SaveAndRestore<bool> positive(PositiveRangesOnly, true);
+    llvm::APInt alo(128, 0), ahi(128, 0), blo(128, 0), bhi(128, 0);
+    if (!stableRange(e->getLHS(), e, alo, ahi) || !stableRange(e->getRHS(), e, blo, bhi)) return false;
+    switch (e->getOpcode()) {
+      case clang::BO_LT: return ahi.slt(blo) || alo.sge(bhi);
+      case clang::BO_LE: return ahi.sle(blo) || alo.sgt(bhi);
+      case clang::BO_GT: return alo.sgt(bhi) || ahi.sle(blo);
+      case clang::BO_GE: return alo.sge(bhi) || ahi.slt(blo);
+      case clang::BO_EQ: case clang::BO_NE:
+        return ahi.slt(blo) || alo.sgt(bhi) || (alo == ahi && blo == bhi && alo == blo);
+      default: return false;
+    }
+  }
+  // A violation requires the entire offset interval outside [0, extent].
+  // One-past is a valid pointer value; uncertain/mixed intervals are not proof.
+  const clang::VarDecl *outsideArrayArithmetic(const clang::BinaryOperator *e) {
+    if (!e || !e->getType()->isPointerType() ||
+        (e->getOpcode()!=clang::BO_Add && e->getOpcode()!=clang::BO_Sub)) return nullptr;
+    const clang::Expr *base=e->getLHS(), *offset=e->getRHS();
+    if(e->getOpcode()==clang::BO_Add && base->getType()->isIntegerType()) std::swap(base,offset);
+    const auto *owner=variable(base);
+    // Match the existing literal witness: automatic complete arrays have
+    // unambiguous object identity without linker alias/interposition evidence.
+    if (!owner || !owner->hasLocalStorage()) return nullptr;
+    const auto *array=C.getAsConstantArrayType(owner->getType());
+    if(!array || array->getSize().getActiveBits()>127 || !positiveRangeOperand(offset)) return nullptr;
+    llvm::SaveAndRestore<bool> positive(PositiveRangesOnly,true);
+    llvm::APInt lo(128,0), hi(128,0);
+    if(!stableRange(offset,e,lo,hi)) return nullptr;
+    if(e->getOpcode()==clang::BO_Sub) {const auto oldLo=lo;lo=-hi;hi=-oldLo;}
+    const auto extent=array->getSize().zextOrTrunc(128);
+    return hi.isNegative() || lo.sgt(extent) ? owner : nullptr;
+  }
   bool boundedPosition(const clang::Expr *e) {
     // These two standard const queries occur in one expression with no
     // intervening user code. A referenced view may change elsewhere without
@@ -63,9 +103,19 @@ class Proof {
     return unsignedMaximum(e->getIdx(), maximum, 0) && maximum < array->getSize().getLimitedValue();
   }
   bool safeIntegerIncrement(const clang::UnaryOperator *e) {
-    if (!e->isIncrementOp() || !e->getType()->isSignedIntegerType()) return false;
+    if (!e->isIncrementDecrementOp() || !e->getType()->isSignedIntegerType()) return false;
     const auto *v = variable(e->getSubExpr());
-    if (!v || !v->hasLocalStorage() || !v->hasInit()) return false;
+    if (!v || !v->hasLocalStorage() || v->getType()->isReferenceType() ||
+        v->getType().isVolatileQualified()) return false;
+    const auto *owner = function(v);
+    if (!owner || !owner->hasBody()) return false;
+    // A local address/reference escape permits a callee to change the counter
+    // between guard and increment. Scan the entire function, including bindings
+    // made before the loop; checking only writes inside the loop is insufficient.
+    Writes escapes(v);
+    escapes.EscapesOnly = true;
+    escapes.TraverseStmt(const_cast<clang::Stmt *>(owner->getBody()));
+    if (escapes.Unknown) return false;
     auto node = clang::DynTypedNode::create(*e);
     for (unsigned depth = 0; depth < 12; ++depth) {
       auto parents = C.getParents(node); if (parents.size() != 1) return false;
@@ -73,21 +123,82 @@ class Proof {
       const auto *loop = node.get<clang::ForStmt>();
       if (!loop) continue;
       if (!loop->getCond() || !loop->getInc() || loop->getInc()->IgnoreParenImpCasts() != e) return false;
-      const auto *decls = clang::dyn_cast_or_null<clang::DeclStmt>(loop->getInit());
-      if (!decls || !decls->isSingleDecl() || decls->getSingleDecl() != v) return false;
-      const auto *condition = clang::dyn_cast_or_null<clang::BinaryOperator>(loop->getCond()->IgnoreParenImpCasts());
-      if (!condition || variable(condition->getLHS()) != v || condition->getOpcode() != clang::BO_LT) return false;
-      auto start = v->getInit()->getIntegerConstantExpr(C), end = condition->getRHS()->getIntegerConstantExpr(C);
+      const auto *condition = clang::dyn_cast<clang::BinaryOperator>(loop->getCond()->IgnoreParenImpCasts());
+      if (!condition || variable(condition->getLHS()) != v ||
+          !condition->getLHS()->getType()->isSignedIntegerType() ||
+          !condition->getRHS()->getType()->isSignedIntegerType()) return false;
+      const bool increment = e->isIncrementOp();
+      const auto opcode = condition->getOpcode();
+      const bool strict = opcode == (increment ? clang::BO_LT : clang::BO_GT);
+      if (!strict && opcode != (increment ? clang::BO_LE : clang::BO_GE)) return false;
       const unsigned bits = C.getIntWidth(v->getType());
-      if (!start || !end || start->isNegative() || end->isNegative() || (bits < 2 || bits > 64) ||
-          end->getLimitedValue() > (UINT64_MAX >> (65 - bits)) || start->getLimitedValue() > end->getLimitedValue()) return false;
+      const auto *bound = condition->getRHS();
+      bool bounded = strict && C.getIntWidth(bound->getType()) <= bits;
+      if (auto constant = bound->getIntegerConstantExpr(C)) {
+        // Signed comparisons preserve the counter value, even after promotion.
+        const auto wide = constant->sextOrTrunc(std::max(bits, constant->getBitWidth()) + 1);
+        const auto limit = (increment ? llvm::APInt::getSignedMaxValue(bits) :
+                                       llvm::APInt::getSignedMinValue(bits)).sext(wide.getBitWidth());
+        bounded = increment ? (strict ? wide.sle(limit) : wide.slt(limit)) :
+                              (strict ? wide.sge(limit) : wide.sgt(limit));
+      } else if (!strict) {
+        // For a defined signed n-k (k>0), the result is below the signed maximum.
+        // The subtraction itself retains its independent overflow obligation.
+        const auto *offset = clang::dyn_cast<clang::BinaryOperator>(bound->IgnoreParenImpCasts());
+        if (offset && offset->getOpcode() == (increment ? clang::BO_Sub : clang::BO_Add) &&
+            offset->getType()->isSignedIntegerType() && C.getIntWidth(offset->getType()) <= bits) {
+          auto amount = offset->getRHS()->getIntegerConstantExpr(C);
+          bounded = amount && amount->isStrictlyPositive();
+        }
+      }
+      if (!bounded) return false;
       Writes writes(v);
-      writes.ResetContext = &C;
-      writes.ResetLimit = end->getLimitedValue();
+      writes.TraverseStmt(const_cast<clang::Expr *>(loop->getCond()));
       writes.TraverseStmt(const_cast<clang::Stmt *>(loop->getBody()));
       return !writes.Unknown && writes.Increments.empty();
     }
     return false;
+  }
+  // Signed arithmetic on stable scalar inputs, narrowed only by structural
+  // dominating guards. Unknown calls cannot mutate an unescaped automatic
+  // scalar; nonlocal, volatile, aliased and assigned inputs remain unknown.
+  bool safeSignedArithmetic(const clang::BinaryOperator *e) {
+    llvm::APInt lo(128, 0), hi(128, 0);
+    if (!signedArithmeticRange(e, lo, hi)) return false;
+    const unsigned bits = C.getIntWidth(e->getType());
+    return lo.sge(llvm::APInt::getSignedMinValue(bits).sext(128)) &&
+        hi.sle(llvm::APInt::getSignedMaxValue(bits).sext(128));
+  }
+  // A failed safety proof is not an overflow proof. Every possible result must
+  // be outside the representable interval. Keep runtime-stable inputs only.
+  bool overflowingSignedArithmetic(const clang::BinaryOperator *e) {
+    if (!e || !positiveRangeOperand(e->getLHS()) || !positiveRangeOperand(e->getRHS())) return false;
+    llvm::SaveAndRestore<bool> positive(PositiveRangesOnly, true);
+    llvm::APInt lo(128, 0), hi(128, 0);
+    if (!signedArithmeticRange(e, lo, hi)) return false;
+    const unsigned bits = C.getIntWidth(e->getType());
+    return hi.slt(llvm::APInt::getSignedMinValue(bits).sext(128)) ||
+        lo.sgt(llvm::APInt::getSignedMaxValue(bits).sext(128));
+  }
+  // Reuse stable operand ranges and their write/escape checks. These are
+  // positive invalid-operation predicates, never negated safety predicates.
+  bool zeroDivisor(const clang::BinaryOperator *e) {
+    if (!e || (e->getOpcode()!=clang::BO_Div && e->getOpcode()!=clang::BO_Rem) ||
+        !positiveRangeOperand(e->getLHS()) || !positiveRangeOperand(e->getRHS())) return false;
+    llvm::SaveAndRestore<bool> positive(PositiveRangesOnly,true);
+    llvm::APInt alo(128,0),ahi(128,0),blo(128,0),bhi(128,0);
+    return stableRange(e->getLHS(),e,alo,ahi) && stableRange(e->getRHS(),e,blo,bhi) &&
+        blo.isZero() && bhi.isZero();
+  }
+  bool invalidShiftCount(const clang::BinaryOperator *e) {
+    if (!e || (e->getOpcode()!=clang::BO_Shl && e->getOpcode()!=clang::BO_Shr) ||
+        !positiveRangeOperand(e->getLHS()) || !positiveRangeOperand(e->getRHS())) return false;
+    llvm::SaveAndRestore<bool> positive(PositiveRangesOnly,true);
+    llvm::APInt alo(128,0),ahi(128,0),blo(128,0),bhi(128,0);
+    if (!stableRange(e->getLHS(),e,alo,ahi) || !stableRange(e->getRHS(),e,blo,bhi)) return false;
+    // Clang's operand type already includes integral promotions. A narrow
+    // source integer is shifted at the promoted width, not its storage width.
+    return bhi.isNegative() || blo.sge(llvm::APInt(128,C.getIntWidth(e->getLHS()->getType())));
   }
   bool safeRangeIncrement(const clang::UnaryOperator *e) {
     if (!e->isIncrementOp() || !e->getSubExpr()->getType()->isPointerType()) return false;
@@ -128,6 +239,44 @@ class Proof {
   }
  private:
   clang::ASTContext &C;
+  static bool positiveRangeOperand(const clang::Expr *value, unsigned depth = 0) {
+    if (!value || depth > 16) return false;
+    value = value->IgnoreParenImpCasts();
+    if (clang::isa<clang::IntegerLiteral>(value)) return true;
+    if (const auto *u = clang::dyn_cast<clang::UnaryOperator>(value))
+      return (u->getOpcode() == clang::UO_Minus || u->getOpcode() == clang::UO_Plus) &&
+             clang::isa<clang::IntegerLiteral>(u->getSubExpr()->IgnoreParenImpCasts());
+    const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(value);
+    const auto *variable = ref ? clang::dyn_cast<clang::VarDecl>(ref->getDecl()) : nullptr;
+    if (!variable || !variable->hasLocalStorage() || variable->getType().isVolatileQualified()) return false;
+    return clang::isa<clang::ParmVarDecl>(variable) ||
+        (variable->hasInit() && positiveRangeOperand(variable->getInit(), depth + 1));
+  }
+  bool signedArithmeticRange(const clang::BinaryOperator *e, llvm::APInt &lo, llvm::APInt &hi) {
+    if (!e || !e->getType()->isSignedIntegerType() || C.getIntWidth(e->getType()) > 64 ||
+        (e->getOpcode() != clang::BO_Add && e->getOpcode() != clang::BO_Sub &&
+         e->getOpcode() != clang::BO_Mul)) return false;
+    llvm::APInt alo(128, 0), ahi(128, 0), blo(128, 0), bhi(128, 0);
+    if (!stableRange(e->getLHS(), e, alo, ahi) || !stableRange(e->getRHS(), e, blo, bhi)) return false;
+    if (e->getOpcode() == clang::BO_Add) { lo = alo + blo; hi = ahi + bhi; }
+    else if (e->getOpcode() == clang::BO_Sub) { lo = alo - bhi; hi = ahi - blo; }
+    else {
+      lo = hi = alo * blo;
+      for (const auto &product : {alo * bhi, ahi * blo, ahi * bhi}) {
+        if (product.slt(lo)) lo = product;
+        if (product.sgt(hi)) hi = product;
+      }
+    }
+    return true;
+  }
+  bool PositiveRangesOnly = false;
+  static bool literalBound(const clang::Expr *expression) {
+    expression = expression->IgnoreParenImpCasts();
+    if (clang::isa<clang::IntegerLiteral>(expression)) return true;
+    const auto *unary = clang::dyn_cast<clang::UnaryOperator>(expression);
+    return unary && (unary->getOpcode() == clang::UO_Minus || unary->getOpcode() == clang::UO_Plus) &&
+           clang::isa<clang::IntegerLiteral>(unary->getSubExpr()->IgnoreParenImpCasts());
+  }
   llvm::DenseSet<const clang::VarDecl *> Active;
   bool unsignedMaximum(const clang::Expr *e, uint64_t &maximum, unsigned depth) {
     if (!e || depth > 12 || e->isValueDependent()) return false;
@@ -245,11 +394,177 @@ class Proof {
       if (const auto *f = clang::dyn_cast<clang::FunctionDecl>(dc)) return f;
     return nullptr;
   }
+  bool preservingSignedRead(const clang::Expr *value, const clang::VarDecl *v) {
+    value = value->IgnoreParens();
+    for (unsigned depth = 0; depth != 16; ++depth) {
+      const auto *cast = clang::dyn_cast<clang::ImplicitCastExpr>(value);
+      if (!cast) return variable(value) == v;
+      if (cast->getCastKind() != clang::CK_LValueToRValue && cast->getCastKind() != clang::CK_IntegralCast &&
+          cast->getCastKind() != clang::CK_NoOp) return false;
+      if (!cast->getType()->isSignedIntegerType() || !cast->getSubExpr()->getType()->isSignedIntegerType() ||
+          C.getIntWidth(cast->getType()) < C.getIntWidth(cast->getSubExpr()->getType())) return false;
+      value = cast->getSubExpr()->IgnoreParens();
+    }
+    return false;
+  }
+  void narrowStable(const clang::Expr *condition, bool truth, const clang::VarDecl *v,
+                    llvm::APInt &lo, llvm::APInt &hi, unsigned depth = 0) {
+    if (!condition || depth > 16) return;
+    condition = condition->IgnoreParenImpCasts();
+    if (const auto *negation = clang::dyn_cast<clang::UnaryOperator>(condition)) {
+      if (negation->getOpcode() == clang::UO_LNot)
+        narrowStable(negation->getSubExpr(), !truth, v, lo, hi, depth + 1);
+      return;
+    }
+    const auto *test = clang::dyn_cast<clang::BinaryOperator>(condition);
+    if (!test) return;
+    if ((test->getOpcode() == clang::BO_LAnd && truth) ||
+        (test->getOpcode() == clang::BO_LOr && !truth)) {
+      narrowStable(test->getLHS(), truth, v, lo, hi, depth + 1);
+      narrowStable(test->getRHS(), truth, v, lo, hi, depth + 1);
+      return;
+    }
+    if (!test->isComparisonOp() || !test->getLHS()->getType()->isSignedIntegerType() ||
+        !test->getRHS()->getType()->isSignedIntegerType()) return;
+    auto opcode = test->getOpcode();
+    const clang::Expr *value = test->getLHS(), *bound = test->getRHS();
+    if (variable(value) != v) {
+      std::swap(value, bound);
+      opcode = clang::BinaryOperator::reverseComparisonOp(opcode);
+    }
+    // Ignore only value-preserving signed promotions, never narrowing casts.
+    if (!preservingSignedRead(value, v) || !C.hasSameUnqualifiedType(value->IgnoreParenImpCasts()->getType(), v->getType()) ||
+        C.getIntWidth(value->getType()) < C.getIntWidth(v->getType())) return;
+    if (PositiveRangesOnly && !literalBound(bound)) return;
+    const auto constant = bound->getIntegerConstantExpr(C);
+    if (!constant || constant->getBitWidth() > 64) return;
+    const auto limit = constant->isUnsigned() ? constant->zextOrTrunc(128) : constant->sextOrTrunc(128);
+    if (!truth) opcode = clang::BinaryOperator::negateComparisonOp(opcode);
+    auto lower = limit, upper = limit;
+    switch (opcode) {
+      case clang::BO_GT: lower += 1; [[fallthrough]];
+      case clang::BO_GE: if (lower.sgt(lo)) lo = lower; break;
+      case clang::BO_LT: upper -= 1; [[fallthrough]];
+      case clang::BO_LE: if (upper.slt(hi)) hi = upper; break;
+      case clang::BO_EQ: if (limit.sgt(lo)) lo = limit; if (limit.slt(hi)) hi = limit; break;
+      default: break;
+    }
+  }
+  bool loopCounterRange(const clang::VarDecl *v, const clang::Expr *use,
+                        llvm::APInt &lo, llvm::APInt &hi) {
+    const clang::Stmt *node = use;
+    for (unsigned depth = 0; node && depth != 64; ++depth) {
+      const auto parents = C.getParents(*node);
+      if (parents.size() != 1) return false;
+      const auto *parent = parents[0].get<clang::Stmt>();
+      if (!parent) return false;
+      const auto *loop = clang::dyn_cast<clang::ForStmt>(parent);
+      if (loop && node == loop->getBody() && loop->getCond() && loop->getInc()) {
+        const auto *step = clang::dyn_cast<clang::UnaryOperator>(loop->getInc()->IgnoreParenImpCasts());
+        const auto *test = clang::dyn_cast<clang::BinaryOperator>(loop->getCond()->IgnoreParenImpCasts());
+        if (!step || !step->isIncrementOp() || variable(step->getSubExpr()) != v ||
+            !test || variable(test->getLHS()) != v || !preservingSignedRead(test->getLHS(), v) ||
+            !test->getRHS()->getType()->isSignedIntegerType() ||
+            C.getIntWidth(test->getRHS()->getType()) > C.getIntWidth(v->getType()) ||
+            (test->getOpcode() != clang::BO_LT && test->getOpcode() != clang::BO_LE)) return false;
+        const clang::Expr *initial = nullptr;
+        if (const auto *assignment = clang::dyn_cast_or_null<clang::BinaryOperator>(loop->getInit())) {
+          if (assignment->getOpcode() == clang::BO_Assign && variable(assignment->getLHS()) == v)
+            initial = assignment->getRHS();
+        } else if (const auto *declaration = clang::dyn_cast_or_null<clang::DeclStmt>(loop->getInit())) {
+          if (declaration->isSingleDecl() && declaration->getSingleDecl() == v) initial = v->getInit();
+        }
+        const auto start = initial ? initial->getIntegerConstantExpr(C) : std::nullopt;
+        if (!start || start->getBitWidth() > 64) return false;
+        Writes body(v); body.TraverseStmt(const_cast<clang::Stmt *>(loop->getBody()));
+        body.TraverseStmt(const_cast<clang::Expr *>(loop->getCond()));
+        if (body.Unknown || !body.Increments.empty()) return false;
+        const unsigned bits = C.getIntWidth(v->getType());
+        lo = start->isUnsigned() ? start->zextOrTrunc(128) : start->sextOrTrunc(128);
+        const auto minimum = llvm::APInt::getSignedMinValue(bits).sext(128);
+        const auto maximum = llvm::APInt::getSignedMaxValue(bits).sext(128);
+        if (lo.slt(minimum) || lo.sgt(maximum)) return false;
+        hi = maximum;
+        if (test->getOpcode() == clang::BO_LT) hi -= 1;
+        else {
+          // As for safeIntegerIncrement, evaluating n-k has its own overflow
+          // obligation. A defined signed result with k>0 is below the maximum.
+          const auto *offset = clang::dyn_cast<clang::BinaryOperator>(test->getRHS()->IgnoreParenImpCasts());
+          const auto amount = offset && offset->getOpcode() == clang::BO_Sub
+              ? offset->getRHS()->getIntegerConstantExpr(C) : std::nullopt;
+          if (amount && amount->isStrictlyPositive()) hi -= 1;
+          else if (auto bound = test->getRHS()->getIntegerConstantExpr(C)) {
+            hi = bound->sextOrTrunc(128);
+            if (hi.sge(maximum)) return false;
+          } else return false;
+        }
+        return lo.sle(hi);
+      }
+      node = parent;
+    }
+    return false;
+  }
+  bool stableRange(const clang::Expr *value, const clang::Expr *use,
+                   llvm::APInt &lo, llvm::APInt &hi, unsigned depth = 0) {
+    if (depth > 16) return false;
+    if (!value->getType()->isSignedIntegerType() || C.getIntWidth(value->getType()) > 64) return false;
+    if (auto constant = value->getIntegerConstantExpr(C)) {
+      lo = hi = constant->sextOrTrunc(128); return true;
+    }
+    const auto *v = variable(value);
+    if (!v || !preservingSignedRead(value, v) || !v->hasLocalStorage() || !v->getType()->isSignedIntegerType() ||
+        v->getType().isVolatileQualified() || C.getIntWidth(v->getType()) > C.getIntWidth(value->getType())) return false;
+    const auto *fn = function(v);
+    if (!fn || !fn->hasBody()) return false;
+    Writes escaped(v); escaped.EscapesOnly = true; escaped.TraverseStmt(fn->getBody());
+    Writes written(v); written.TraverseStmt(fn->getBody());
+    if (escaped.Unknown) return false;
+    if (written.Unknown || !written.Increments.empty())
+      return !PositiveRangesOnly && loopCounterRange(v, use, lo, hi);
+    lo = llvm::APInt::getSignedMinValue(C.getIntWidth(v->getType())).sext(128);
+    hi = llvm::APInt::getSignedMaxValue(C.getIntWidth(v->getType())).sext(128);
+    // A stable local copy has the same value as its initializer. Reuse the
+    // range transfer recursively only when the conversion preserves the full
+    // interval; narrowing/wrapping conversions are not identity transfers.
+    if (v->hasInit() && positiveRangeOperand(v->getInit())) {
+      llvm::APInt initialLo(128, 0), initialHi(128, 0);
+      if (stableRange(v->getInit(), use, initialLo, initialHi, depth + 1) &&
+          initialLo.sge(lo) && initialHi.sle(hi)) {
+        lo = initialLo; hi = initialHi;
+      }
+    }
+    const clang::Stmt *node = use;
+    for (unsigned depth = 0; node && depth != 64; ++depth) {
+      const auto parents = C.getParents(*node);
+      if (parents.size() != 1) break;
+      const auto *parent = parents[0].get<clang::Stmt>();
+      if (!parent) break;
+      if (const auto *test = clang::dyn_cast<clang::IfStmt>(parent)) {
+        if (node == test->getThen()) narrowStable(test->getCond(), true, v, lo, hi);
+        if (node == test->getElse()) narrowStable(test->getCond(), false, v, lo, hi);
+      }
+      if (const auto *binary = clang::dyn_cast<clang::BinaryOperator>(parent))
+        if (node == binary->getRHS() && binary->isLogicalOp())
+          narrowStable(binary->getLHS(), binary->getOpcode() == clang::BO_LAnd, v, lo, hi);
+      if (const auto *scope = clang::dyn_cast<clang::CompoundStmt>(parent)) {
+        for (const auto *previous : scope->body()) {
+          if (previous == node) break;
+          const auto *test = clang::dyn_cast<clang::IfStmt>(previous);
+          if (!test) continue;
+          if (exits(test->getThen())) narrowStable(test->getCond(), false, v, lo, hi);
+          if (exits(test->getElse())) narrowStable(test->getCond(), true, v, lo, hi);
+        }
+      }
+      node = parent;
+    }
+    return lo.sle(hi);
+  }
   class Writes : public clang::RecursiveASTVisitor<Writes> {
    public:
     bool shouldVisitImplicitCode() const { return true; }
     const clang::VarDecl *V;
     bool Unknown = false;
+    bool EscapesOnly = false;
     clang::ASTContext *ResetContext = nullptr;
     uint64_t ResetLimit = 0;
     const clang::VarDecl *IgnoredBinding = nullptr;
@@ -270,12 +585,25 @@ class Proof {
       for (const auto *init : e->inits()) if (init->isGLValue() && aliases(init)) Unknown = true;
       return true;
     }
+    bool VisitCXXParenListInitExpr(clang::CXXParenListInitExpr *e) {
+      for (const auto *init : e->getInitExprs())
+        if (init->isGLValue() && aliases(init)) Unknown = true;
+      return true;
+    }
+    bool VisitLambdaExpr(clang::LambdaExpr *e) {
+      if (EscapesOnly && captures(e)) Unknown = true;
+      return true;
+    }
+    bool VisitCoroutineBodyStmt(clang::CoroutineBodyStmt *) {
+      if (EscapesOnly) Unknown = true;
+      return true;
+    }
     bool VisitExplicitCastExpr(clang::ExplicitCastExpr *e) {
       if (e->isGLValue() && aliases(e)) Unknown = true;
       return true;
     }
     bool VisitBinaryOperator(clang::BinaryOperator *e) {
-      if (e->isAssignmentOp() && aliases(e->getLHS())) {
+      if (!EscapesOnly && e->isAssignmentOp() && aliases(e->getLHS())) {
         if (ResetContext && e->getOpcode() == clang::BO_Assign) {
           auto value = e->getRHS()->getIntegerConstantExpr(*ResetContext);
           if (value && !value->isNegative() && value->getLimitedValue() < ResetLimit) return true;
@@ -288,7 +616,7 @@ class Proof {
       if (!aliases(e->getSubExpr())) return true;
       if (variable(e->getSubExpr()) != V) { Unknown = true; return true; }
       if (e->getOpcode() == clang::UO_AddrOf) Unknown = true;
-      if (e->isIncrementDecrementOp()) {
+      if (!EscapesOnly && e->isIncrementDecrementOp()) {
         if (e->isIncrementOp()) Increments.push_back(e); else Unknown = true;
       }
       return true;
@@ -298,6 +626,12 @@ class Proof {
       return true;
     }
     bool VisitCallExpr(clang::CallExpr *e) {
+      if (EscapesOnly) {
+        const auto *callee = e->getDirectCallee();
+        if (callee && (callee->hasAttr<clang::ReturnsTwiceAttr>() ||
+            callee->getNameAsString().find("setjmp") != std::string::npos)) Unknown = true;
+      }
+
       for (auto *a : e->arguments()) {
         if (a->isGLValue() && aliases(a)) Unknown = true;
         // Calling a local lambda is not an escape of its closure object.
@@ -312,6 +646,8 @@ class Proof {
     bool VisitGotoStmt(clang::GotoStmt *) { Unknown = true; return true; }
     bool VisitIndirectGotoStmt(clang::IndirectGotoStmt *) { Unknown = true; return true; }
     bool VisitLabelStmt(clang::LabelStmt *) { Unknown = true; return true; }
+    bool VisitCaseStmt(clang::CaseStmt *) { Unknown = true; return true; }
+    bool VisitDefaultStmt(clang::DefaultStmt *) { Unknown = true; return true; }
     bool captures(const clang::Expr *e) {
       e = e->IgnoreParenImpCasts();
       if (auto *v = variable(e)) {

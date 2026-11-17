@@ -26,7 +26,7 @@ bool isExceptionalExitStmt(const Stmt *S) {
 void FactVisitor::emitControlFlow(FunctionDecl *FD,
                                   const facts_pb::EntityId &fn) {
   if (!FD || !FD->getBody()) return;
-  emitInitializationFlow(FD, Ctx, fn);
+  emitInitializationFlow(FD, Ctx, fn, callSiteNodes_, accessSiteNodes_);
 
   CFG::BuildOptions options;
   // Calls through ordinary automatic-object destruction are part of normal

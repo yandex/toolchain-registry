@@ -1,6 +1,7 @@
 // Conservative review candidates, not proven violations. In particular, lack
 // of an interprocedural lifetime/initialization proof must not imply safety.
 #include "baseline.h"
+#include "initialization_flow.h"
 #include "source_utils.h"
 #include "baseline_pointer_proof.h"
 #include "baseline_initialization_proof.h"
@@ -421,6 +422,15 @@ class MemoryProofInputs : public clang::RecursiveASTVisitor<MemoryProofInputs> {
     }
     return true;
   }
+  bool VisitCXXParenListInitExpr(clang::CXXParenListInitExpr *expression) {
+    // C++20 aggregate initialization can bind reference members with ().
+    // Treat these escapes exactly like the corresponding brace initializer.
+    for (const auto *initializer : expression->getInitExprs()) {
+      if (initializer->isGLValue()) escape(initializer);
+      opaquePointer(initializer);
+    }
+    return true;
+  }
   bool VisitUnaryOperator(clang::UnaryOperator *expr) {
     if (expr->getOpcode() == clang::UO_AddrOf) {
       if (!initializedScanfOutput(expr, Context)) escape(expr->getSubExpr());
@@ -735,7 +745,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     const bool bounded = boundedArrayIndex(expr) || baseline_pointer::Proof(Context).boundedSubscript(expr);
     if (!bounded) emit("8.7.1", expr, "subscript-needs-array-bounds-proof");
     if (!(bounded && llvm::isa<clang::StringLiteral>(expr->getBase()->IgnoreParenImpCasts())) &&
-        !baseline_lifetime::Proof(Context).live(expr))
+        !Lifetime.live(expr))
       emit("6.8.1", expr, "subscript-needs-lifetime-proof");
     if (!nonLibraryPointer(expr->getBase()))
       emit("25.5.3", expr, "subscript-needs-library-invalidation-proof");
@@ -937,7 +947,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     const bool concatenationOwner = var && !Proofs.OpaqueAssembly && Proofs.StringConcatenationOwners.count(var) &&
         !Proofs.OwnerEscaped.count(var) && freshDefaultStringOwner(var, Context);
     if (!var || var->getType()->isReferenceType() ||
-        (Proofs.Escaped.count(var) && !Proofs.onlyImmediateCapture(var) && !concatenationOwner)) return baseline_lifetime::Proof(Context).live(expr);
+        (Proofs.Escaped.count(var) && !Proofs.onlyImmediateCapture(var) && !concatenationOwner)) return Lifetime.live(expr);
     if (var->hasInit() && Context.getSourceManager().isPointWithin(
             expr->getExprLoc(), var->getInit()->getBeginLoc(), var->getInit()->getEndLoc())) return false;
     if (var->hasLocalStorage() && var->getType()->isConstantArrayType() &&
@@ -956,7 +966,16 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // are exception-safe value storage with no exposing methods; address,
     // reference return, capture and explicit destruction were scanned above.
     if (var->hasGlobalStorage() && !var->getType().isConstQualified() &&
-        !(atomic && !var->isExternallyVisible())) return false;
+        !(atomic && !var->isExternallyVisible())) {
+      // Internal scalar storage is unreachable from other TUs unless its
+      // address escapes. The whole-TU use scan above rejects those escapes.
+      // Require constant/zero initialization to exclude pre-initialization
+      // uses from other dynamic initializers. This says nothing about value
+      // ranges, races, or the lifetime of a pointer's target.
+      return !var->isExternallyVisible() && var->getType()->isScalarType() &&
+          !var->getType().isVolatileQualified() && !Proofs.OpaqueAssembly &&
+          (!var->hasInit() || var->hasConstantInitialization());
+    }
     // string_view::data exposes the viewed buffer, never the view object.
     // Keep its backing pointer/reference operations separate and conservative.
     if ((stringView || atomic) && record->hasDefinition() && record->hasTrivialDestructor()) return true;
@@ -965,7 +984,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // reference parameters remain unresolved.
     if (standardScalarParameter(var)) return true;
     // Other class objects may expose themselves or have custom destruction.
-    return var->getType()->isScalarType() || baseline_lifetime::Proof(Context).live(expr);
+    return var->getType()->isScalarType() || Lifetime.live(expr);
   }
   bool initializedValue(const clang::Expr *expr, unsigned depth) const {
     if (!expr || depth > 12) return false;
@@ -1332,7 +1351,12 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
     // including an explicit candidate for copy/move assignment calls above.
     if (rule == "6.8.1" && !gap && implicitTrivialCopyBody(expr)) return;
     emitBaselineCandidate(Context, rule, expr->getExprLoc(), reason, gap, expr);
-    if (rule == "25.5.3" && !gap) tagReturnedOrigin(expr);
+    if (rule == "25.5.3" && !gap) {
+      tagReturnedOrigin(expr);
+      // Either independent proof can discharge this obligation. Preserve the
+      // returned-borrow binding and the exact CFG anchor on the same candidate.
+      tagPointerOriginRead(expr, g_facts.back().mutable_baseline_candidate());
+    }
     if (rule == "8.7.1" && !gap && reason == "pointer-arithmetic-needs-array-bounds-proof") {
       tagReturnedBounds(expr);
       return;
@@ -1376,6 +1400,7 @@ class MemoryBaselineVisitor : public clang::RecursiveASTVisitor<MemoryBaselineVi
   clang::ASTContext &Context;
   const MemoryProofInputs &Proofs;
   mutable baseline_initialization::Proof GlobalInitialization;
+  baseline_lifetime::Proof Lifetime{Context};
 };
 }  // namespace
 

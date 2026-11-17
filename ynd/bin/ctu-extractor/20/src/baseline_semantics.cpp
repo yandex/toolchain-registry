@@ -1,6 +1,8 @@
-// Conservative review candidates, not proofs of MISRA violations. In particular,
-// a candidate is retained when reachability, liveness or effects are unknown.
+// Conservative review candidates plus certified CFG witnesses. Candidate
+// retention never proves a violation: the positive liveness path additionally
+// requires private scalar storage, no escaped aliases and complete control flow.
 #include "baseline.h"
+#include "baseline_initialization_proof.h"
 #include "baseline_pointer_proof.h"
 #include "baseline_lifetime_proof.h"
 #include "baseline_library_proof.h"
@@ -16,6 +18,7 @@
 #include "clang/Analysis/Analyses/LiveVariables.h"
 #include "clang/Analysis/CFG.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DenseMap.h"
@@ -28,7 +31,8 @@ namespace {
 // path reads its stored value. Escaped/aggregate storage remains an obligation.
 class DeadStoreObserver : public clang::LiveVariables::Observer {
  public:
-  explicit DeadStoreObserver(clang::ASTContext &context) : Context(context) {}
+  explicit DeadStoreObserver(clang::ASTContext &context, const baseline_initialization::Index &uses)
+      : Context(context), Uses(uses) {}
   void report(const clang::VarDecl *variable, clang::SourceLocation location,
               const clang::LiveVariables::LivenessValues &live) {
     if (!variable || variable->isImplicit() || !variable->hasLocalStorage() ||
@@ -42,15 +46,31 @@ class DeadStoreObserver : public clang::LiveVariables::Observer {
     if (const auto *declarations = clang::dyn_cast<clang::DeclStmt>(statement)) {
       for (const auto *declaration : declarations->decls())
         if (const auto *variable = clang::dyn_cast<clang::VarDecl>(declaration))
-          if (variable->hasInit()) report(variable, variable->getLocation(), live);
+          if (variable->hasInit()) {
+            report(variable, variable->getLocation(), live);
+            if (privateDeadValue(variable, live) &&
+                !variable->getInit()->HasSideEffects(Context))
+              emitPositiveWitness(Context, "0.1.1", "cfg-dead-private-scalar-initialization",
+                                  variable->getLocation(), variable->getInit()->getExprLoc());
+          }
     }
     if (const auto *assignment = clang::dyn_cast<clang::BinaryOperator>(statement)) {
       if (assignment->isAssignmentOp())
         if (const auto *reference = clang::dyn_cast<clang::DeclRefExpr>(
-                assignment->getLHS()->IgnoreParenImpCasts()))
-          report(clang::dyn_cast<clang::VarDecl>(reference->getDecl()),
-                 assignment->getOperatorLoc(), live);
+                assignment->getLHS()->IgnoreParenImpCasts())) {
+          const auto *variable = clang::dyn_cast<clang::VarDecl>(reference->getDecl());
+          report(variable, assignment->getOperatorLoc(), live);
+          // A consumed assignment value can be useful even when the destination
+          // is dead. Require a standalone statement, not return/argument/comma.
+          const auto parents = Context.getParents(*assignment);
+          if (assignment->getOpcode() == clang::BO_Assign &&
+              parents.size() == 1 && parents[0].get<clang::CompoundStmt>() &&
+              !assignment->getRHS()->HasSideEffects(Context) && privateDeadValue(variable, live))
+            emitPositiveWitness(Context, "0.1.1", "cfg-dead-private-scalar-assignment",
+                                assignment->getOperatorLoc(), assignment->getRHS()->getExprLoc());
+        }
     }
+
     if (const auto *update = clang::dyn_cast<clang::UnaryOperator>(statement))
       if (update->isIncrementDecrementOp())
         if (const auto *reference = clang::dyn_cast<clang::DeclRefExpr>(
@@ -59,7 +79,18 @@ class DeadStoreObserver : public clang::LiveVariables::Observer {
                  update->getOperatorLoc(), live);
   }
  private:
+  bool privateDeadValue(const clang::VarDecl *variable,
+                        const clang::LiveVariables::LivenessValues &live) const {
+    if (!variable || Uses.Assembly || Uses.ControlFlowUnknown || variable->isImplicit() ||
+        !variable->hasLocalStorage() || variable->hasAttrs() ||
+        variable->getType().isVolatileQualified() || live.isLive(variable)) return false;
+    const auto type = variable->getType();
+    if (!type->isIntegerType() && !type->isPointerType()) return false;
+    const auto found = Uses.Variables.find(variable->getCanonicalDecl());
+    return found == Uses.Variables.end() || !found->second.Unknown;
+  }
   clang::ASTContext &Context;
+  const baseline_initialization::Index &Uses;
 };
 
 bool inStandardNamespace(const clang::DeclContext *context);
@@ -541,11 +572,14 @@ class SemanticBaselineVisitor
       candidate("0.2.4", declaration->getLocation(),
                 "Limited-visibility function has no observed use or reference from a reachable TU root; external registration requires review");
     if (declaration->isDependentContext()) return true;
-    clang::AnalysisDeclContextManager manager(Context, false, true, false, true);
+    clang::AnalysisDeclContextManager manager(Context, true, true, false, true);
     manager.getCFGBuildOptions().setAllAlwaysAdd();
+    manager.getCFGBuildOptions().AddEHEdges = true;
     auto *analysis = manager.getContext(declaration);
     if (auto live = clang::LiveVariables::computeLiveness(*analysis, true)) {
-      DeadStoreObserver observer(Context);
+      baseline_initialization::Index uses(Context);
+      uses.TraverseStmt(declaration->getBody());
+      DeadStoreObserver observer(Context, uses);
       live->runOnAllBlocks(observer);
     } else {
       candidate("0.1.1", declaration->getLocation(),
@@ -609,6 +643,7 @@ class SemanticBaselineVisitor
       case clang::BO_Add: case clang::BO_Sub: case clang::BO_Mul:
       case clang::BO_AddAssign: case clang::BO_SubAssign: case clang::BO_MulAssign:
         if (unsignedArithmetic) break; // modulo arithmetic is defined by C++
+        if (baseline_pointer::Proof(Context).safeSignedArithmetic(expression)) break;
         candidate("4.1.3", expression->getOperatorLoc(),
                   "Arithmetic requires representability or pointer-bound proofs; undefined behavior is not excluded");
         break;
@@ -760,7 +795,18 @@ class SemanticBaselineVisitor
         !standardErrnoPointer(expression->getSubExpr(), Context))
       candidate("4.1.3", expression->getOperatorLoc(),
                 "Dereference requires valid pointer, object lifetime and alignment proofs");
+    // IEEE binary32/binary64 negation changes only the sign bit, including
+    // infinities and NaNs; it cannot overflow. This discharges only the unary
+    // operation, not any initialization, lifetime or dereference of its operand.
+    bool exactFloatingNegation = false;
+    if (expression->getOpcode() == clang::UO_Minus &&
+        expression->getType()->isRealFloatingType()) {
+      const auto &semantics = Context.getFloatTypeSemantics(expression->getType());
+      exactFloatingNegation = &semantics == &llvm::APFloat::IEEEsingle() ||
+          &semantics == &llvm::APFloat::IEEEdouble();
+    }
     if ((expression->getOpcode() == clang::UO_Minus || expression->isIncrementDecrementOp()) &&
+        !exactFloatingNegation &&
         !expression->getType()->isUnsignedIntegerType() &&
         !baseline_pointer::Proof(Context).safeIntegerIncrement(expression) &&
         (expression->isValueDependent() || !expression->isCXX11ConstantExpr(Context)))

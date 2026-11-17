@@ -62,6 +62,7 @@ public:
     if (paranoidBaseline && Ctx.getLangOpts().CPlusPlus) {
       collectMemoryBaselineFacts(Ctx);
       collectSemanticBaselineFacts(Ctx);
+      collectPositiveWitnessFacts(Ctx);
       baselineCollected = true;
     }
   }

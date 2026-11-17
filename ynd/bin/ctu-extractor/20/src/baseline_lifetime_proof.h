@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclTemplate.h"
@@ -120,8 +122,13 @@ inline bool constantFieldInitializer(const clang::FieldDecl *field, clang::ASTCo
       initializer->isCXX11ConstantExpr(context);
 }
 inline bool shape(clang::QualType t, clang::ASTContext &c, unsigned depth = 0) {
-  if (t.isNull() || t->isDependentType() || depth > 8 || t->isReferenceType() || t.isVolatileQualified()) return false;
-  if (t->isScalarType() || (depth == 0 && (standardVector(t, c) || standardPath(t, c)))) return true;
+  if (t.isNull() || t->isDependentType() || depth > 8 || t->isReferenceType()) return false;
+  // Volatile scalar subobjects still share their private automatic owner's
+  // storage lifetime. This establishes neither their value nor the lifetime
+  // of a stored pointer's target. Uses must independently reject publication.
+  if (t->isScalarType()) return true;
+  if (t.isVolatileQualified()) return false;
+  if (depth == 0 && (standardVector(t, c) || standardPath(t, c))) return true;
   if (const auto *a = c.getAsConstantArrayType(t)) return shape(a->getElementType(), c, depth + 1);
   const auto *r = t->getAsCXXRecordDecl();
   if (!r || !r->hasDefinition() || !r->isTriviallyCopyable() || !r->hasTrivialDestructor() || r->getNumBases()) return false;
@@ -276,6 +283,7 @@ inline bool immediateLambda(const clang::LambdaExpr *lambda, clang::ASTContext &
 class Uses : public clang::RecursiveASTVisitor<Uses> {
  public:
   clang::ASTContext &C; const clang::VarDecl *V; bool Safe = true; unsigned Count = 0;
+  const clang::DeclRefExpr *AddressBeingFormed = nullptr;
   Uses(clang::ASTContext &c, const clang::VarDecl *v) : C(c), V(v) {}
   bool VisitStmt(clang::Stmt *) { if (++Count > 20000) { Safe = false; return false; } return true; }
   bool VisitAsmStmt(clang::AsmStmt *) { Safe = false; return true; }
@@ -285,6 +293,9 @@ class Uses : public clang::RecursiveASTVisitor<Uses> {
     return true;
   }
   bool VisitDeclRefExpr(clang::DeclRefExpr *e) {
+    // Forming this address precedes the call that may publish it. Other uses
+    // in the same full expression must still prove nonescape independently.
+    if (e == AddressBeingFormed) return true;
     if (storage(e->getDecl()) == V && !safeUse(e)) Safe = false;
     return true;
   }
@@ -313,6 +324,10 @@ class Uses : public clang::RecursiveASTVisitor<Uses> {
         node = p; continue;
       }
       if (clang::isa<clang::ParenExpr>(p)) { node = p; continue; }
+      if (const auto *cleanup = clang::dyn_cast<clang::ExprWithCleanups>(p)) {
+        if (cleanup->cleanupsHaveSideEffects()) return false;
+        node = p; continue;
+      }
       if (auto *member = clang::dyn_cast<clang::MemberExpr>(p)) {
         if (!address && !member->isArrow() && standardPath(V->getType(), C)) {
           const auto *call = clang::dyn_cast_or_null<clang::CXXMemberCallExpr>(parent(member, C));
@@ -354,6 +369,22 @@ class Uses : public clang::RecursiveASTVisitor<Uses> {
         return false;
       }
       if (auto *call = clang::dyn_cast<clang::CallExpr>(p)) {
+        if (const auto *assignment = clang::dyn_cast<clang::CXXOperatorCallExpr>(call)) {
+          const auto *method = clang::dyn_cast_or_null<clang::CXXMethodDecl>(assignment->getDirectCallee());
+          // A compiler-generated trivial copy/move assignment accesses the
+          // record in place; it cannot export either object's address. This
+          // says nothing about the initializedness of the copied fields.
+          if (!address && method && method->isTrivial() &&
+              (method->isCopyAssignmentOperator() || method->isMoveAssignmentOperator()) &&
+              assignment->getNumArgs() == 2 &&
+              (assignment->getArg(0) == node || assignment->getArg(1) == node)) {
+            if (assignment->getArg(1) == node) return true;
+            // Assignment returns an alias to the destination. Follow that
+            // result so &(destination=source) cannot hide an address escape.
+            node = p;
+            continue;
+          }
+        }
         auto *f = call->getDirectCallee();
         if (!address || !f || !f->getIdentifier() || !f->isExternC() || !C.getSourceManager().isInSystemHeader(f->getLocation())) return false;
         const auto name = f->getName();
@@ -388,8 +419,30 @@ class Proof {
   bool live(const clang::Expr *expression, unsigned recursionDepth = 0) const {
     if (!expression || recursionDepth > 8 || expression->isInstantiationDependent() || expression->getType().isNull() || expression->getType()->isUnionType()) return false;
     const auto *v = owner(expression, C);
-    if (!v || v->hasAttr<clang::CleanupAttr>() || !v->hasLocalStorage() || clang::isa<clang::ParmVarDecl>(v) || !shape(v->getType(), C)) return false;
-    if (v->hasInit()) {
+    if (!v || v->hasAttr<clang::CleanupAttr>() || !v->hasLocalStorage() || !shape(v->getType(), C)) return false;
+    if (const auto *parameter = clang::dyn_cast<clang::ParmVarDecl>(v)) {
+      // A by-value parameter owns storage for this invocation. shape() admits
+      // only scalar or plain aggregate storage with no exposing constructors,
+      // reference members or nontrivial destruction. Pointer fields do not
+      // confer a lifetime proof on the objects they point to.
+      if (!parameter->getType()->isScalarType() &&
+          (!parameter->getType()->isRecordType() ||
+           !parameter->getType()->getAsCXXRecordDecl()->isTrivial())) return false;
+      const auto *function = clang::dyn_cast<clang::FunctionDecl>(parameter->getDeclContext());
+      if (!function || !function->getBody()) return false;
+      auto found = ParameterStorage.find(parameter);
+      if (found != ParameterStorage.end()) return found->second;
+      ControlFlow flow;
+      Uses uses(C, parameter);
+      bool safe = flow.TraverseStmt(const_cast<clang::Stmt *>(function->getBody())) && flow.Safe &&
+          uses.TraverseStmt(const_cast<clang::Stmt *>(function->getBody())) && uses.Safe;
+      ParameterStorage[parameter] = safe;
+      return safe;
+    }
+    // Computing a scalar value does not expose its destination storage.
+    // The use scan below still rejects self-address publication, reference
+    // bindings and other escapes. Value initialization remains a separate proof.
+    if (v->hasInit() && !v->getType()->isScalarType()) {
       const auto *initial = v->getInit()->IgnoreParenImpCasts();
       if (standardPath(v->getType(), C)) {
         for (unsigned wraps = 0; wraps != 8; ++wraps) {
@@ -480,6 +533,16 @@ class Proof {
             return uses.TraverseStmt(const_cast<clang::Expr *>(test->getCond())) && uses.Safe;
         }
       }
+      if (statement == useStatement && !enclosedByLoop) {
+        const auto *reference = clang::dyn_cast<clang::DeclRefExpr>(expression->IgnoreParenImpCasts());
+        const auto *address = reference ? clang::dyn_cast_or_null<clang::UnaryOperator>(parent(reference, C)) : nullptr;
+        const auto *callStatement = clang::dyn_cast<clang::Expr>(statement);
+        if (const auto *cleanup = clang::dyn_cast_or_null<clang::ExprWithCleanups>(callStatement))
+          callStatement = cleanup->cleanupsHaveSideEffects() ? nullptr : cleanup->getSubExpr();
+        if (address && address->getOpcode() == clang::UO_AddrOf &&
+            callStatement && clang::isa<clang::CallExpr>(callStatement->IgnoreParenImpCasts()))
+          uses.AddressBeingFormed = reference;
+      }
       if (!uses.TraverseStmt(const_cast<clang::Stmt *>(statement)) || !uses.Safe) return false;
       if (statement == useStatement) return true;
     }
@@ -487,5 +550,6 @@ class Proof {
   }
  private:
   clang::ASTContext &C;
+  mutable std::map<const clang::ParmVarDecl *, bool> ParameterStorage;
 };
 } // namespace baseline_lifetime

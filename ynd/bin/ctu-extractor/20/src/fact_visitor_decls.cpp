@@ -15,6 +15,33 @@
 #include "source_utils.h"
 
 namespace {
+// Symbol aliases are valid ABI mechanisms, not source redeclarations. Inspect
+// all visible redeclarations so an inherited/later asm label cannot certify an
+// earlier spelling. Source-level proof consumers require this explicit marker.
+bool ordinarySourceIdentity(const Decl *decl) {
+  auto ordinary = [](const Decl *d) {
+    return !d->hasAttr<AsmLabelAttr>() && !d->hasAttr<AliasAttr>() &&
+           !d->hasAttr<WeakRefAttr>();
+  };
+  if (const auto *function = dyn_cast<FunctionDecl>(decl)) {
+    if (function->isTemplated() || function->isDependentContext() ||
+        function->getTemplatedKind() != FunctionDecl::TK_NonTemplate) return false;
+    for (const auto *redecl : function->redecls()) if (!ordinary(redecl)) return false;
+    if (const auto *method = dyn_cast<CXXMethodDecl>(function))
+      for (const auto *base : method->overridden_methods())
+        for (const auto *redecl : base->redecls())
+          if (!ordinary(redecl)) return false;
+  } else if (const auto *variable = dyn_cast<VarDecl>(decl)) {
+    if (variable->isTemplated() || variable->getDeclContext()->isDependentContext()) return false;
+    for (const auto *redecl : variable->redecls()) if (!ordinary(redecl)) return false;
+  } else {
+    // Type declarations need a separate source identity certificate, including
+    // specialization identity. Do not reuse a linker-oriented approximation.
+    return false;
+  }
+  return ordinary(decl);
+}
+
 bool allowsMultipleOdrDefinitions(const FunctionDecl *FD) {
   TemplateSpecializationKind specialization =
       FD->getTemplateSpecializationKind();
@@ -96,6 +123,8 @@ void FactVisitor::emitOdrDefinition(const Decl *D,
   definition->set_source_language(Ctx.getLangOpts().CPlusPlus ? facts_pb::SL_CXX
                                                                : facts_pb::SL_C);
   definition->set_has_complete_identity(completeIdentity);
+  definition->set_source_identity_version(2);
+  definition->set_has_unambiguous_source_identity(ordinarySourceIdentity(D));
   g_facts.push_back(std::move(fact));
 }
 
@@ -230,6 +259,8 @@ bool FactVisitor::VisitVarDecl(VarDecl *VD) {
 
   facts_pb::Fact fact;
   facts_pb::VarDecl *v = fact.mutable_var_decl();
+  v->set_source_identity_version(2);
+  v->set_has_unambiguous_source_identity(ordinarySourceIdentity(VD));
   bool sys = isSystemLoc(VD->getLocation(), SM);
   fact.set_origin(originOf(sys));
 
@@ -536,6 +567,8 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
 
   facts_pb::Fact fact;
   facts_pb::FuncDecl *f = fact.mutable_func_decl();
+  f->set_source_identity_version(2);
+  f->set_has_unambiguous_source_identity(ordinarySourceIdentity(FD));
   fact.set_origin(originOf(sys));
 
   bool external = FD->isExternallyVisible();
@@ -696,6 +729,7 @@ bool FactVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     callResultClassIds_.clear();
     constructionReceivers_.clear();
     callSiteNodes_.clear();
+    accessSiteNodes_.clear();
     addrTakenTo_.clear();
     addrTakenAmbiguousPtrs_.clear();
     // `this` (implicit or explicit) is treated as a ParamRegion at a

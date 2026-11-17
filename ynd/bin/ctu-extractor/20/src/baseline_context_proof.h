@@ -54,8 +54,13 @@ class Proof {
     bool VisitVarDecl(clang::VarDecl *variable) {
       if (!variable->isFileVarDecl() || Context.getSourceManager().isInSystemHeader(variable->getLocation())) return true;
       if (variable->hasInit() && !variable->hasConstantInitialization()) UnsafeStartup = true;
-      if (const auto *record = variable->getType()->getAsCXXRecordDecl())
-        if (!record->hasTrivialDestructor()) UnsafeStartup = true;
+      if (const auto *record = variable->getType()->getAsCXXRecordDecl()) {
+        // An extern object may name a forward-declared class. Destructor
+        // properties require definition data; absence of that data cannot
+        // establish that startup/teardown is harmless.
+        const auto *definition = record->getDefinition();
+        if (!definition || !definition->hasTrivialDestructor()) UnsafeStartup = true;
+      }
       return true;
     }
    private:

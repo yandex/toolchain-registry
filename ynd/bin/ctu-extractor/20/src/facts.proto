@@ -21,6 +21,8 @@ syntax = "proto3";
 
 package ctu.facts.v2;
 
+option go_package = "a.yandex-team.ru/sdg/devtools/ctu-analyzer/schema/factspb;factspb";
+
 // ---------------------------------------------------------------------------
 // Common
 // ---------------------------------------------------------------------------
@@ -589,6 +591,10 @@ message FuncDecl {
     CB_IS_CONSTANT_EVALUATED = 1;
   }
   CompilerBuiltin compiler_builtin = 39;
+  // Positive source-identity certificate: no assembler-label/alias rebinding.
+  // Missing in old blobs; linker symbol identity alone is insufficient.
+  bool has_unambiguous_source_identity = 40;
+  uint32 source_identity_version = 41; // 2 excludes dependent/template source identities
 }
 
 message VarDecl {
@@ -623,6 +629,8 @@ message VarDecl {
   bool outer_array_bound_omitted = 17;
   fixed64 outer_array_element_type_hash = 18;
   fixed64 outer_array_element_type_hash_hi = 19;
+  bool has_unambiguous_source_identity = 20;
+  uint32 source_identity_version = 21;
 }
 
 message VMethod {
@@ -723,6 +731,8 @@ message OdrDefinition {
   // defaulted member). Such a fact remains coverage telemetry but cannot be
   // used as evidence that two source definitions differ.
   bool has_complete_identity = 12;
+  bool has_unambiguous_source_identity = 13;
+  uint32 source_identity_version = 14;
 }
 
 // Scalar definite-initialization IR. This is a must-proof vocabulary, separate
@@ -735,6 +745,8 @@ message InitializationValue {
     IV_LOCAL = 3;
     IV_COMBINE = 4;
     IV_CALL = 5;
+    IV_POINTER_CALL = 11; // initialized pointer value, never a pointee proof
+    IV_RECORD_CALL = 10; // all scalar fields of an exact record return are initialized
     IV_OUTPUT = 6; // sole scalar output formal storage (version 2)
     IV_CONSTRUCTOR_FIELD = 7; // exact receiver field in declaration order (version 3)
     IV_BORROWED_INPUT = 9; // version 8: read-only scalar pointee, indexed by formal
@@ -757,10 +769,12 @@ message InitializationValue {
   string unknown_reason = 11;
   // Version 8: positional pointee inputs; scalar positions remain IV_UNKNOWN.
   repeated InitializationValue readonly_actuals = 12;
+  string return_record_identity = 13; // IV_RECORD_CALL only; exact layout fingerprint
+  repeated string argument_record_identities = 14; // positional by-value record layouts; empty for scalars
 }
 
 message InitializationOperation {
-  enum Kind { IO_UNKNOWN = 0; IO_ASSIGN = 1; IO_READ = 2; IO_RETURN = 3; IO_OUTPUT_ASSIGN = 4; IO_CALL = 5; IO_FIELD_ASSIGN = 6; IO_CONSTRUCT = 7; IO_RECEIVER_CALL = 8; IO_OBSERVE_CALL = 9; IO_READONLY_CALL = 10; }
+  enum Kind { IO_UNKNOWN = 0; IO_ASSIGN = 1; IO_READ = 2; IO_RETURN = 3; IO_OUTPUT_ASSIGN = 4; IO_CALL = 5; IO_FIELD_ASSIGN = 6; IO_CONSTRUCT = 7; IO_RECEIVER_CALL = 8; IO_OBSERVE_CALL = 9; IO_READONLY_CALL = 10; IO_RECORD_OUTPUT = 11; }
   Kind kind = 1;
   uint32 local = 2;
   InitializationValue value = 3;
@@ -774,6 +788,9 @@ message InitializationOperation {
   uint32 output_actual_local = 9;
   bool output_actual_is_parameter = 10;
   uint32 output_argument_index = 11;
+  // Version-9 IO_RECORD_OUTPUT reuses the layout/destination slots below and
+  // output_argument_index above. That positional argument must be IV_UNKNOWN;
+  // the callee must identify the same isolated record-output formal.
   // Version-3 exact local object construction. Destination slots correspond to
   // direct scalar fields in declaration order; identity includes record layout.
   repeated uint32 destination_locals = 12;
@@ -797,7 +814,8 @@ message InitializationBlock {
 
 // Independent may-effect model. Only complete, supported bodies certify effects.
 // Bindings are -1 for scalar values, -2 for private local scalar storage, or the
-// caller's zero-based borrowed formal index. Unknown bindings invalidate proof.
+// caller's zero-based borrowed formal index. Version 2 adds -4 for literal storage,
+// usable only by a proven read-only callee. Unknown bindings invalidate proof.
 message BorrowedEffectCall {
   EntityId callee = 1;
   repeated sint32 bindings = 2;
@@ -811,7 +829,7 @@ message BorrowedEffects {
   uint32 version = 1;
   bool complete = 2;
   repeated bool borrowed_parameters = 3;
-  repeated uint32 parameter_effects = 4; // bits: read=1, write=2; others reserved
+  repeated uint32 parameter_effects = 4; // bits: read=1, write=2; v2 adds may-retain reachable storage=4, volatile observation=8
   repeated BorrowedEffectCall calls = 5;
   bool returns_borrowed = 6;
   repeated BorrowedReturn returns = 7;
@@ -822,6 +840,76 @@ message InitializationCaller {
   EntityId function = 1;
   uint32 call_count = 2;
 }
+// Ordered, byte-addressed memory facts. These are independent of the scalar
+// initialization and pointer-origin domains. Live storage alone never certifies
+// typed C++ object lifetime or active union membership.
+message MemoryAccess {
+  uint64 bytes = 1;
+  string type = 2; // canonical scalar type, plus active union-member path
+  bool is_volatile = 3; // value transport requires proven private storage
+}
+message MemoryValue {
+  enum Kind { MV_UNKNOWN = 0; MV_ARGUMENT = 1; MV_TEMPORARY = 2; MV_INTEGER = 3; MV_NULL = 4; MV_OFFSET = 5; MV_LOAD = 6; MV_LOCAL = 7; MV_SCALAR = 8; MV_BINARY = 9; MV_INTEGER_CAST = 10; MV_FUNCTION = 11; }
+  Kind kind = 1;
+  uint32 index = 2;
+  sint64 integer = 3;
+  uint64 offset = 4;
+  MemoryAccess access = 5;
+  MemoryValue base = 6;
+  MemoryValue rhs = 7;
+  string binary_operator = 8;
+  uint32 integer_bits = 9;
+  bool integer_unsigned = 10;
+  repeated uint32 evaluated_call_temporaries = 13; // require actual executed target to have no caller mutation
+  EntityId function = 12; // exact function value, not a data-storage address
+  repeated EntityId evaluation_callees = 11; // must prove no caller-memory mutation before re-reading operands
+}
+message MemoryOperation {
+  enum Kind { MO_UNKNOWN = 0; MO_BIND = 1; MO_ALLOCATE = 2; MO_STORE = 3; MO_FREE = 4; MO_ESCAPE = 5; MO_CALL = 6; MO_BEGIN_LOCAL = 7; MO_READ = 8; MO_RETURN = 9; MO_HAVOC = 10; MO_END_LOCAL = 11; MO_ZERO_BYTES = 12; MO_INDIRECT_CALL = 13; }
+  Kind kind = 1;
+  uint32 temporary = 2;
+  MemoryValue value = 3;
+  MemoryValue destination = 4;
+  MemoryAccess access = 5;
+  EntityId callee = 6;
+  repeated MemoryValue arguments = 7;
+  uint64 obligation_id = 8;
+  SourceRef loc = 9;
+  repeated EntityId evaluation_callees = 10; // nested argument evaluations must be nonmutating
+  // Exact CallSite identity within the enclosing function. Presence is required;
+  // zero-valued components alone do not mean a site was observed. This link
+  // does not certify a target, argument binding, or executable path.
+  ControlFlowCall call_site = 11;
+  repeated uint32 evaluated_call_temporaries = 12;
+  // Source access identity in the existing ExprNode tree. Only explicit
+  // read/store events carry this; evaluator bookkeeping is not a source access.
+  ControlFlowCall access_site = 13;
+}
+message MemoryBlock {
+  uint32 block_id = 1;
+  repeated uint32 successors = 2;
+  repeated MemoryOperation operations = 3;
+  bool is_entry = 4;
+  bool no_return = 5; // compiler-proven block cannot return normally
+  MemoryValue condition = 6; // if present, exactly two successors: true then false
+}
+message MemoryFunction {
+  uint32 version = 1;
+  bool complete = 2;
+  uint32 parameter_count = 3;
+  uint32 local_count = 4;
+  repeated MemoryBlock blocks = 5;
+  // Versioned frontend contract: all language-level operations in this body
+  // are covered by the defined-continuation evaluator. Missing/unknown versions
+  // cannot certify normal return, even when the memory CFG is complete.
+  uint32 normal_return_model_version = 6;
+  // ISO C++ edition used for this body (98, 11, 14, 17, 20, 23, 26).
+  // Zero means absent/unknown, never an implicit default for ordering proofs.
+  uint32 cxx_standard = 7;
+  // Unsupported effects are explicit MO_HAVOC operations. Unsupported control
+  // flow or extraction truncation makes the entire function incomplete.
+}
+
 message InitializationFunction {
   EntityId function = 1;
   repeated InitializationBlock blocks = 2;
@@ -842,7 +930,9 @@ message InitializationFunction {
   // must separately prove isolation; borrowed record fields cannot be mutated.
   bool own_effects_isolated = 12;
   repeated EntityId effect_callees = 13;
-  // Version-3 isolated constructor receiver, disjoint from output formals.
+  // Version-3 isolated constructor receiver, or version-9 ordinary record
+  // output layout. These modes are mutually exclusive and disjoint from scalar
+  // output formals and receiver inputs.
   bool is_constructor = 14;
   string constructor_record_identity = 15;
   uint32 constructor_field_count = 16;
@@ -862,6 +952,23 @@ message InitializationFunction {
   repeated InitializationCaller callers = 24;
   // Version 8: all borrowed formals are read-only; disjoint from sole output.
   repeated uint32 readonly_parameters = 25;
+  // Independent application-pointer-origin CFG using the same must-proof IR.
+  // IV_DEFINED means non-library origin only in this nested domain. It never
+  // establishes initialized bytes, valid lifetime or bounds. At most one level;
+  // obligation IDs occupy the high-bit namespace, disjoint from scalar reads.
+  InitializationFunction pointer_origin = 26;
+  // Checked external math return contract, including canonical ABI signature.
+  // Synthetic fallback only: any real definition (even incomplete) overrides it.
+  // Grants initialized scalar return only, never effects, ranges or provenance.
+  string library_return_contract = 27;
+  string return_record_identity = 28; // mutually exclusive with scalar_return
+  bool returns_initialized_pointer = 30; // pointer-value return domain, disjoint from scalar/record
+  repeated string parameter_record_identities = 29; // positional layouts, emitted only when at least one is a record
+  // Version 9: isolated ordinary Record* / Record& output. Uses the existing
+  // constructor record layout/field state, but is never a constructor identity.
+  bool has_record_output_parameter = 31;
+  uint32 record_output_parameter_index = 32;
+  MemoryFunction memory_flow = 33;
 }
 
 // ---------------------------------------------------------------------------
@@ -887,6 +994,11 @@ message BaselineCandidate {
   // Separate certificate: application-storage origin, NOT lifetime or bounds.
   string non_library_arguments = 9;
   string proof_failure = 10;
+  // Independent positive-witness vocabulary. Absent/unknown versions are NOT
+  // proofs. Never derive this from a failed safety proof or candidate reason.
+  uint32 violation_witness_version = 11;
+  string violation_witness_kind = 12;
+  repeated SourceRef violation_witness_sites = 13;
 }
 
 message Fact {

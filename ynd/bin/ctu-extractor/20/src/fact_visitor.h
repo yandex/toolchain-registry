@@ -344,6 +344,8 @@ private:
   // Populated by emitCallSite while the ordinary AST walk runs, then consumed
   // by emitControlFlow to attach resolved calls to their Clang CFG blocks.
   llvm::DenseMap<const Expr *, std::pair<uint64_t, uint64_t>> callSiteNodes_;
+  // Canonical read/write Access identity; {0,0} rejects ambiguous AST reuse.
+  llvm::DenseMap<std::pair<const Expr *, unsigned>, std::pair<uint64_t, uint64_t>> accessSiteNodes_;
   // `this`'s reserved ParamRegion index for the function currently being
   // walked (see paramRegionOf's CXXThisExpr case) — one past its own real
   // parameters, reset per function alongside the other per-function state

@@ -12,6 +12,12 @@ void emitBaselineCandidate(clang::ASTContext &ctx, llvm::StringRef rule,
 // exact function address. Mutable/externally supplied target sets stay unknown.
 const clang::FunctionDecl *exactFunctionPointerTarget(const clang::VarDecl *var);
 const clang::FunctionDecl *exactDirectCallee(const clang::CallExpr *call);
+// Return-value initialization only: no purity, range or input-memory claim.
+bool hasDefinedMathReturn(const clang::FunctionDecl *function, clang::ASTContext &ctx);
+void emitPositiveWitness(clang::ASTContext &ctx, llvm::StringRef rule,
+                         llvm::StringRef kind, clang::SourceLocation location,
+                         clang::SourceLocation evidence);
+void collectPositiveWitnessFacts(clang::ASTContext &ctx);
 void collectMemoryBaselineFacts(clang::ASTContext &ctx);
 void collectSemanticBaselineFacts(clang::ASTContext &ctx);
 

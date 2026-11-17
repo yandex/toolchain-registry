@@ -28,6 +28,7 @@ class Index : public clang::RecursiveASTVisitor<Index> {
   clang::ASTContext &Context;
   llvm::DenseMap<const clang::VarDecl *, Uses> Variables;
   bool Assembly = false;
+  bool ControlFlowUnknown = false;
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
   void escape(const clang::Expr *e) {
@@ -75,6 +76,8 @@ class Index : public clang::RecursiveASTVisitor<Index> {
     return true;
   }
   bool VisitCallExpr(clang::CallExpr *e) {
+    if (const auto *callee = e->getDirectCallee())
+      if (callee->hasAttr<clang::ReturnsTwiceAttr>()) ControlFlowUnknown = true;
     for (const auto *a : e->arguments()) if (a->isGLValue()) escape(a);
     return true;
   }

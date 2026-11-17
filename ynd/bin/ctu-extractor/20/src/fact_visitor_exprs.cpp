@@ -405,6 +405,7 @@ uint64_t FactVisitor::buildNode(Expr *E, const facts_pb::EntityId &fn, uint64_t 
 
   uint64_t id = ++nodeCounter_;
 
+
   facts_pb::ConstructKind ck = facts_pb::CK_LEAF;
   std::vector<Kid> kids;
   if (isa<CXXNoexceptExpr>(E) || isa<UnaryExprOrTypeTraitExpr>(E) ||
@@ -936,6 +937,10 @@ uint64_t FactVisitor::buildNode(Expr *E, const facts_pb::EntityId &fn, uint64_t 
   }
   if (trackable) {
     auto emitAccess = [&](facts_pb::Access::Kind k) {
+      const auto inserted=accessSiteNodes_.try_emplace(std::make_pair(E,unsigned(k==facts_pb::Access::WRITE)),std::make_pair(feid,id));
+      if (!inserted.second && inserted.first->second!=std::make_pair(feid,id))
+        inserted.first->second={0,0}; // shared AST use: no unique source access
+
       facts_pb::Fact af;
       facts_pb::Access *ac = af.mutable_access();
       *ac->mutable_function() = fn;
