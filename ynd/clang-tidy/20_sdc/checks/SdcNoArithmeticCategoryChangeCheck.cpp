@@ -43,7 +43,6 @@ namespace clang {
                         if (!ED->isFixed()) return Cat::Other;
                         return categorize(ED->getIntegerType());
                     }
-                    // MISRA numeric types exclude the boolean and character categories.
                     if (T->isBooleanType() || isCharacterCategory(T)) return Cat::Other;
                     if (T->isUnsignedIntegerType()) return Cat::Unsigned;
                     if (T->isSignedIntegerType()) return Cat::Signed;

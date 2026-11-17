@@ -1,0 +1,144 @@
+--- a/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.cpp
++++ b/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.cpp
+@@ -237,6 +237,8 @@
+ void ClangTidyContext::setCurrentFile(StringRef File) {
+   CurrentFile = std::string(File);
+   CurrentOptions = getOptionsForFile(CurrentFile);
++  NoLintHandler.setSdcDeviationsFile(
++      CurrentOptions.CheckOptions.lookup("sdc.DeviationsFile").Value);
+   CheckFilter = std::make_unique<CachedGlobList>(*getOptions().Checks);
+   WarningAsErrorFilter =
+       std::make_unique<CachedGlobList>(*getOptions().WarningsAsErrors);
+--- a/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.h
++++ b/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.h
+@@ -224,6 +224,8 @@
+ 
+   void setOptionsCollector(llvm::StringSet<> *Collector) {
+     OptionsCollector = Collector;
++    if (Collector)
++      Collector->insert("sdc.DeviationsFile");
+   }
+   llvm::StringSet<> *getOptionsCollector() const { return OptionsCollector; }
+ 
+--- a/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.h
++++ b/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.h
+@@ -34,6 +34,8 @@
+   NoLintDirectiveHandler(const NoLintDirectiveHandler &) = delete;
+   NoLintDirectiveHandler &operator=(const NoLintDirectiveHandler &) = delete;
+ 
++  void setSdcDeviationsFile(llvm::StringRef File);
++
+   bool shouldSuppress(DiagnosticsEngine::Level DiagLevel,
+                       const Diagnostic &Diag, llvm::StringRef DiagName,
+                       llvm::SmallVectorImpl<tooling::Diagnostic> &NoLintErrors,
+--- a/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.cpp
++++ b/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.cpp
+@@ -13,6 +13,8 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "NoLintDirectiveHandler.h"
++#include "yandex/SdcApprovedDeviations.h"
++#include <functional>
+ #include "GlobList.h"
+ #include "clang/Basic/LLVM.h"
+ #include "clang/Basic/SourceLocation.h"
+@@ -165,6 +167,8 @@
+     assert(this->Begin.checks() == End.checks());
+   }
+ 
++  size_t beginPos() const { return Begin.Pos; }
++
+   // Whether the provided diagnostic is within and is suppressible by this block
+   // of NOLINT(BEGIN/END) comments.
+   bool suppresses(size_t DiagPos, StringRef DiagName) const {
+@@ -217,6 +221,15 @@
+ 
+ class NoLintDirectiveHandler::Impl {
+ public:
++  void configureSdc(StringRef File) {
++    SdcDeviations.configure(File);
++    Cache.clear();
++  }
++
++private:
++  sdc::ApprovedDeviations SdcDeviations;
++
++public:
+   bool shouldSuppress(DiagnosticsEngine::Level DiagLevel,
+                       const Diagnostic &Diag, StringRef DiagName,
+                       SmallVectorImpl<tooling::Diagnostic> &NoLintErrors,
+@@ -283,23 +296,27 @@
+ // diagnostic `DiagName`.
+ static bool lineHasNoLint(StringRef Buffer,
+                           std::pair<size_t, size_t> LineStartAndEnd,
+-                          NoLintType Type, StringRef DiagName) {
++                          NoLintType Type, StringRef DiagName,
++                          const std::function<bool(unsigned)> &Approved) {
+   // Get all NOLINTs on the line.
+   Buffer = Buffer.slice(LineStartAndEnd.first, LineStartAndEnd.second);
+   SmallVector<NoLintToken> NoLints = getNoLints(Buffer);
+ 
+   // Do any of these NOLINTs match the desired type and diag name?
+   return llvm::any_of(NoLints, [&](const NoLintToken &NoLint) {
+-    return NoLint.Type == Type && NoLint.suppresses(DiagName);
++    return NoLint.Type == Type && NoLint.suppresses(DiagName) &&
++           Approved(LineStartAndEnd.first + NoLint.Pos);
+   });
+ }
+ 
+ // Whether the provided diagnostic is located within and is suppressible by a
+ // block of NOLINT(BEGIN/END) comments.
+ static bool withinNoLintBlock(ArrayRef<NoLintBlockToken> NoLintBlocks,
+-                              size_t DiagPos, StringRef DiagName) {
++                              size_t DiagPos, StringRef DiagName,
++                              const std::function<bool(unsigned)> &Approved) {
+   return llvm::any_of(NoLintBlocks, [&](const NoLintBlockToken &NoLintBlock) {
+-    return NoLintBlock.suppresses(DiagPos, DiagName);
++    return NoLintBlock.suppresses(DiagPos, DiagName) &&
++           Approved(NoLintBlock.beginPos());
+   });
+ }
+ 
+@@ -334,15 +351,20 @@
+   if (!Buffer)
+     return false;
+ 
++  const auto Approved = [&](unsigned Offset) {
++    return !DiagName.starts_with("sdc-") ||
++           SdcDeviations.allows(SrcMgr, File, *Buffer, Offset, NoLintErrors);
++  };
++
+   // Check if there's a NOLINT on this line.
+   auto ThisLine = getLineStartAndEnd(*Buffer, Pos);
+-  if (lineHasNoLint(*Buffer, ThisLine, NoLintType::NoLint, DiagName))
++  if (lineHasNoLint(*Buffer, ThisLine, NoLintType::NoLint, DiagName, Approved))
+     return true;
+ 
+   // Check if there's a NOLINTNEXTLINE on the previous line.
+   if (ThisLine.first > 0) {
+     auto PrevLine = getLineStartAndEnd(*Buffer, ThisLine.first - 1);
+-    if (lineHasNoLint(*Buffer, PrevLine, NoLintType::NoLintNextLine, DiagName))
++    if (lineHasNoLint(*Buffer, PrevLine, NoLintType::NoLintNextLine, DiagName, Approved))
+       return true;
+   }
+ 
+@@ -355,7 +377,7 @@
+     // Warning: heavy operation - need to read entire file.
+     generateCache(SrcMgr, *FileName, File, *Buffer, NoLintErrors);
+ 
+-  return withinNoLintBlock(Cache[*FileName], Pos, DiagName);
++  return withinNoLintBlock(Cache[*FileName], Pos, DiagName, Approved);
+ }
+ 
+ // Construct a [clang-tidy-nolint] diagnostic to do with the unmatched
+@@ -402,6 +424,10 @@
+ 
+ NoLintDirectiveHandler::~NoLintDirectiveHandler() = default;
+ 
++void NoLintDirectiveHandler::setSdcDeviationsFile(StringRef File) {
++  PImpl->configureSdc(File);
++}
++
+ bool NoLintDirectiveHandler::shouldSuppress(
+     DiagnosticsEngine::Level DiagLevel, const Diagnostic &Diag,
+     StringRef DiagName, SmallVectorImpl<tooling::Diagnostic> &NoLintErrors,
