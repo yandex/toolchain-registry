@@ -46,6 +46,10 @@ SourceLocation getCompletenessPoint(const Decl* Instance,
 bool isCompleteAt(const RecordDecl& Record, SourceLocation Point,
                   const SourceManager& SM) {
     const RecordDecl* Definition = Record.getDefinition();
+    if (const auto* CXXRecord = dyn_cast<CXXRecordDecl>(&Record)) {
+        if (const auto* Pattern = CXXRecord->getTemplateInstantiationPattern())
+            Definition = Pattern->getDefinition();
+    }
     if (!Definition)
         return false;
 
