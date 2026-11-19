@@ -16,6 +16,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
+
 using namespace clang::ast_matchers;
 
 namespace clang {
@@ -31,13 +33,60 @@ bool hasReachableEnumDefault(const CFGBlock* Block, ASTContext& Ctx) {
     }
     const Expr* Cond = Switch->getCond();
     const auto* Enum = Cond->IgnoreImpCasts()->getType()->getAs<EnumType>();
-    if (!Enum || !Enum->getDecl()->isFixed() || Cond->isValueDependent()) {
+    if (!Enum || Cond->isValueDependent()) {
         return false;
     }
-    // Preserve pruning for switches whose condition is known. Covering all
-    // enumerators alone does not cover the values of a fixed underlying type.
+    // Preserve pruning when the switch condition itself is known.
     Expr::EvalResult Value;
-    return !Cond->EvaluateAsInt(Value, Ctx);
+    if (Cond->EvaluateAsInt(Value, Ctx)) {
+        return false;
+    }
+    const EnumDecl* Decl = Enum->getDecl();
+    if (Decl->isFixed()) {
+        return true;
+    }
+
+    // A non-fixed enum can also have unnamed values: enumerators 0..4
+    // give a value range of 0..7. Count covered values, not enumerators,
+    // including explicit cases for unnamed values and GNU case ranges.
+    const unsigned PositiveBits = Decl->getNumPositiveBits();
+    const unsigned NegativeBits = Decl->getNumNegativeBits();
+    const unsigned RangeBits = NegativeBits
+        ? std::max(PositiveBits + 1, NegativeBits)
+        : PositiveBits;
+    // Extra bits keep both bounds and the range size representable, even
+    // for an enum spanning the entire underlying integer type.
+    const unsigned Width = Ctx.getIntWidth(Decl->getIntegerType()) + 2;
+    llvm::APInt Min(Width, 0);
+    llvm::APInt End = llvm::APInt(Width, 1).shl(
+        NegativeBits ? RangeBits - 1 : RangeBits);
+    if (NegativeBits) {
+        Min = -End;
+    }
+    llvm::APInt Covered(Width, 0);
+    for (const SwitchCase* Label = Switch->getSwitchCaseList(); Label;
+         Label = Label->getNextSwitchCase()) {
+        const auto* Case = dyn_cast<CaseStmt>(Label);
+        if (!Case) {
+            continue;
+        }
+        const auto Evaluate = [&](const Expr* E) {
+            return E->EvaluateKnownConstInt(Ctx).extOrTrunc(Width);
+        };
+        llvm::APInt First = Evaluate(Case->getLHS());
+        llvm::APInt Last = Case->getRHS() ? Evaluate(Case->getRHS()) : First;
+        if (First.slt(Min)) {
+            First = Min;
+        }
+        if (Last.sge(End)) {
+            Last = End - 1;
+        }
+        if (First.sle(Last)) {
+            // Valid switch cases cannot overlap.
+            Covered += Last - First + 1;
+        }
+    }
+    return Covered.ult(End - Min);
 }
 
 void scanReachable(const CFG& Cfg, ASTContext& Ctx, llvm::BitVector& Reachable) {
