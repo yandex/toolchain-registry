@@ -135,6 +135,9 @@ SdcIncludeFormatCheck.cpp
 SdcIncludeFormatCheck.h
 SdcIncludeOrderCheck.cpp
 SdcIncludeOrderCheck.h
+SdcIncludeWhatYouUseCheck.cpp
+SdcIncludeWhatYouUseCheck.h
+SdcIncludeWhatYouUseProviders.h
 SdcInitializeBasesCheck.cpp
 SdcInitializeBasesCheck.h
 SdcInitializeMembersCheck.cpp
@@ -427,7 +430,7 @@ add_clang_library(clangTidyYandexModule
 {{check_src}}
 {% endfor %}
 
-  LINK_LIBS clangTidy clangTidyUtils
+  LINK_LIBS clangTidy clangTidyUtils clangToolingInclusionsStdlib
   DEPENDS omp_gen ClangDriverOptions
 )
 

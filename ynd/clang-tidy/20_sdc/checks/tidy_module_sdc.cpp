@@ -55,6 +55,7 @@
 #include "SdcIncludeFilenameCharsCheck.h"
 #include "SdcIncludeFormatCheck.h"
 #include "SdcIncludeOrderCheck.h"
+#include "SdcIncludeWhatYouUseCheck.h"
 #include "SdcInitializeBasesCheck.h"
 #include "SdcInitializeMembersCheck.h"
 #include "SdcInitializeVariablesCheck.h"
@@ -226,6 +227,7 @@ public:
         CheckFactories.registerCheck<sdc::SdcIncludeFilenameCharsCheck>("sdc-include-filename-chars");
         CheckFactories.registerCheck<sdc::SdcIncludeFormatCheck>("sdc-include-format");
         CheckFactories.registerCheck<sdc::SdcIncludeOrderCheck>("sdc-include-order");
+        CheckFactories.registerCheck<sdc::SdcIncludeWhatYouUseCheck>("sdc-include-what-you-use");
         CheckFactories.registerCheck<sdc::SdcInitializeBasesCheck>("sdc-initialize-bases");
         CheckFactories.registerCheck<sdc::SdcInitializeMembersCheck>("sdc-initialize-members");
         CheckFactories.registerCheck<sdc::SdcInitializeVariablesCheck>("sdc-initialize-variables");
