@@ -1,0 +1,96 @@
+--- a/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.cpp
++++ b/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.cpp
+@@ -239,6 +239,8 @@
+   CurrentOptions = getOptionsForFile(CurrentFile);
+   NoLintHandler.setSdcDeviationsFile(
+       CurrentOptions.CheckOptions.lookup("sdc.DeviationsFile").Value);
++  NoLintHandler.setSdcBaselineFile(
++      CurrentOptions.CheckOptions.lookup("sdc.BaselineFile").Value);
+   CheckFilter = std::make_unique<CachedGlobList>(*getOptions().Checks);
+   WarningAsErrorFilter =
+       std::make_unique<CachedGlobList>(*getOptions().WarningsAsErrors);
+--- a/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.h
++++ b/clang-tools-extra/clang-tidy/ClangTidyDiagnosticConsumer.h
+@@ -226,6 +226,8 @@
+     OptionsCollector = Collector;
+     if (Collector)
+       Collector->insert("sdc.DeviationsFile");
++    if (Collector)
++      Collector->insert("sdc.BaselineFile");
+   }
+   llvm::StringSet<> *getOptionsCollector() const { return OptionsCollector; }
+ 
+--- a/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.cpp
++++ b/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.cpp
+@@ -14,6 +14,7 @@
+ 
+ #include "NoLintDirectiveHandler.h"
+ #include "yandex/SdcApprovedDeviations.h"
++#include "yandex/SdcDiagnosticBaseline.h"
+ #include <functional>
+ #include "GlobList.h"
+ #include "clang/Basic/LLVM.h"
+@@ -221,6 +222,8 @@
+ 
+ class NoLintDirectiveHandler::Impl {
+ public:
++  void configureBaseline(StringRef File) { Baseline.configure(File); }
++
+   void configureSdc(StringRef File) {
+     SdcDeviations.configure(File);
+     Cache.clear();
+@@ -228,6 +231,7 @@
+ 
+ private:
+   sdc::ApprovedDeviations SdcDeviations;
++  sdc::DiagnosticBaseline Baseline;
+ 
+ public:
+   bool shouldSuppress(DiagnosticsEngine::Level DiagLevel,
+@@ -258,6 +262,25 @@
+     bool AllowIO, bool EnableNoLintBlocks) {
+   if (DiagLevel >= DiagnosticsEngine::Error)
+     return false;
++  // Match only the primary diagnostic's physical expansion location. Do not
++  // borrow an allowance from a note or a macro definition in another file.
++  if (DiagLevel == DiagnosticsEngine::Warning &&
++      sdc::DiagnosticBaseline::eligible(DiagName) && Diag.hasSourceManager() &&
++      Diag.getLocation().isValid()) {
++    const auto &SM = Diag.getSourceManager();
++    const auto Loc = SM.getExpansionLoc(Diag.getLocation());
++    if (const auto File = SM.getFileEntryRefForID(SM.getFileID(Loc))) {
++      if (auto Message = Baseline.takeError(); !Message.empty()) {
++        tooling::Diagnostic Error;
++        Error.DiagLevel = tooling::Diagnostic::Error;
++        Error.DiagnosticName = "sdc-invalid-baseline";
++        Error.Message = tooling::DiagnosticMessage(Message, SM, Loc);
++        NoLintErrors.push_back(std::move(Error));
++      }
++      if (Baseline.matches(File->getName(), DiagName))
++        return true;
++    }
++  }
+   return diagHasNoLintInMacro(Diag, DiagName, NoLintErrors, AllowIO,
+                               EnableNoLintBlocks);
+ }
+@@ -424,6 +447,10 @@
+ 
+ NoLintDirectiveHandler::~NoLintDirectiveHandler() = default;
+ 
++void NoLintDirectiveHandler::setSdcBaselineFile(llvm::StringRef File) {
++  PImpl->configureBaseline(File);
++}
++
+ void NoLintDirectiveHandler::setSdcDeviationsFile(StringRef File) {
+   PImpl->configureSdc(File);
+ }
+--- a/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.h
++++ b/clang-tools-extra/clang-tidy/NoLintDirectiveHandler.h
+@@ -35,6 +35,7 @@
+   NoLintDirectiveHandler &operator=(const NoLintDirectiveHandler &) = delete;
+ 
+   void setSdcDeviationsFile(llvm::StringRef File);
++  void setSdcBaselineFile(llvm::StringRef File);
+ 
+   bool shouldSuppress(DiagnosticsEngine::Level DiagLevel,
+                       const Diagnostic &Diag, llvm::StringRef DiagName,

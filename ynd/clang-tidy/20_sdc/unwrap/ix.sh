@@ -62,6 +62,7 @@ SdcCastUtils.h
 SdcCodeSelection.cpp
 SdcCodeSelection.h
 SdcApprovedDeviations.h
+SdcDiagnosticBaseline.h
 SdcConsistentNoreturnCheck.cpp
 SdcConsistentNoreturnCheck.h
 SdcConsistentParameterNamesCheck.cpp
@@ -375,6 +376,7 @@ NATIVE_CLANG_DIR=$NATIVE_CLANG_DIR
 {% block tidy_patches %}
 dont-triggers-on-class-decls.patch
 approved-deviations.patch
+diagnostic-baseline.patch
 {% endblock %}
 
 {% block patch %}
