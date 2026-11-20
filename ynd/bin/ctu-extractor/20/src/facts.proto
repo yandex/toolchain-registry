@@ -21,7 +21,6 @@ syntax = "proto3";
 
 package ctu.facts.v2;
 
-option go_package = "a.yandex-team.ru/sdg/devtools/ctu-analyzer/schema/factspb;factspb";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -849,7 +848,7 @@ message MemoryAccess {
   bool is_volatile = 3; // value transport requires proven private storage
 }
 message MemoryValue {
-  enum Kind { MV_UNKNOWN = 0; MV_ARGUMENT = 1; MV_TEMPORARY = 2; MV_INTEGER = 3; MV_NULL = 4; MV_OFFSET = 5; MV_LOAD = 6; MV_LOCAL = 7; MV_SCALAR = 8; MV_BINARY = 9; MV_INTEGER_CAST = 10; MV_FUNCTION = 11; }
+  enum Kind { MV_UNKNOWN = 0; MV_ARGUMENT = 1; MV_TEMPORARY = 2; MV_INTEGER = 3; MV_NULL = 4; MV_OFFSET = 5; MV_LOAD = 6; MV_LOCAL = 7; MV_SCALAR = 8; MV_BINARY = 9; MV_INTEGER_CAST = 10; MV_FUNCTION = 11; MV_ARRAY_DECAY = 12; MV_POINTER_BINARY = 13; MV_POINTER_BOOL = 14; }
   Kind kind = 1;
   uint32 index = 2;
   sint64 integer = 3;
@@ -863,9 +862,12 @@ message MemoryValue {
   repeated uint32 evaluated_call_temporaries = 13; // require actual executed target to have no caller mutation
   EntityId function = 12; // exact function value, not a data-storage address
   repeated EntityId evaluation_callees = 11; // must prove no caller-memory mutation before re-reading operands
+  // Complete automatic array decay uses offset as the array byte extent.
+  SourceRef pointer_operation_loc = 14;
 }
 message MemoryOperation {
-  enum Kind { MO_UNKNOWN = 0; MO_BIND = 1; MO_ALLOCATE = 2; MO_STORE = 3; MO_FREE = 4; MO_ESCAPE = 5; MO_CALL = 6; MO_BEGIN_LOCAL = 7; MO_READ = 8; MO_RETURN = 9; MO_HAVOC = 10; MO_END_LOCAL = 11; MO_ZERO_BYTES = 12; MO_INDIRECT_CALL = 13; }
+  enum Kind { MO_UNKNOWN = 0; MO_BIND = 1; MO_ALLOCATE = 2; MO_STORE = 3; MO_FREE = 4; MO_ESCAPE = 5; MO_CALL = 6; MO_BEGIN_LOCAL = 7; MO_READ = 8; MO_RETURN = 9; MO_HAVOC = 10; MO_END_LOCAL = 11; MO_ZERO_BYTES = 12; MO_INDIRECT_CALL = 13; MO_COPY_BYTES = 14; MO_THROW = 15; MO_LIBRARY_CALL = 16; MO_GLOBAL_INCREMENT = 17; MO_DYNAMIC_VIRTUAL_CALL = 18; }
+  enum LibraryContract { ML_UNKNOWN = 0; ML_GETENV_LITERAL = 1; ML_TMPFILE = 2; ML_FPUTC = 3; ML_FGETC = 4; ML_FFLUSH = 5; ML_REWIND = 6; ML_FCLOSE = 7; ML_ALL_OF_POINTERS = 8; }
   Kind kind = 1;
   uint32 temporary = 2;
   MemoryValue value = 3;
@@ -884,6 +886,11 @@ message MemoryOperation {
   // Source access identity in the existing ExprNode tree. Only explicit
   // read/store events carry this; evaluator bookkeeping is not a source access.
   ControlFlowCall access_site = 13;
+  LibraryContract library_contract = 14;
+  EntityId affected_global = 15;
+  SourceRef standard_definition = 16;
+  // This exact AST call was counted by the closed reference census.
+  bool closed_census_reference = 17;
 }
 message MemoryBlock {
   uint32 block_id = 1;
@@ -892,6 +899,7 @@ message MemoryBlock {
   bool is_entry = 4;
   bool no_return = 5; // compiler-proven block cannot return normally
   MemoryValue condition = 6; // if present, exactly two successors: true then false
+  bool void_fallthrough = 7; // certified ordinary void function's CFG exit
 }
 message MemoryFunction {
   uint32 version = 1;
@@ -906,6 +914,10 @@ message MemoryFunction {
   // ISO C++ edition used for this body (98, 11, 14, 17, 20, 23, 26).
   // Zero means absent/unknown, never an implicit default for ordering proofs.
   uint32 cxx_standard = 7;
+  SourceRef noexcept_declaration = 8; // resolved nonthrowing function boundary
+  // Present only for a certified constructor/destructor body. Argument zero
+  // denotes the object undergoing that phase, with this storage extent.
+  uint64 phase_receiver_bytes = 9;
   // Unsupported effects are explicit MO_HAVOC operations. Unsupported control
   // flow or extraction truncation makes the entire function incomplete.
 }
@@ -969,6 +981,11 @@ message InitializationFunction {
   bool has_record_output_parameter = 31;
   uint32 record_output_parameter_index = 32;
   MemoryFunction memory_flow = 33;
+  // Analyzer-attached, producer-local operand topology. Not an extractor contract.
+  repeated ExprNode sequencing_nodes = 34;
+  // The closed caller census accounts for every reference to this internal
+  // function. Only direct calls in ordinary function bodies are admitted.
+  bool closed_unused_function_references = 35;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,8 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/CFG.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringSet.h"
 
 namespace {
 using Value = facts_pb::InitializationValue;
@@ -47,13 +49,19 @@ void emitMathContract(const FunctionDecl *callee, ASTContext &ctx) {
 
 struct CallerCensus {
   bool escaped = false;
+  bool onlyBodyCalls = true;
   std::map<const FunctionDecl *, unsigned> callers;
 };
 std::map<const FunctionDecl *, CallerCensus> callerCensus;
 bool censusOpaque = false;
+bool unusedCensusAliases = false;
+llvm::StringSet<> unusedCensusAsmLabels;
+llvm::DenseSet<const CallExpr *> unusedCensusBodyCalls;
 class CallerVisitor : public RecursiveASTVisitor<CallerVisitor> {
  public:
   explicit CallerVisitor(ASTContext &context) : context(context) {}
+  bool shouldVisitImplicitCode() const { return true; }
+  bool shouldVisitTemplateInstantiations() const { return true; }
   bool TraverseFunctionDecl(FunctionDecl *function) {
     const auto *previous = owner;
     owner = function;
@@ -63,6 +71,11 @@ class CallerVisitor : public RecursiveASTVisitor<CallerVisitor> {
   }
   bool VisitAsmStmt(AsmStmt *) { censusOpaque = true; return true; }
   bool VisitFileScopeAsmDecl(FileScopeAsmDecl *) { censusOpaque = true; return true; }
+  bool VisitNamedDecl(NamedDecl *decl) {
+    if (decl->hasAttr<AliasAttr>() || decl->hasAttr<WeakRefAttr>()) unusedCensusAliases = true;
+    if (const auto *label=decl->getAttr<AsmLabelAttr>()) unusedCensusAsmLabels.insert(label->getLabel());
+    return true;
+  }
   bool VisitDeclRefExpr(DeclRefExpr *ref) {
     const auto *fn = dyn_cast<FunctionDecl>(ref->getDecl());
     if (!fn || fn->isExternallyVisible() || isa<CXXMethodDecl>(fn) ||
@@ -83,6 +96,8 @@ class CallerVisitor : public RecursiveASTVisitor<CallerVisitor> {
       if (const auto *call = parents[0].get<CallExpr>()) {
         if (owner && !owner->isDependentContext() && !owner->getTemplatedKind() &&
             call->getCallee() == expr && call->getNumArgs() == fn->getNumParams()) {
+          if (isBodyCall(call)) unusedCensusBodyCalls.insert(call);
+          else census.onlyBodyCalls = false;
           if (census.callers.size() >= 256 ||
               ++census.callers[owner->getCanonicalDecl()] > 16384) {
             census.escaped = true;
@@ -97,6 +112,21 @@ class CallerVisitor : public RecursiveASTVisitor<CallerVisitor> {
     return true;
   }
  private:
+  bool isBodyCall(const CallExpr *call) {
+    // Default argument expressions and constructor initializers can execute
+    // outside the body in which their declarations were traversed.
+    const auto *body=dyn_cast_or_null<CompoundStmt>(owner->getBody());
+    if (!body || owner->isConstexpr()) return false;
+    const Stmt *stmt=call;
+    for (unsigned depth=0; depth<64; ++depth) {
+      if (stmt==body) return true;
+      const auto parents=context.getParents(*stmt);
+      if (parents.size()!=1) return false;
+      stmt=parents[0].get<Stmt>();
+      if (!stmt || isa<LambdaExpr>(stmt)) return false;
+    }
+    return false;
+  }
   ASTContext &context;
   const FunctionDecl *owner = nullptr;
   unsigned references = 0;
@@ -2188,6 +2218,131 @@ void buildPointerOrigins(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializa
 // Independent ordered memory facts. No lifetime or initialization candidate is
 // discharged merely because these facts exist; consumers must validate CFGs,
 // bind exact call arguments, and use the appropriate proof domain.
+bool characterPointer(QualType type) {
+  if (type.isNull() || type.isVolatileQualified() || !type->isPointerType()) return false;
+  const auto character=type->getPointeeType();
+  return character->isCharType() && !character.isVolatileQualified();
+}
+bool exactGetenv(const FunctionDecl *fn, ASTContext &ctx) {
+  if (!fn || !fn->getIdentifier() || fn->getName()!="getenv" || fn->hasBody() ||
+      !fn->isExternC() || fn->isVariadic() || fn->getNumParams()!=1 ||
+      !ctx.getSourceManager().isInSystemHeader(fn->getLocation())) return false;
+  const auto param=fn->getParamDecl(0)->getType();
+  const auto result=fn->getReturnType();
+  return characterPointer(param) && ctx.hasSameType(param->getPointeeType().getUnqualifiedType(),ctx.CharTy) &&
+      param->getPointeeType().isConstQualified() && characterPointer(result) &&
+      ctx.hasSameType(result->getPointeeType(),ctx.CharTy);
+}
+bool literalGetenv(const CallExpr *call, ASTContext &ctx) {
+  if (!call || !exactGetenv(call->getDirectCallee(),ctx) || call->getNumArgs()!=1) return false;
+  const auto *key=dyn_cast<StringLiteral>(call->getArg(0)->IgnoreParenImpCasts());
+  return key && key->isOrdinary();
+}
+
+// A system FILE typedef is part of each accepted library signature. A local
+// alias/shadow or another opaque record does not establish the contract.
+bool standardStreamPointer(QualType type, ASTContext &ctx) {
+  if (type.isNull() || type.isVolatileQualified() || !type->isPointerType()) return false;
+  const auto pointee=type->getPointeeType();
+  const auto *alias=pointee->getAs<TypedefType>();
+  return alias && alias->getDecl()->getName()=="FILE" &&
+      ctx.getSourceManager().isInSystemHeader(alias->getDecl()->getLocation()) &&
+      pointee->isRecordType() && !pointee.hasQualifiers();
+}
+facts_pb::MemoryOperation::LibraryContract streamContract(const FunctionDecl *fn, ASTContext &ctx) {
+  using MO=facts_pb::MemoryOperation;
+  if (!fn || !fn->getIdentifier() || fn->hasBody() || fn->isVariadic() || !fn->isExternC() ||
+      ctx.getCharWidth()!=8 || !ctx.getSourceManager().isInSystemHeader(fn->getLocation())) return MO::ML_UNKNOWN;
+  const auto name=fn->getName();
+  const auto result=fn->getReturnType();
+  if (name=="tmpfile" && fn->getNumParams()==0 && standardStreamPointer(result,ctx)) return MO::ML_TMPFILE;
+  if (name=="fputc" && fn->getNumParams()==2 && ctx.hasSameType(result,ctx.IntTy) &&
+      ctx.hasSameType(fn->getParamDecl(0)->getType(),ctx.IntTy) &&
+      standardStreamPointer(fn->getParamDecl(1)->getType(),ctx)) return MO::ML_FPUTC;
+  if (fn->getNumParams()!=1 || !standardStreamPointer(fn->getParamDecl(0)->getType(),ctx)) return MO::ML_UNKNOWN;
+  if (name=="rewind" && result->isVoidType()) return MO::ML_REWIND;
+  if (!ctx.hasSameType(result,ctx.IntTy)) return MO::ML_UNKNOWN;
+  if (name=="fgetc") return MO::ML_FGETC;
+  if (name=="fflush") return MO::ML_FFLUSH;
+  if (name=="fclose") return MO::ML_FCLOSE;
+  return MO::ML_UNKNOWN;
+}
+// Only the standard sequential pointer-range overload. Require the compiler's
+// instantiation of the system template and exclude user specializations.
+bool standardPointerAllOf(const CallExpr *call, ASTContext &ctx) {
+  if (!call || call->getNumArgs()!=3) return false;
+  const auto *fn=call->getDirectCallee();
+  if (!fn || !fn->getIdentifier() || fn->getName()!="all_of" ||
+      fn->getTemplateSpecializationKind()!=TSK_ImplicitInstantiation ||
+      !ctx.getSourceManager().isInSystemHeader(fn->getLocation()) ||
+      !fn->getReturnType()->isBooleanType()) return false;
+  const auto *space=dyn_cast<NamespaceDecl>(fn->getDeclContext());
+  const auto *pattern=fn->getTemplateInstantiationPattern();
+  if (!space || !space->isStdNamespace() || !pattern ||
+      !ctx.getSourceManager().isInSystemHeader(pattern->getLocation())) return false;
+  const auto first=call->getArg(0)->getType(), last=call->getArg(1)->getType();
+  if (!first->isPointerType() || !ctx.hasSameType(first,last)) return false;
+  const auto element=first->getPointeeType();
+  if (!element->isIntegerType() || element->isEnumeralType() || element.isVolatileQualified()) return false;
+  const auto predicate=call->getArg(2)->getType();
+  const auto *signature=predicate->isFunctionPointerType()
+    ? predicate->getPointeeType()->getAs<FunctionProtoType>() : nullptr;
+  return signature && !signature->isVariadic() && signature->getNumParams()==1 &&
+      signature->getReturnType()->isBooleanType() &&
+      ctx.hasSameUnqualifiedType(element,signature->getParamType(0));
+}
+
+const DeclRefExpr *unsignedGlobalUpdate(const Expr *expression, ASTContext &ctx) {
+  const Expr *target=nullptr;
+  if (const auto *unary=dyn_cast_or_null<UnaryOperator>(expression)) {
+    if (unary->isIncrementDecrementOp()) target=unary->getSubExpr();
+  } else if (const auto *binary=dyn_cast_or_null<CompoundAssignOperator>(expression)) {
+    if (binary->getOpcode()==BO_AddAssign || binary->getOpcode()==BO_SubAssign) {
+      const auto *one=dyn_cast<IntegerLiteral>(binary->getRHS()->IgnoreParenImpCasts());
+      if (one && one->getValue()==1) target=binary->getLHS();
+    }
+  }
+  const auto *reference=target ? dyn_cast<DeclRefExpr>(target->IgnoreParens()) : nullptr;
+  const auto *variable=reference ? dyn_cast<VarDecl>(reference->getDecl()) : nullptr;
+  if (!variable || !variable->isFileVarDecl() || variable->getTLSKind()!=VarDecl::TLS_None) return nullptr;
+  const auto type=variable->getType();
+  if (!type->isUnsignedIntegerType() || type->isBooleanType() || type->isEnumeralType() ||
+      type.isConstQualified() || type.isVolatileQualified() || ctx.getTypeSize(type)>64) return nullptr;
+  const auto parents=ctx.getParents(*expression);
+  return parents.size()==1 && parents[0].get<CompoundStmt>() ? reference : nullptr;
+}
+
+bool isUnsignedGlobalUpdateOperand(const DeclRefExpr *reference, ASTContext &ctx) {
+  const Expr *node=reference;
+  for (unsigned depth=0; depth<8; ++depth) {
+    const auto parents=ctx.getParents(*node);
+    if (parents.size()!=1) return false;
+    const auto *parent=parents[0].get<Expr>();
+    if (!parent) return false;
+    if (isa<ParenExpr>(parent)) { node=parent;continue; }
+    return unsignedGlobalUpdate(parent,ctx)==reference;
+  }
+  return false;
+}
+
+bool exactBuiltinCopy(const FunctionDecl *fn) {
+  return fn && fn->getBuiltinID() && fn->getName()=="__builtin_memcpy";
+}
+const Expr *copyBytePointer(const Expr *argument) {
+  // Strip only the implicit void-pointer view. Keep both array decay and
+  // the lvalue-to-rvalue conversion of a loaded pointer.
+  const auto *source=argument->IgnoreParens();
+  while (const auto *cast=dyn_cast<ImplicitCastExpr>(source)) {
+    if ((cast->getCastKind()!=CK_BitCast && cast->getCastKind()!=CK_NoOp) ||
+        !cast->getType()->isVoidPointerType()) break;
+    source=cast->getSubExpr()->IgnoreParens();
+  }
+  if (!source->getType()->isPointerType()) return nullptr;
+  const auto pointee=source->getType()->getPointeeType();
+  if (pointee.isVolatileQualified() || !pointee->isCharType()) return nullptr;
+  return source;
+}
+
 class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
  public:
   using MValue = facts_pb::MemoryValue;
@@ -2222,12 +2377,12 @@ class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
             CoroutineBodyStmt, StmtExpr, CXXNewExpr, CXXDeleteExpr>(stmt)) complete = false;
     if (const auto *expr = dyn_cast<Expr>(stmt)) {
       expressionOrdinals.emplace(expr,expressionOrdinals.size()+1);
-      if (isa<AtomicExpr, VAArgExpr, CXXDynamicCastExpr, CXXThrowExpr>(expr)) complete = false;
+      if (isa<AtomicExpr, VAArgExpr, CXXDynamicCastExpr>(expr)) complete = false;
       if (expr->HasSideEffects(ctx) && !isa<CallExpr, BinaryOperator, UnaryOperator,
           CXXConstructExpr, CastExpr, ParenExpr, ExprWithCleanups,
           CXXBindTemporaryExpr, MaterializeTemporaryExpr, InitListExpr,
           CXXDefaultArgExpr, CXXDefaultInitExpr, ConstantExpr,
-          ConditionalOperator, BinaryConditionalOperator>(expr)) complete = false;
+          ConditionalOperator, BinaryConditionalOperator, CXXThrowExpr>(expr)) complete = false;
     }
     return true;
   }
@@ -2365,6 +2520,50 @@ class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
     out.set_type(identity);
     return out;
   }
+  bool pointerWitnessSite(const Expr *expr) const {
+    // A source probe cannot stand in for the enclosing expression's
+    // sequencing. Certify simple full expressions only; nested values
+    // still participate in the normal transfer.
+    for (unsigned depth=0; depth<16; ++depth) {
+      const auto parents=ctx.getParents(*expr);
+      if (parents.size()!=1) return false;
+      const auto &parent=parents[0];
+      if (parent.get<CompoundStmt>() || parent.get<ReturnStmt>() || parent.get<VarDecl>()) return true;
+      if (const auto *test=parent.get<IfStmt>()) return test->getCond()==expr;
+      const auto *wrapper=parent.get<Expr>();
+      if (!wrapper || !isa<ParenExpr,ImplicitCastExpr>(wrapper)) return false;
+      expr=wrapper;
+    }
+    return false;
+  }
+  MValue pointerBinary(const BinaryOperator *expr, unsigned depth) {
+    MValue out;
+    const auto lhs=expr->getLHS()->getType(), rhs=expr->getRHS()->getType();
+    const bool left=lhs->isPointerType(), right=rhs->isPointerType();
+    const auto op=expr->getOpcode();
+    const bool bounds=(left && rhs->isIntegerType() && (op==BO_Add || op==BO_Sub)) ||
+                      (right && lhs->isIntegerType() && op==BO_Add);
+    const bool twoPointers=left && right &&
+        (op==BO_Sub || op==BO_LT || op==BO_LE || op==BO_GT || op==BO_GE);
+    if (!bounds && !twoPointers) return out;
+    const auto element=(left ? lhs : rhs)->getPointeeType();
+    if (!element->isIntegerType() || element->isEnumeralType() || element.isVolatileQualified()) return out;
+    if (twoPointers && !ctx.hasSameUnqualifiedType(element,rhs->getPointeeType())) return out;
+    std::vector<facts_pb::EntityId> requirements;
+    std::vector<uint32_t> evaluatedCalls;
+    if (!stableArgument(expr,0,&requirements,&evaluatedCalls)) return out;
+    out.set_kind(MValue::MV_POINTER_BINARY);
+    *out.mutable_access()=access(element);
+    *out.mutable_base()=value(expr->getLHS(),depth+1);
+    *out.mutable_rhs()=value(expr->getRHS(),depth+1);
+    out.set_binary_operator(expr->getOpcodeStr().str());
+    if (op==BO_Sub && twoPointers) integerType(out,expr->getType());
+    for (const auto &id:requirements) *out.add_evaluation_callees()=id;
+    for (const auto id:evaluatedCalls) out.add_evaluated_call_temporaries(id);
+    if (pointerWitnessSite(expr) && !isSystemLoc(expr->getOperatorLoc(),ctx.getSourceManager()))
+      setLoc(out.mutable_pointer_operation_loc(),expr->getOperatorLoc(),ctx.getSourceManager());
+    return out;
+  }
   MValue offset(MValue base, uint64_t bytes) {
     MValue out; out.set_kind(MValue::MV_OFFSET); out.set_offset(bytes); *out.mutable_base() = std::move(base); return out;
   }
@@ -2448,7 +2647,24 @@ class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
       switch (cast->getCastKind()) {
         case CK_FunctionToPointerDecay: return value(cast->getSubExpr(), depth + 1);
         case CK_LValueToRValue: return load(cast->getSubExpr(), depth + 1);
-        case CK_ArrayToPointerDecay: return address(cast->getSubExpr(), depth + 1);
+        case CK_PointerToBoolean:
+          out.set_kind(MValue::MV_POINTER_BOOL);
+          *out.mutable_base()=value(cast->getSubExpr(),depth+1);
+          return out;
+        case CK_ArrayToPointerDecay: {
+          auto base=address(cast->getSubExpr(),depth+1);
+          const auto *ref=dyn_cast<DeclRefExpr>(cast->getSubExpr()->IgnoreParens());
+          const auto *var=ref ? dyn_cast<VarDecl>(ref->getDecl()) : nullptr;
+          const auto *array=ctx.getAsConstantArrayType(cast->getSubExpr()->getType());
+          if (!var || !var->hasLocalStorage() || base.kind()!=MValue::MV_LOCAL || !array ||
+              !array->getElementType()->isIntegerType() || array->getElementType()->isEnumeralType() ||
+              array->getElementType().isVolatileQualified()) return base;
+          out.set_kind(MValue::MV_ARRAY_DECAY);
+          out.set_offset(ctx.getTypeSizeInChars(cast->getSubExpr()->getType()).getQuantity());
+          *out.mutable_access()=access(array->getElementType());
+          *out.mutable_base()=std::move(base);
+          return out;
+        }
         case CK_NullToPointer: out.set_kind(MValue::MV_NULL); return out;
         case CK_NoOp:
           // Explicit numeric casts can wrap the real implicit conversion in
@@ -2484,11 +2700,22 @@ class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
         return out;
       }
       if (unary->getOpcode() == UO_AddrOf) return address(unary->getSubExpr(), depth + 1);
+      if (unary->getOpcode()==UO_LNot) {
+        out.set_kind(MValue::MV_BINARY);
+        out.set_binary_operator("==");
+        *out.mutable_base()=value(unary->getSubExpr(),depth+1);
+        out.mutable_rhs()->set_kind(MValue::MV_INTEGER);
+        return out;
+      }
       if (unary->getOpcode() == UO_Deref && unary->getType()->isFunctionType()) return value(unary->getSubExpr(), depth + 1);
       if (unary->getOpcode() == UO_Deref) return load(expr, depth + 1);
     }
     if (isa<CXXNullPtrLiteralExpr>(expr)) {out.set_kind(MValue::MV_NULL);return out;}
     if (isa<FloatingLiteral>(expr)) {out.set_kind(MValue::MV_SCALAR);return out;}
+    if (const auto *binary=dyn_cast<BinaryOperator>(expr)) {
+      out=pointerBinary(binary,depth);
+      if (out.kind()!=MValue::MV_UNKNOWN) return out;
+    }
     Expr::EvalResult constant;
     if (!expr->HasSideEffects(ctx) && expr->getType()->isIntegerType() && expr->EvaluateAsInt(constant, ctx) && constant.Val.getInt().isSignedIntN(64) && (!constant.Val.getInt().isUnsigned() || constant.Val.getInt().getActiveBits() < 64)) {
       out.set_kind(MValue::MV_INTEGER);out.set_integer(constant.Val.getInt().isUnsigned() ? static_cast<int64_t>(constant.Val.getInt().getZExtValue()) : constant.Val.getInt().getSExtValue());return out;
@@ -2684,69 +2911,242 @@ class MemoryFacts : public RecursiveASTVisitor<MemoryFacts> {
 // this contract explicit and exhaustive: unsupported syntax cannot silently
 // disappear from a normal-return proof. Callee bodies are checked transitively
 // by the evaluator; this frontend checks their signatures and local syntax.
+// The evaluator only needs the object's identity. Exclude subobject
+// adjustments, member initialization and delegated construction.
+static const CXXRecordDecl *phaseReceiver(const FunctionDecl *fn) {
+  const auto *method=dyn_cast<CXXMethodDecl>(fn);
+  if (!method || fn->isDefaulted() || !isa<CompoundStmt>(fn->getBody())) return nullptr;
+  if (const auto *ctor=dyn_cast<CXXConstructorDecl>(fn)) {
+    if (ctor->getNumCtorInitializers()!=0) return nullptr;
+  } else if (!isa<CXXDestructorDecl>(fn)) return nullptr;
+  const auto *record=method->getParent()->getDefinition();
+  return record && !record->getNumBases() && record->field_empty() && record->isPolymorphic() &&
+      !record->isAbstract() ? record : nullptr;
+}
+
+static bool recordPointer(QualType type) {
+  if (type.isNull() || type.isVolatileQualified() || !type->isPointerType()) return false;
+  const auto object=type->getPointeeType();
+  return !object.isVolatileQualified() && object->getAsCXXRecordDecl();
+}
+
+static const MemberExpr *phaseVirtualCall(const CallExpr *call, ASTContext &ctx) {
+  const auto *memberCall=dyn_cast<CXXMemberCallExpr>(call);
+  if (!memberCall || call->getNumArgs() || !call->getType()->isVoidType()) return nullptr;
+  const auto *member=dyn_cast<MemberExpr>(call->getCallee()->IgnoreParens());
+  const auto *method=memberCall->getMethodDecl();
+  if (!member || !method || !method->isVirtual() || method->isPureVirtual() ||
+      member->hasQualifier() || !member->isArrow() || !recordPointer(member->getBase()->getType()))
+    return nullptr;
+  const auto parents=ctx.getParents(*call);
+  if (parents.size()!=1) return nullptr;
+  if (parents[0].get<CompoundStmt>()) return member;
+  const auto *test=parents[0].get<IfStmt>();
+  return test && (test->getThen()==call || test->getElse()==call) ? member : nullptr;
+}
+
 class NormalReturnModel : public RecursiveASTVisitor<NormalReturnModel> {
   ASTContext &ctx;
  public:
   bool valid = true;
   unsigned nodes = 0;
   explicit NormalReturnModel(ASTContext &context) : ctx(context) {}
+  mutable unsigned modelVersion = 1;
+  bool callbackType(QualType type) const {
+    if (type.isNull() || type.isVolatileQualified() || !type->isFunctionPointerType()) return false;
+    const auto *proto=type->getPointeeType()->getAs<FunctionProtoType>();
+    if (!proto || proto->isVariadic() ||
+        !(proto->getReturnType()->isVoidType() || integer(proto->getReturnType()) || characterPointer(proto->getReturnType()) || standardStreamPointer(proto->getReturnType(),ctx))) return false;
+    for (auto param:proto->param_types()) {
+      if (standardStreamPointer(param,ctx)) {if (modelVersion < 7) modelVersion=7;}
+      else if (recordPointer(param)) modelVersion=9;
+      else if (!integer(param) && !integerPointer(param) && !standardStreamPointer(param,ctx)) return false;
+    }
+    if (standardStreamPointer(proto->getReturnType(),ctx)) {
+      if (modelVersion < 7) modelVersion=7;
+    } else if (characterPointer(proto->getReturnType())) {
+      if (modelVersion < 6) modelVersion=6;
+    } else if (modelVersion < 3) modelVersion=3;
+    return true;
+  }
   bool integer(QualType type) const {
     return !type.isNull() && !type.isVolatileQualified() && type->isIntegerType() &&
       !type->isEnumeralType() && !type->isDependentType() && ctx.getTypeSize(type)<=64;
   }
-  bool signature(const FunctionDecl *fn) const {
-    if (!fn || isa<CXXMethodDecl>(fn) || fn->isVariadic() || fn->isDependentContext() ||
+  bool integerPointer(QualType type) const {
+    return !type.isNull() && !type.isVolatileQualified() &&
+      type->isPointerType() && integer(type->getPointeeType());
+  }
+  bool scalar(QualType type) const {
+    if (standardStreamPointer(type,ctx)) { if (modelVersion < 7) modelVersion=7;return true; }
+    if (recordPointer(type)) {modelVersion=9;return true;}
+    if (integer(type) || callbackType(type)) return true;
+    if (!integerPointer(type)) return false;
+    if (modelVersion < 2) modelVersion=2;
+    return true;
+  }
+  bool signature(const FunctionDecl *fn, bool phase = false) {
+    if (!fn || (isa<CXXMethodDecl>(fn) && !phase) || fn->isVariadic() || fn->isDependentContext() ||
         fn->hasAttr<ReturnsTwiceAttr>() || fn->getBuiltinID() ||
-        !(fn->getReturnType()->isVoidType() || integer(fn->getReturnType()))) return false;
-    for (const auto *param:fn->parameters()) if (!integer(param->getType())) return false;
+        !(fn->getReturnType()->isVoidType() || integer(fn->getReturnType()) || characterPointer(fn->getReturnType()) || standardStreamPointer(fn->getReturnType(),ctx))) return false;
+    if (phase) modelVersion=9;
+    if (standardStreamPointer(fn->getReturnType(),ctx)) if (modelVersion < 7) modelVersion=7;
+    if (characterPointer(fn->getReturnType()) && modelVersion < 6) modelVersion=6;
+    for (const auto *param:fn->parameters()) if (!scalar(param->getType())) return false;
     return true;
   }
   bool VisitStmt(Stmt *stmt) {
     if (++nodes>8192) {valid=false;return false;}
     if (!isa<CompoundStmt,DeclStmt,ReturnStmt,IfStmt,NullStmt,ParenExpr,
-        IntegerLiteral,CharacterLiteral,CXXBoolLiteralExpr,DeclRefExpr,
-        CastExpr,UnaryOperator,BinaryOperator,CallExpr>(stmt)) valid=false;
+        IntegerLiteral,CharacterLiteral,StringLiteral,CXXBoolLiteralExpr,DeclRefExpr,
+        CastExpr,UnaryOperator,BinaryOperator,CallExpr,CXXThrowExpr,InitListExpr,ImplicitValueInitExpr,
+        CXXThisExpr,MemberExpr,CXXNullPtrLiteralExpr>(stmt)) valid=false;
+    return true;
+  }
+  bool completeArray(QualType type) {
+    const auto *array=ctx.getAsConstantArrayType(type);
+    if (!array || !integer(array->getElementType())) return false;
+    if (modelVersion < 4) modelVersion=4;
     return true;
   }
   bool VisitVarDecl(VarDecl *decl) {
-    if (!decl->hasLocalStorage() || decl->hasAttr<CleanupAttr>() || !integer(decl->getType())) valid=false;
+    if (!decl->hasLocalStorage() || decl->hasAttr<CleanupAttr>()) {valid=false;return true;}
+    if (scalar(decl->getType())) return true;
+    if (!completeArray(decl->getType())) {valid=false;return true;}
+    if (decl->hasInit()) {
+      const auto *list=dyn_cast<InitListExpr>(decl->getInit()->IgnoreParenImpCasts());
+      if (!list) {valid=false;return true;}
+      for (const auto *item:list->inits())
+        if (!isa<IntegerLiteral,CharacterLiteral,CXXBoolLiteralExpr,ImplicitValueInitExpr>(item->IgnoreParenImpCasts()))
+          valid=false;
+    }
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr *expr) {
     if (const auto *decl=dyn_cast<VarDecl>(expr->getDecl())) {
-      if (!decl->hasLocalStorage() || !integer(decl->getType())) valid=false;
+      if (!decl->hasLocalStorage()) {
+        if (!isUnsignedGlobalUpdateOperand(expr,ctx)) valid=false;
+      } else if (!(scalar(decl->getType()) || completeArray(decl->getType()))) valid=false;
     } else if (const auto *fn=dyn_cast<FunctionDecl>(expr->getDecl())) {
-      if (!signature(fn)) valid=false;
+      const CallExpr *invocation=nullptr;
+      if (fn->getIdentifier() && fn->getName()=="all_of") {
+        const auto parents=ctx.getParents(*expr);
+        if (parents.size()==1) {
+        const auto *decay=parents[0].get<ImplicitCastExpr>();
+        if (decay) {
+          const auto ancestors=ctx.getParents(*decay);
+            if (ancestors.size()==1) invocation=ancestors[0].get<CallExpr>();
+          }
+        }
+      }
+      if (!standardPointerAllOf(invocation,ctx) && !exactBuiltinCopy(fn) && !exactGetenv(fn,ctx) && streamContract(fn,ctx)==facts_pb::MemoryOperation::ML_UNKNOWN && (!signature(fn) || fn->isNoReturn())) valid=false;
     } else valid=false;
     return true;
   }
   bool VisitCastExpr(CastExpr *expr) {
     const auto kind=expr->getCastKind();
-    if (kind==CK_FunctionToPointerDecay) return true; // only direct calls can consume it
+    if (kind==CK_NullToPointer && recordPointer(expr->getType())) {modelVersion=9;return true;}
+    if (kind==CK_PointerToBoolean && standardStreamPointer(expr->getSubExpr()->getType(),ctx)) {
+      if (modelVersion < 7) modelVersion=7;
+      return true;
+    }
+    if (kind==CK_ArrayToPointerDecay && isa<StringLiteral>(expr->getSubExpr()->IgnoreParens())) {
+      const auto parents=ctx.getParents(*expr);
+      if (parents.size()==1 && literalGetenv(parents[0].get<CallExpr>(),ctx)) return true;
+    }
+    if (kind==CK_ArrayToPointerDecay && completeArray(expr->getSubExpr()->getType()) &&
+        integerPointer(expr->getType()) && isa<DeclRefExpr>(expr->getSubExpr()->IgnoreParens())) return true;
+    if ((kind==CK_BitCast || kind==CK_NoOp) && expr->getType()->isVoidPointerType()) {
+      // Only the implicit byte-view conversion at the exact builtin call.
+      const auto parents=ctx.getParents(*expr);
+      const auto *call=parents.size()==1 ? parents[0].get<CallExpr>() : nullptr;
+      if (isa<ImplicitCastExpr>(expr) && call && exactBuiltinCopy(call->getDirectCallee()) &&
+          copyBytePointer(expr)) return true;
+    }
+    if (kind==CK_BuiltinFnToFnPtr) {
+      const auto *ref=dyn_cast<DeclRefExpr>(expr->getSubExpr()->IgnoreParenImpCasts());
+      if (ref && exactBuiltinCopy(dyn_cast<FunctionDecl>(ref->getDecl()))) return true;
+    }
+    if (kind==CK_FunctionToPointerDecay) return true; // direct call or exact function identity in memory IR
+    if ((kind==CK_LValueToRValue || kind==CK_NoOp) &&
+        scalar(expr->getType()) && scalar(expr->getSubExpr()->getType()) &&
+        ctx.hasSameUnqualifiedType(expr->getType(),expr->getSubExpr()->getType())) return true;
     if ((kind!=CK_LValueToRValue && kind!=CK_IntegralCast && kind!=CK_IntegralToBoolean && kind!=CK_NoOp) ||
         !integer(expr->getType()) || !integer(expr->getSubExpr()->getType())) valid=false;
     return true;
   }
   bool VisitUnaryOperator(UnaryOperator *expr) {
+    if (unsignedGlobalUpdate(expr,ctx)) {if (modelVersion < 8) modelVersion=8;return true;}
     const auto op=expr->getOpcode();
+    if (op==UO_Deref && integer(expr->getType()) && scalar(expr->getSubExpr()->getType()) &&
+        expr->getSubExpr()->getType()->isPointerType()) return true;
+    if (op==UO_AddrOf && scalar(expr->getType()) && integer(expr->getSubExpr()->getType()) &&
+        isa<DeclRefExpr>(expr->getSubExpr()->IgnoreParens())) return true;
     if (!integer(expr->getType()) || (op!=UO_Plus && op!=UO_LNot &&
         !(op==UO_Minus && isa<IntegerLiteral>(expr->getSubExpr()->IgnoreParenImpCasts())))) valid=false;
     return true;
   }
   bool VisitBinaryOperator(BinaryOperator *expr) {
-    if (!integer(expr->getType()) || expr->isCompoundAssignmentOp()) valid=false;
+    if (unsignedGlobalUpdate(expr,ctx)) {if (modelVersion < 8) modelVersion=8;return true;}
+    const auto lhs=expr->getLHS()->getType(), rhs=expr->getRHS()->getType();
+    const auto op=expr->getOpcode();
+    if ((integerPointer(lhs) && integer(rhs) && (op==BO_Add || op==BO_Sub)) ||
+        (integerPointer(rhs) && integer(lhs) && op==BO_Add) ||
+        (integerPointer(lhs) && integerPointer(rhs) &&
+         (op==BO_Sub || op==BO_LT || op==BO_LE || op==BO_GT || op==BO_GE))) {
+      if (modelVersion < 4) modelVersion=4;
+      return true;
+    }
+    if ((!integer(expr->getType()) &&
+         !(expr->getOpcode()==BO_Assign && callbackType(expr->getType()))) ||
+        expr->isCompoundAssignmentOp()) valid=false;
     if (expr->isAssignmentOp()) {
       const auto parents=ctx.getParents(*expr);
       if (parents.size()!=1 || !parents[0].get<CompoundStmt>() ||
-          !isa<DeclRefExpr>(expr->getLHS()->IgnoreParens())) valid=false;
+          !(isa<DeclRefExpr>(expr->getLHS()->IgnoreParens()) ||
+            (isa<UnaryOperator>(expr->getLHS()->IgnoreParens()) &&
+             cast<UnaryOperator>(expr->getLHS()->IgnoreParens())->getOpcode()==UO_Deref))) valid=false;
     }
+    return true;
+  }
+  bool VisitCXXThrowExpr(CXXThrowExpr *expr) {
+    const auto *operand=expr->getSubExpr();
+    // Rethrow and non-scalar exception objects need handler and destructor
+    // semantics. The complete body contract rejects handlers and cleanups.
+    const auto parents=ctx.getParents(*expr);
+    const auto *test=parents.size()==1 ? parents[0].get<IfStmt>() : nullptr;
+    const bool standalone=parents.size()==1 && (parents[0].get<CompoundStmt>() ||
+        (test && (test->getThen()==expr || test->getElse()==expr)));
+    if (!operand || !integer(operand->getType()) || !standalone) valid=false;
+    if (modelVersion < 5) modelVersion=5;
+    return true;
+  }
+  bool VisitMemberExpr(MemberExpr *expr) {
+    const auto parents=ctx.getParents(*expr);
+    const auto *call=parents.size()==1 ? parents[0].get<CXXMemberCallExpr>() : nullptr;
+    if (!call || phaseVirtualCall(call,ctx)!=expr) valid=false;
     return true;
   }
   bool VisitCallExpr(CallExpr *expr) {
     const auto *callee=expr->getDirectCallee();
     // Calling a noreturn function which returns is itself undefined. It cannot
     // establish defined continuation of a surrounding noreturn function.
-    if (!signature(callee) || callee->isNoReturn() || expr->getNumArgs()!=callee->getNumParams()) valid=false;
+    if (phaseVirtualCall(expr,ctx)) {
+      modelVersion=9;
+    } else if (standardPointerAllOf(expr,ctx)) {
+      if (modelVersion < 8) modelVersion=8;
+    } else if (streamContract(callee,ctx)!=facts_pb::MemoryOperation::ML_UNKNOWN) {
+      if (expr->getNumArgs()!=callee->getNumParams()) valid=false;
+      if (modelVersion < 7) modelVersion=7;
+    } else if (literalGetenv(expr,ctx)) {
+      if (modelVersion < 6) modelVersion=6;
+    } else if (exactBuiltinCopy(callee) && expr->getNumArgs()==3 &&
+        copyBytePointer(expr->getArg(0)) && copyBytePointer(expr->getArg(1)) &&
+        integer(expr->getArg(2)->getType())) {
+      if (modelVersion < 4) modelVersion=4;
+    } else if (callee) {
+      if (!signature(callee) || callee->isNoReturn() || expr->getNumArgs()!=callee->getNumParams()) valid=false;
+    } else if (!callbackType(expr->getCallee()->getType())) valid=false;
     return true;
   }
 };
@@ -2756,9 +3156,10 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
   using MV = facts_pb::MemoryValue; using MO = facts_pb::MemoryOperation;
   // Reuse the existing exact nonvirtual getter receiver contract. Its implicit
   // this is memory argument zero; declared scalar parameters follow it.
-  const bool receiver=isa<CXXMethodDecl>(fn) && parent->has_record_receiver() &&
-      !parent->receiver_is_parameter() && !parent->is_constructor();
-  auto *out = parent->mutable_memory_flow();out->set_version(5);out->set_parameter_count(fn->getNumParams()+(receiver?1:0));
+  const auto *phase=phaseReceiver(fn);
+  const bool receiver=phase || (isa<CXXMethodDecl>(fn) && parent->has_record_receiver() &&
+      !parent->receiver_is_parameter() && !parent->is_constructor());
+  auto *out = parent->mutable_memory_flow();out->set_version(6);out->set_parameter_count(fn->getNumParams()+(receiver?1:0));
   if ((isa<CXXMethodDecl>(fn) && !receiver) || fn->isVariadic() || fn->isDependentContext() ||
       fn->getReturnType()->isRValueReferenceType() || out->parameter_count() > 128) return;
   const auto &language = ctx.getLangOpts();
@@ -2767,7 +3168,7 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
       language.CPlusPlus14 ? 14 : language.CPlusPlus11 ? 11 :
       language.CPlusPlus ? 98 : 0);
   NormalReturnModel returnModel(ctx);
-  returnModel.valid=returnModel.signature(fn);
+  returnModel.valid=returnModel.signature(fn,phase != nullptr);
   for (auto *param:fn->parameters()) returnModel.VisitVarDecl(param);
   returnModel.TraverseStmt(fn->getBody());
   MemoryFacts flow(ctx,receiver);flow.function=parent->function();
@@ -2861,7 +3262,19 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
             auto *op=target->add_operations();op->set_kind(MO::MO_BIND);op->set_temporary(binding->second);*op->mutable_value()=std::move(value);
           } else flow.initialize(target,begin(v),v->getType(),v->getInit());
         }
+      } else if (const auto *expression=dyn_cast<Expr>(stmt); expression && unsignedGlobalUpdate(expression,ctx)) {
+        auto *op=target->add_operations();
+        op->set_kind(MO::MO_GLOBAL_INCREMENT);
+        const auto *reference=unsignedGlobalUpdate(expression,ctx);
+        computeVarEntityId(const_cast<VarDecl *>(cast<VarDecl>(reference->getDecl())),ctx,ctx.getSourceManager(),op->mutable_affected_global());
+        if (!isSystemLoc(expression->getExprLoc(),ctx.getSourceManager()))
+          setLoc(op->mutable_loc(),expression->getExprLoc(),ctx.getSourceManager());
       } else if (const auto *binary=dyn_cast<BinaryOperator>(stmt)) {
+        auto pointer=flow.pointerBinary(binary,0);
+        if (pointer.kind()==MV::MV_POINTER_BINARY) {
+          auto *op=target->add_operations();op->set_kind(MO::MO_READ);
+          *op->mutable_value()=std::move(pointer);
+        }
         const auto arithmetic=flow.arithmetic.find(binary);
         if (arithmetic!=flow.arithmetic.end() && !isSystemLoc(binary->getOperatorLoc(),ctx.getSourceManager())) {
           auto value=flow.value(binary);
@@ -2915,9 +3328,57 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
           }
         };
         const auto *callee=exactDirectCallee(call);
+        if (const auto *member=phaseVirtualCall(call,ctx)) {
+          if (flow.stableArgument(member->getBase())) {
+            op->set_kind(MO::MO_DYNAMIC_VIRTUAL_CALL);
+            *op->mutable_value()=flow.value(member->getBase());
+            continue;
+          }
+        }
         std::vector<facts_pb::EntityId> requirements;
         std::vector<uint32_t> evaluatedCalls;
         bool safeArguments=true;for(const auto *arg:call->arguments()) if(!flow.stableArgument(arg,0,&requirements,&evaluatedCalls)) safeArguments=false;
+        if (standardPointerAllOf(call,ctx) && flow.pointerWitnessSite(call) && safeArguments) {
+          op->set_kind(MO::MO_LIBRARY_CALL);
+          op->set_library_contract(MO::ML_ALL_OF_POINTERS);
+          setLoc(op->mutable_standard_definition(),callee->getLocation(),ctx.getSourceManager());
+          computeFuncEntityId(const_cast<FunctionDecl *>(callee),ctx,ctx.getSourceManager(),op->mutable_callee());
+          for (const auto *arg:call->arguments()) *op->add_arguments()=flow.value(arg);
+          *op->mutable_access()=flow.access(call->getArg(0)->getType()->getPointeeType());
+          for (const auto &id:requirements) *op->add_evaluation_callees()=id;
+          for (const auto id:evaluatedCalls) op->add_evaluated_call_temporaries(id);
+          continue;
+        }
+        const auto stream=streamContract(callee,ctx);
+        if (stream!=MO::ML_UNKNOWN && safeArguments && call->getNumArgs()==callee->getNumParams()) {
+          op->set_kind(MO::MO_LIBRARY_CALL);
+          op->set_library_contract(stream);
+          computeFuncEntityId(const_cast<FunctionDecl *>(callee),ctx,ctx.getSourceManager(),op->mutable_callee());
+          for (const auto *arg:call->arguments()) *op->add_arguments()=flow.value(arg);
+          for (const auto &id:requirements) *op->add_evaluation_callees()=id;
+          for (const auto id:evaluatedCalls) op->add_evaluated_call_temporaries(id);
+          continue;
+        }
+        if (literalGetenv(call,ctx)) {
+          op->set_kind(MO::MO_LIBRARY_CALL);
+          op->set_library_contract(MO::ML_GETENV_LITERAL);
+          computeFuncEntityId(const_cast<FunctionDecl *>(call->getDirectCallee()),ctx,ctx.getSourceManager(),op->mutable_callee());
+          continue;
+        }
+        if (exactBuiltinCopy(callee) && call->getNumArgs()==3 && safeArguments &&
+            flow.pointerWitnessSite(call) && !isSystemLoc(call->getExprLoc(),ctx.getSourceManager())) {
+          const auto *dst=copyBytePointer(call->getArg(0));
+          const auto *src=copyBytePointer(call->getArg(1));
+          if (dst && src && !dst->getType()->getPointeeType().isConstQualified()) {
+            op->set_kind(MO::MO_COPY_BYTES);
+            *op->mutable_destination()=flow.value(dst);
+            *op->mutable_value()=flow.value(src);
+            *op->add_arguments()=flow.value(call->getArg(2));
+            for (const auto &id:requirements) *op->add_evaluation_callees()=id;
+            for (const auto id:evaluatedCalls) op->add_evaluated_call_temporaries(id);
+            continue;
+          }
+        }
         if (!callee && !isa<CXXMemberCallExpr,CXXOperatorCallExpr>(call)) {
           const auto pointerType=call->getCallee()->getType();
           const auto *signature=pointerType->isFunctionPointerType()
@@ -2977,8 +3438,15 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
         else if (system && name=="free" && call->getNumArgs()==1 && callee->getReturnType()->isVoidType() && callee->getParamDecl(0)->getType()->isVoidPointerType()) {op->set_kind(MO::MO_FREE);*op->mutable_value()=flow.value(call->getArg(0));}
         else {
           op->set_kind(MO::MO_CALL);
+          op->set_closed_census_reference(unusedCensusBodyCalls.contains(call));
           observeLogicalWrite();
         }
+      } else if (const auto *thrown=dyn_cast<CXXThrowExpr>(stmt)) {
+        auto *op=target->add_operations();
+        op->set_kind(MO::MO_THROW);
+        *op->mutable_value()=flow.value(thrown->getSubExpr());
+        if (!isSystemLoc(thrown->getThrowLoc(),ctx.getSourceManager()))
+          setLoc(op->mutable_loc(),thrown->getThrowLoc(),ctx.getSourceManager());
       } else if (const auto *returned=dyn_cast<ReturnStmt>(stmt)) {
         auto *op=target->add_operations();op->set_kind(MO::MO_RETURN);
         if (returnModel.valid && fn->isNoReturn() && !isSystemLoc(returned->getReturnLoc(),ctx.getSourceManager())) {
@@ -2994,6 +3462,8 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
           candidate->set_initialization_obligation_id(obligation);
           g_facts.push_back(std::move(fact));
         }
+        if (characterPointer(fn->getReturnType()) && !isSystemLoc(returned->getReturnLoc(),ctx.getSourceManager()))
+          setLoc(op->mutable_loc(),returned->getReturnLoc(),ctx.getSourceManager());
         // An explicit void return evaluates no expression. Use a defined,
         // valueless marker instead of an unknown expression that could hide reads.
         if (!returned->getRetValue()) op->mutable_value()->set_kind(MV::MV_SCALAR);
@@ -3023,7 +3493,19 @@ void buildMemoryFacts(FunctionDecl *fn, ASTContext &ctx, facts_pb::Initializatio
 
   }
   out->set_complete(flow.complete);
-  if (flow.complete && returnModel.valid) out->set_normal_return_model_version(1);
+  if (flow.complete && returnModel.valid) {
+    out->set_normal_return_model_version(returnModel.modelVersion);
+    if (fn->getReturnType()->isVoidType() && !fn->isNoReturn() && !isa<CXXMethodDecl>(fn)) {
+      const auto exit=cfg->getExit().getBlockID();
+      for (auto &block:*out->mutable_blocks())
+        if (block.block_id()==exit) block.set_void_fallthrough(true);
+    }
+    if (phase && !isSystemLoc(fn->getLocation(),ctx.getSourceManager()))
+      out->set_phase_receiver_bytes(ctx.getTypeSizeInChars(ctx.getRecordType(phase)).getQuantity());
+    if (const auto *prototype=fn->getType()->getAs<FunctionProtoType>())
+      if (prototype->isNothrow())
+        setLoc(out->mutable_noexcept_declaration(),fn->getLocation(),ctx.getSourceManager());
+  }
 }
 
 } // namespace
@@ -3034,6 +3516,9 @@ void collectInitializationCallers(ASTContext &ctx) {
   ambiguousOriginAnchors.clear();
   callerCensus.clear();
   censusOpaque = false;
+  unusedCensusAliases = false;
+  unusedCensusAsmLabels.clear();
+  unusedCensusBodyCalls.clear();
   CallerVisitor(ctx).TraverseDecl(ctx.getTranslationUnitDecl());
 }
 
@@ -3104,6 +3589,12 @@ void emitInitializationFlow(FunctionDecl *function, ASTContext &ctx,
     // Argument proofs are per slot: unsupported pointer/object arguments stay
     // unknown without preventing a proof for unrelated scalar arguments.
     out->set_closed_callers(true);
+    if (ctx.getLangOpts().CPlusPlus && census->second.onlyBodyCalls && !unusedCensusAliases &&
+        function->getFormalLinkage()==Linkage::Internal && !function->isInlined() &&
+        !function->isConstexpr() && !function->isImplicit() && !function->isDefaulted() &&
+        !isSystemLoc(function->getLocation(),ctx.getSourceManager()) &&
+        !unusedCensusAsmLabels.count(mangleName(function,ctx)))
+      out->set_closed_unused_function_references(true);
     for (const auto &entry : census->second.callers) {
       auto *caller = out->add_callers();
       computeFuncEntityId(const_cast<FunctionDecl *>(entry.first), ctx,
