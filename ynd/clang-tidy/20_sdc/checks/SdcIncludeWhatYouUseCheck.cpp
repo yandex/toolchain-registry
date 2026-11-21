@@ -623,6 +623,23 @@ namespace clang::tidy::sdc {
                 return Result;
             }
 
+            bool VisitCXXRecordDecl(CXXRecordDecl* Decl) {
+                const auto* Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Decl);
+                if (!Specialization || !isTemplateInstantiation(Specialization->getSpecializationKind()) ||
+                    !Decl->isThisDeclarationADefinition()) {
+                    return true;
+                }
+                // Constructing a polymorphic specialization can instantiate its
+                // virtual callbacks without a direct call to the overriding method.
+                // Only follow bodies Sema actually instantiated, not unused hooks.
+                for (const auto* Method : Decl->methods()) {
+                    if (Method->isVirtual() && Method->doesThisDeclarationHaveABody()) {
+                        recordReference(Decl->getLocation(), Method);
+                    }
+                }
+                return true;
+            }
+
             bool VisitVarTemplateSpecializationDecl(VarTemplateSpecializationDecl* Decl) {
                 if (isTemplateExplicitInstantiationOrSpecialization(Decl->getSpecializationKind())) {
                     recordReference(Decl->getLocation(), Decl->getSpecializedTemplate());
@@ -922,6 +939,7 @@ namespace clang::tidy::sdc {
         Graph Exporters;
         Graph UsedIncludes;
         llvm::SmallPtrSet<File, 32> DiagnosticEffectHeaders;
+        llvm::SmallPtrSet<File, 32> MacroCleanupHeaders;
         llvm::StringMap<Files> PublicHeaders;
         llvm::DenseMap<File, llvm::SmallPtrSet<File, 32>> ReachableCache;
         llvm::DenseSet<std::pair<File, File>> UsedIncludePaths;
@@ -977,6 +995,10 @@ namespace clang::tidy::sdc {
             unsigned NextDiagnosticMapping = 0;
             llvm::SmallVector<DiagnosticState, 32> DiagnosticStack;
             llvm::DenseMap<FileID, DiagnosticState> EntryDiagnostics;
+            // Record a macro's initial state only when it changes. Propagating
+            // first changes at file exit also accounts for nested cleanup headers.
+            using MacroStates = llvm::DenseMap<const IdentifierInfo*, bool>;
+            llvm::DenseMap<FileID, MacroStates> EntryMacros;
             llvm::DenseMap<const MacroInfo*, Files> MacroProviders;
 
             const Files& macroProviders(const MacroDefinition& Definition) {
@@ -1007,6 +1029,33 @@ namespace clang::tidy::sdc {
                 return MacroProviders.try_emplace(Macro, std::move(Headers)).first->second;
             }
 
+            void recordMacroChange(const Token& Token, bool WasDefined) {
+                auto FID = State.SM->getFileID(State.SM->getSpellingLoc(Token.getLocation()));
+                auto Entry = EntryMacros.find(FID);
+                if (Entry != EntryMacros.end()) {
+                    Entry->second.try_emplace(Token.getIdentifierInfo(), WasDefined);
+                }
+            }
+
+            void finishMacroChanges(FileID FID, FileID ParentFID) {
+                auto Entry = EntryMacros.find(FID);
+                if (Entry == EntryMacros.end()) {
+                    return;
+                }
+                auto Parent = EntryMacros.find(ParentFID);
+                for (const auto& [Name, WasDefined] : Entry->second) {
+                    if (WasDefined && !State.PP->getMacroDefinition(Name).getMacroInfo()) {
+                        if (File Header = State.SM->getFileEntryForID(FID)) {
+                            State.MacroCleanupHeaders.insert(Header);
+                        }
+                    }
+                    if (Parent != EntryMacros.end()) {
+                        Parent->second.try_emplace(Name, WasDefined);
+                    }
+                }
+                EntryMacros.erase(Entry);
+            }
+
             void recordMacro(const Token& Token, const MacroDefinition& Definition) {
                 if (!State.CheckUnusedIncludes || !Definition.getMacroInfo()) {
                     return;
@@ -1033,8 +1082,10 @@ namespace clang::tidy::sdc {
                 }
                 if (Reason == LexedFileChangeReason::EnterFile) {
                     EntryDiagnostics[FID] = Diagnostics;
+                    EntryMacros.try_emplace(FID);
                     return;
                 }
+                finishMacroChanges(PrevFID, FID);
                 auto Entry = EntryDiagnostics.find(PrevFID);
                 if (Entry == EntryDiagnostics.end()) {
                     return;
@@ -1087,10 +1138,12 @@ namespace clang::tidy::sdc {
                 }
             }
 
-            void MacroDefined(const Token&, const MacroDirective* Directive) override {
+            void MacroDefined(const Token& Token, const MacroDirective* Directive) override {
                 if (!State.CheckUnusedIncludes) {
                     return;
                 }
+                const auto* Previous = Directive->getPrevious();
+                recordMacroChange(Token, Previous && Previous->isDefined());
                 const auto* Macro = Directive->getMacroInfo();
                 const auto Location = writtenLocation(*State.SM, Macro->getDefinitionLoc());
                 if (Location.isInvalid() || State.SM->isWrittenInMainFile(Location)) {
@@ -1115,6 +1168,13 @@ namespace clang::tidy::sdc {
                 // Other replacement lists may hide semantic dependencies even
                 // without external identifiers, e.g. placement new or a UDL.
                 State.UnobservedMacros.insert(Macro);
+            }
+
+            void MacroUndefined(const Token& Token, const MacroDefinition& Definition,
+                                const MacroDirective*) override {
+                if (State.CheckUnusedIncludes) {
+                    recordMacroChange(Token, Definition.getMacroInfo() != nullptr);
+                }
             }
 
             void MacroExpands(const Token& Token, const MacroDefinition& Definition, SourceRange,
@@ -1641,7 +1701,8 @@ namespace clang::tidy::sdc {
             }
             for (const auto& Include : Includes) {
                 if (Include.Keep || SM->isInSystemHeader(Include.Location) || isAssociatedHeader(Include) ||
-                    UnobservedHeaders.contains(Include.Parent) || DiagnosticEffectHeaders.contains(Include.Header)) {
+                    UnobservedHeaders.contains(Include.Parent) || DiagnosticEffectHeaders.contains(Include.Header) ||
+                    MacroCleanupHeaders.contains(Include.Header)) {
                     continue;
                 }
                 auto Used = UsedIncludes.find(Include.Parent);
