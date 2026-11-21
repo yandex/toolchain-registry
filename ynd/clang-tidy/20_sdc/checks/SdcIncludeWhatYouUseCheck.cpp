@@ -915,7 +915,7 @@ namespace clang::tidy::sdc {
 
     } // namespace
 
-    class SdcIncludeWhatYouUseCheck::Analysis {
+    class SdcIncludeWhatYouUseCheck::Analysis: public CommentHandler {
     public:
         Analysis(SdcIncludeWhatYouUseCheck& Check, StringRef Facades, StringRef SymbolProviders,
                  bool CheckUnusedIncludes)
@@ -937,6 +937,7 @@ namespace clang::tidy::sdc {
         llvm::SmallVector<Include, 64> Includes;
         Graph DirectIncludes;
         Graph Exporters;
+        llvm::DenseMap<FileID, unsigned> ExportBlocks;
         Graph UsedIncludes;
         llvm::SmallPtrSet<File, 32> DiagnosticEffectHeaders;
         llvm::SmallPtrSet<File, 32> MacroCleanupHeaders;
@@ -982,6 +983,30 @@ namespace clang::tidy::sdc {
                 return Tail.trim() == Pragma;
             }
             return false;
+        }
+
+        bool HandleComment(Preprocessor &, SourceRange Range) override {
+          StringRef Text = Lexer::getSourceText(
+              CharSourceRange::getCharRange(Range), *SM, PP->getLangOpts());
+          if (Text.consume_front("//")) {
+            Text = Text.trim();
+          } else if (Text.consume_front("/*") && Text.consume_back("*/")) {
+            Text = Text.trim();
+          } else {
+            return false;
+          }
+          // An export block belongs to one physical inclusion. A block in a
+          // parent cannot export a child's dependencies or leak into siblings.
+          auto FID = SM->getFileID(Range.getBegin());
+          if (Text == "IWYU pragma: begin_exports") {
+            ++ExportBlocks[FID];
+          } else if (Text == "IWYU pragma: end_exports") {
+            auto Found = ExportBlocks.find(FID);
+            if (Found != ExportBlocks.end() && --Found->second == 0) {
+              ExportBlocks.erase(Found);
+            }
+          }
+          return false;
         }
 
         class IncludeRecorder: public PPCallbacks {
@@ -1125,7 +1150,9 @@ namespace clang::tidy::sdc {
                     return;
                 }
                 File Included = &Header->getFileEntry();
-                bool Export = State.hasPragma(Range, "IWYU pragma: export");
+                bool Export =
+                    State.ExportBlocks.count(State.SM->getFileID(HashLoc)) ||
+                    State.hasPragma(Range, "IWYU pragma: export");
                 bool Keep = Export || State.hasPragma(Range, "IWYU pragma: keep");
                 State.Includes.push_back(
                     {Included, Spelling.str(), Header->getName().str(), Parent, HashLoc, Range, Keep});
@@ -1796,6 +1823,7 @@ namespace clang::tidy::sdc {
                                                         Preprocessor*) {
         State->SM = &SM;
         State->PP = PP;
+        PP->addCommentHandler(State.get());
         PP->addPPCallbacks(std::make_unique<Analysis::IncludeRecorder>(*State));
     }
 
@@ -1808,6 +1836,7 @@ namespace clang::tidy::sdc {
     }
 
     void SdcIncludeWhatYouUseCheck::onEndOfTranslationUnit() {
+        State->PP->removeCommentHandler(State.get());
         State->finish();
     }
 

@@ -169,6 +169,14 @@ namespace clang::tidy::sdc::include_what_you_use {
 
         // Socket and network APIs: <sys/socket.h>, <netinet/in.h>, <sys/un.h>,
         // <netdb.h>, and <sys/uio.h>; socket structures may live in bits/socket.h.
+        // POSIX.1-2017 <arpa/inet.h> and <netinet/in.h> explicitly promise
+        // these integer types; other <stdint.h> names are only incidental.
+        // https://man7.org/linux/man-pages/man0/arpa_inet.h.0p.html
+        // https://man7.org/linux/man-pages/man0/netinet_in.h.0p.html
+        {"uint16_t", "arpa/inet.h"},
+        {"uint32_t", "arpa/inet.h"},
+        {"uint8_t", "netinet/in.h"},
+        {"uint32_t", "netinet/in.h"},
         {"sockaddr", "sys/socket.h"},
         {"sockaddr_storage", "sys/socket.h"},
         {"socklen_t", "sys/socket.h"},
