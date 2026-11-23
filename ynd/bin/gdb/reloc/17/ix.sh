@@ -90,6 +90,10 @@ lib/c
 
 {% block patch %}
 {{super()}}
+
+(base64 -d | patch -p1) << EOF
+{{ix.load_file('//bin/gdb/reloc/17/patches/compressed-scripts.patch') | b64e}}
+EOF
 sed -e 's| = { 0 }|; memset(tpidrs, 0, sizeof(tpidrs))|' \
     -i gdb/aarch64-linux-nat.c
 

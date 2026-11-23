@@ -119,6 +119,7 @@
   "ynd/bin/gdb/pretty_printers/yabs_printers.py":"devtools/gdb/yabs_printers.py",
   "ynd/bin/gdb/pretty_printers/yt_fibers_printer.py":"devtools/gdb/yt_fibers_printer.py",
   "ynd/bin/gdb/reloc/17/ix.sh":"toolchains/ynd/bin/gdb/reloc/17/ix.sh",
+  "ynd/bin/gdb/reloc/17/patches/compressed-scripts.patch":"toolchains/ynd/bin/gdb/reloc/17/patches/compressed-scripts.patch",
   "ynd/bin/iwyu/22/ix.sh":"toolchains/ynd/bin/iwyu/22/ix.sh",
   "ynd/bin/iwyu/24/ix.sh":"toolchains/ynd/bin/iwyu/24/ix.sh",
   "ynd/bin/ix.sh":"toolchains/ynd/bin/ix.sh",
