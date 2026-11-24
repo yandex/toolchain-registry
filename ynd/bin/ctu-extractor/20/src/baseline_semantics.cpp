@@ -47,6 +47,9 @@ class DeadStoreObserver : public clang::LiveVariables::Observer {
       for (const auto *declaration : declarations->decls())
         if (const auto *variable = clang::dyn_cast<clang::VarDecl>(declaration))
           if (variable->hasInit()) {
+            // Array bounds, template arguments and captureless lambdas can
+            // refer to a constant without making its storage live in this CFG.
+            if (variable->isReferenced() && variable->isUsableInConstantExpressions(Context)) continue;
             report(variable, variable->getLocation(), live);
             if (privateDeadValue(variable, live) &&
                 !variable->getInit()->HasSideEffects(Context))
