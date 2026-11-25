@@ -26,6 +26,7 @@ struct DeviationEntry {
 struct DeviationRegistry {
     std::string Root;
     std::vector<DeviationEntry> Deviations;
+    std::vector<std::string> ExcludeDirs;
 };
 } // namespace clang::tidy::sdc
 
@@ -44,6 +45,7 @@ template <> struct MappingTraits<clang::tidy::sdc::DeviationRegistry> {
     static void mapping(IO &IO, clang::tidy::sdc::DeviationRegistry &Registry) {
         IO.mapRequired("root", Registry.Root);
         IO.mapRequired("deviations", Registry.Deviations);
+        IO.mapOptional("exclude_dirs", Registry.ExcludeDirs);
     }
 };
 } // namespace llvm::yaml
@@ -61,6 +63,7 @@ public:
         Loaded = false;
         RegistryError.clear();
         Limits.clear();
+        ExcludeDirs.clear();
     }
 
     bool allows(const SourceManager &SM, FileID File, llvm::StringRef Buffer,
@@ -72,7 +75,16 @@ public:
         }
         load();
         auto &State = Files[File.getHashValue()];
-        if (!State.Scanned) scan(SM, File, Buffer, State);
+        if (!State.Scanned) {
+            State.Scanned = true;
+            if (const auto Entry = SM.getFileEntryRefForID(File))
+                State.Path = absolutePath(Entry->getName(), "");
+            State.Excluded = llvm::any_of(ExcludeDirs, [&](const std::string &Dir) {
+                return isBelow(State.Path, Dir);
+            });
+            if (!State.Excluded) scan(SM, File, Buffer, State);
+        }
+        if (State.Excluded) return true;
         const auto Found = State.Directives.find(Offset);
         std::string Reason;
         if (!RegistryError.empty()) {
@@ -106,6 +118,7 @@ private:
     using Key = std::pair<std::string, std::string>;
     struct FileState {
         bool Scanned = false;
+        bool Excluded = false;
         std::string Path;
         std::map<unsigned, std::string> Directives;
         std::map<std::string, uint64_t> Counts;
@@ -125,6 +138,11 @@ private:
         return std::string(Result);
     }
 
+    static bool isBelow(llvm::StringRef Path, llvm::StringRef Dir) {
+        return Path.consume_front(Dir) && !Path.empty() &&
+               (llvm::sys::path::is_separator(Dir.back()) || llvm::sys::path::is_separator(Path.front()));
+    }
+
     static bool validID(llvm::StringRef ID) {
         return !ID.empty() && llvm::all_of(ID, [](char C) {
             return llvm::isAlnum(C) || C == '-' || C == '_' || C == '.';
@@ -134,6 +152,7 @@ private:
     void invalid(llvm::StringRef Reason) {
         RegistryError = "invalid SDC deviations file '" + RegistryFile + "': " + Reason.str();
         Limits.clear();
+        ExcludeDirs.clear();
     }
 
     void load() {
@@ -159,6 +178,15 @@ private:
         const std::string RegistryPath = absolutePath(RegistryFile, "");
         const std::string Root = absolutePath(Registry.Root,
                                               llvm::sys::path::parent_path(RegistryPath));
+        for (const std::string &Dir : Registry.ExcludeDirs) {
+            const auto Path = absolutePath(Dir, Root);
+            if (Dir.empty() || llvm::sys::path::is_absolute(Dir) ||
+                Dir.find_first_of("*?") != std::string::npos || !isBelow(Path, Root)) {
+                invalid("expected exclude_dirs to contain literal relative directories beneath root");
+                return;
+            }
+            ExcludeDirs.push_back(Path);
+        }
         for (const auto &Entry : Registry.Deviations) {
             const llvm::StringRef Source = Entry.SourceFile;
             const llvm::StringRef ID = Entry.ID;
@@ -179,9 +207,6 @@ private:
     // authorize a NOLINT, even though upstream searches raw source text.
     static void scan(const SourceManager &SM, FileID File, llvm::StringRef Buffer,
                      FileState &State) {
-        State.Scanned = true;
-        if (const auto Entry = SM.getFileEntryRefForID(File))
-            State.Path = absolutePath(Entry->getName(), "");
         LangOptions Lang;
         Lang.CPlusPlus = true;
         Lang.CPlusPlus11 = true;
@@ -236,6 +261,7 @@ private:
     bool Loaded = false;
     std::string RegistryError;
     std::map<Key, uint64_t> Limits;
+    std::vector<std::string> ExcludeDirs;
     const SourceManager *Manager = nullptr;
     std::map<unsigned, FileState> Files;
 };
