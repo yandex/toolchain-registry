@@ -5,23 +5,32 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/FileEntry.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Format/Format.h"
+#include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/PPConditionalDirectiveRecord.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Tooling/Inclusions/HeaderIncludes.h"
 #include "clang/Tooling/Inclusions/StandardLibrary.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/YAMLTraits.h"
 
+#include <algorithm>
+#include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -816,9 +825,9 @@ namespace clang::tidy::sdc {
 #if LLVM_VERSION_MAJOR >= 22
                     auto Qualifier = Loc.getNestedNameSpecifier();
                     if (Qualifier.getKind() == NestedNameSpecifier::Kind::Namespace) {
-                        const auto* Namespace = Qualifier.getAsNamespaceAndPrefix().Namespace;
+                        const auto [Namespace, Prefix] = Loc.getAsNamespaceAndPrefix();
                         recordReference(Loc.getLocalBeginLoc(), dyn_cast<NamespaceAliasDecl>(Namespace));
-                        recordLookupImports(Loc.getLocalBeginLoc(), Namespace, Loc.getPrefix());
+                        recordLookupImports(Loc.getLocalBeginLoc(), Namespace, Prefix);
                     }
 #else
                     const auto* Qualifier = Loc.getNestedNameSpecifier();
@@ -917,16 +926,13 @@ namespace clang::tidy::sdc {
 
     class SdcIncludeWhatYouUseCheck::Analysis: public CommentHandler {
     public:
-        Analysis(SdcIncludeWhatYouUseCheck& Check, StringRef Facades, StringRef SymbolProviders,
-                 bool CheckUnusedIncludes)
-            : Check(Check)
-            , Facades(Facades.str())
-            , SymbolProviders(SymbolProviders.str())
-            , CheckUnusedIncludes(CheckUnusedIncludes)
-        {
-        }
+        Analysis(SdcIncludeWhatYouUseCheck& Check, ClangTidyContext& TidyContext, StringRef Facades,
+                 StringRef SymbolProviders, bool CheckUnusedIncludes)
+            : Check(Check), TidyContext(TidyContext), Facades(Facades.str()), SymbolProviders(SymbolProviders.str()),
+              CheckUnusedIncludes(CheckUnusedIncludes) {}
 
         SdcIncludeWhatYouUseCheck& Check;
+        ClangTidyContext& TidyContext;
         std::string Facades;
         std::string SymbolProviders;
         std::map<std::string, ProviderSet> ConfiguredProviders;
@@ -946,7 +952,11 @@ namespace clang::tidy::sdc {
         llvm::DenseSet<std::pair<File, File>> UsedIncludePaths;
         llvm::SmallVector<MacroReference, 32> MacroReferences;
         llvm::SmallPtrSet<const MacroInfo*, 32> UnobservedMacros;
-        std::set<std::pair<unsigned, const NamedDecl*>> DiagnosedMentions;
+        PPConditionalDirectiveRecord* Conditions = nullptr;
+        NoLintDirectiveHandler UseSuppressions;
+        llvm::SmallPtrSet<File, 16> ManualIncludePlacement;
+        llvm::DenseMap<File, SourceLocation> FirstInclude;
+        llvm::DenseMap<FileID, llvm::SmallVector<unsigned, 4>> PlacementBarriers;
         llvm::DenseMap<const NamedDecl*, ProviderSet> ProviderCache;
         llvm::DenseMap<const NamedDecl*, Files> DefinitionProviderCache;
         llvm::DenseMap<const NamedDecl*, Files> DeclarationCache;
@@ -1000,6 +1010,7 @@ namespace clang::tidy::sdc {
           auto FID = SM->getFileID(Range.getBegin());
           if (Text == "IWYU pragma: begin_exports") {
             ++ExportBlocks[FID];
+            ManualIncludePlacement.insert(fileAt(Range.getBegin()));
           } else if (Text == "IWYU pragma: end_exports") {
             auto Found = ExportBlocks.find(FID);
             if (Found != ExportBlocks.end() && --Found->second == 0) {
@@ -1059,6 +1070,20 @@ namespace clang::tidy::sdc {
                 auto Entry = EntryMacros.find(FID);
                 if (Entry != EntryMacros.end()) {
                     Entry->second.try_emplace(Token.getIdentifierInfo(), WasDefined);
+                }
+            }
+
+            void recordPlacementBarrier(SourceLocation Location) {
+                auto Loc = writtenLocation(*State.SM, Location);
+                if (Loc.isValid()) {
+                    auto [FID, Offset] = State.SM->getDecomposedLoc(Loc);
+                    auto& Barriers = State.PlacementBarriers[FID];
+                    // A pragma in an include filename expands before InclusionDirective.
+                    if (!Barriers.empty() && Offset < Barriers.back()) {
+                        Barriers.insert(llvm::lower_bound(Barriers, Offset), Offset);
+                    } else {
+                        Barriers.push_back(Offset);
+                    }
                 }
             }
 
@@ -1123,6 +1148,11 @@ namespace clang::tidy::sdc {
                 EntryDiagnostics.erase(Entry);
             }
 
+            void PragmaDirective(SourceLocation Location, PragmaIntroducerKind) override {
+                // A macro can expand to _Pragma and change state in the caller.
+                recordPlacementBarrier(State.SM->getExpansionLoc(Location));
+            }
+
             void PragmaDiagnosticPush(SourceLocation, StringRef) override {
                 if (State.CheckUnusedIncludes) {
                     DiagnosticStack.push_back(Diagnostics);
@@ -1145,11 +1175,19 @@ namespace clang::tidy::sdc {
             void InclusionDirective(SourceLocation HashLoc, const Token&, StringRef Spelling, bool Angled,
                                     CharSourceRange Range, OptionalFileEntryRef Header, StringRef, StringRef,
                                     const Module*, bool, SrcMgr::CharacteristicKind) override {
+                // A direct include can configure later headers through any depth
+                // of inclusion, even when its body is skipped in this TU.
+                recordPlacementBarrier(HashLoc);
                 File Parent = State.fileAt(HashLoc);
                 if (!Parent || !Header) {
                     return;
                 }
                 File Included = &Header->getFileEntry();
+                State.FirstInclude.try_emplace(Parent, HashLoc);
+                auto Leaf = llvm::sys::path::filename(Spelling);
+                if (Leaf == "webrtc_workaround_start.h" || Leaf == "webrtc_workaround_end.h") {
+                    State.ManualIncludePlacement.insert(Parent);
+                }
                 bool Export =
                     State.ExportBlocks.count(State.SM->getFileID(HashLoc)) ||
                     State.hasPragma(Range, "IWYU pragma: export");
@@ -1166,6 +1204,7 @@ namespace clang::tidy::sdc {
             }
 
             void MacroDefined(const Token& Token, const MacroDirective* Directive) override {
+                recordPlacementBarrier(Token.getLocation());
                 if (!State.CheckUnusedIncludes) {
                     return;
                 }
@@ -1199,6 +1238,7 @@ namespace clang::tidy::sdc {
 
             void MacroUndefined(const Token& Token, const MacroDefinition& Definition,
                                 const MacroDirective*) override {
+                recordPlacementBarrier(Token.getLocation());
                 if (State.CheckUnusedIncludes) {
                     recordMacroChange(Token, Definition.getMacroInfo() != nullptr);
                 }
@@ -1740,7 +1780,44 @@ namespace clang::tidy::sdc {
             }
         }
 
-        void diagnose(const Mention& Use) {
+        // A preferred spelling identifies one edit, even for different types.
+        // Without a preferred public header, keep each binding independently actionable.
+        using GroupKey = std::pair<std::string, const NamedDecl*>;
+        using Groups = std::map<GroupKey, llvm::SmallVector<Mention, 4>>;
+
+        static tooling::IncludeStyle insertionStyle(const Groups& FileGroups) {
+            // Give the proposed headers their own trailing category. HeaderIncludes
+            // still handles comments, header guards and the limits of the leading block.
+            std::string Proposed;
+            for (const auto& [Key, Uses] : FileGroups) {
+                if (!Key.first.empty()) {
+                    if (!Proposed.empty()) {
+                        Proposed += '|';
+                    }
+                    Proposed += llvm::Regex::escape(Key.first);
+                }
+            }
+            auto Style = format::getLLVMStyle().IncludeStyle;
+            // Existing includes also precede a proposed main header (priority 0).
+            Style.IncludeCategories = {{"^(" + Proposed + ")$", 1, 1, true}, {".*", -1, -1, true}};
+            return Style;
+        }
+
+        bool suppressedAt(SourceLocation Location) {
+            // The primary warning moves to the include block. Query clang-tidy's
+            // own NOLINT parser at the original use before aggregating it.
+            DiagnosticStorage Storage;
+            Diagnostic AtUse(&Context->getDiagnostics(), Location, 0, Storage, {});
+            llvm::SmallVector<tooling::Diagnostic, 1> Errors;
+            bool Suppressed =
+                UseSuppressions.shouldSuppress(DiagnosticsEngine::Warning, AtUse, Check.getID(), Errors, true, true);
+            for (const auto& Error : Errors) {
+                TidyContext.diag(Error);
+            }
+            return Suppressed;
+        }
+
+        void collectMissing(const Mention& Use, llvm::DenseMap<File, Groups>& ByFile) {
             auto Location = writtenLocation(*SM, Use.Location);
             File Owner = fileAt(Location);
             if (!Owner || isMacroLocal(Use)) {
@@ -1759,15 +1836,136 @@ namespace clang::tidy::sdc {
                     }
                 }
             }
-            if (!DiagnosedMentions.emplace(Location.getRawEncoding(), Use.Binding).second) {
+            if (suppressedAt(Location)) {
                 return;
             }
-            Check.diag(Location, "type '%0' requires a directly included declaration provider")
-                << symbolName(Use.Binding);
-            if (!Providers.Primary.empty()) {
-                Check.diag(Location, "add #include %0 (primary provider)", DiagnosticIDs::Note) << Providers.Primary;
+            auto& Group = ByFile[Owner][{Providers.Primary, Providers.Primary.empty() ? Use.Binding : nullptr}];
+            Group.push_back({Location, Use.Binding});
+        }
+
+        std::optional<FixItHint> planInsertion(const tooling::HeaderIncludes& Inserter, FileID FID, StringRef Primary,
+                                               ArrayRef<Mention> Uses) {
+            bool Angled = Primary.starts_with("<");
+            auto Name = Primary.drop_front().drop_back();
+            if (Name.empty() || Name.find_first_of("\r\n<>\"") != StringRef::npos) {
+                return std::nullopt;
             }
-            Check.diag(Use.Binding->getLocation(), "declaration is here", DiagnosticIDs::Note);
+            auto Edit = Inserter.insert(Name, Angled, tooling::IncludeDirective::Include);
+            if (!Edit) {
+                return std::nullopt;
+            }
+            auto Site = SM->getLocForStartOfFile(FID).getLocWithOffset(Edit->getOffset());
+            // Configuration supplied after the leading include block must stay
+            // ahead of the provider, so keep the warning and omit that edit.
+            auto Changes = PlacementBarriers.find(FID);
+            unsigned NextChange = std::numeric_limits<unsigned>::max();
+            if (Changes != PlacementBarriers.end()) {
+                auto Next = llvm::lower_bound(Changes->second, Edit->getOffset());
+                if (Next != Changes->second.end()) {
+                    NextChange = *Next;
+                }
+            }
+            if (llvm::any_of(Uses, [&](const Mention& Use) {
+                    auto [UseFID, Offset] = SM->getDecomposedLoc(Use.Location);
+                    return UseFID != FID || Offset < Edit->getOffset() || NextChange < Offset ||
+                           Conditions->areInDifferentConditionalDirectiveRegion(Site, Use.Location);
+                })) {
+                return std::nullopt;
+            }
+            // A configured primary can be absent from the include search path,
+            // or resolve relative to this header rather than to the main file.
+            auto Owner = *SM->getFileEntryRefForID(FID);
+            auto Target =
+                PP->getHeaderSearchInfo().LookupFile(Name, Site, Angled, nullptr, nullptr, {{Owner, Owner.getDir()}},
+                                                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+            if (!Target || includedFiles(&Target->getFileEntry()).contains(&Owner.getFileEntry())) {
+                return std::nullopt;
+            }
+            auto Text = Edit->getReplacementText().str();
+            if (SM->getBufferData(FID).contains("\r\n") && !StringRef(Text).contains("\r\n")) {
+                llvm::SmallVector<StringRef, 3> Lines;
+                StringRef(Text).split(Lines, '\n');
+                Text = llvm::join(Lines, "\r\n");
+            }
+            return FixItHint::CreateInsertion(Site, Text);
+        }
+
+        void emitUseNotes(llvm::SmallVectorImpl<Mention>& Uses, StringRef Primary) {
+            // RAV can reach the same spelling through several macro expansions.
+            // Count unique written uses and select the first in physical source order.
+            auto Position = [&](const Mention& Use) {
+                return std::make_pair(SM->getFileOffset(Use.Location), Use.Binding);
+            };
+            llvm::stable_sort(Uses, [&](const Mention& A, const Mention& B) { return Position(A) < Position(B); });
+            Uses.erase(std::unique(Uses.begin(), Uses.end(),
+                                   [&](const Mention& A, const Mention& B) { return Position(A) == Position(B); }),
+                       Uses.end());
+            llvm::DenseMap<const NamedDecl*, unsigned> Counts;
+            for (const auto& Use : Uses) {
+                ++Counts[Use.Binding];
+            }
+            // With -line-filter even a later use can be the only changed line.
+            // clang-tidy checks the note locations as well as the primary anchor.
+            const bool LineFilter = !TidyContext.getGlobalOptions().LineFilter.empty();
+            for (const auto& Use : Uses) {
+                auto& Count = Counts[Use.Binding];
+                if (!Count) {
+                    if (LineFilter) {
+                        Check.diag(Use.Location, "type '%0' is also used here", DiagnosticIDs::Note)
+                            << symbolName(Use.Binding);
+                    }
+                    continue;
+                }
+                Check.diag(Use.Location, "type '%0' is used here (%1 %plural{1:use|:uses}1 in this file)",
+                           DiagnosticIDs::Note)
+                    << symbolName(Use.Binding) << Count;
+                if (!Primary.empty()) {
+                    Check.diag(Use.Location, "add #include %0 (primary provider)", DiagnosticIDs::Note) << Primary;
+                }
+                Check.diag(Use.Binding->getLocation(), "declaration is here", DiagnosticIDs::Note);
+                Count = 0;
+            }
+        }
+
+        void diagnoseMissing(ArrayRef<Mention> Mentions) {
+            llvm::DenseMap<File, Groups> ByFile;
+            for (const auto& Use : Mentions) {
+                collectMissing(Use, ByFile);
+            }
+            for (auto& [Owner, FileGroups] : ByFile) {
+                auto FID = SM->getFileID(FileGroups.begin()->second.front().Location);
+                auto Start = SM->getLocForStartOfFile(FID);
+                auto Anchor = FirstInclude.lookup(Owner);
+                if (Anchor.isInvalid()) {
+                    Anchor = Start;
+                }
+                std::optional<tooling::HeaderIncludes> Inserter;
+                for (auto& [Key, Uses] : FileGroups) {
+                    const auto& [Primary, Unresolved] = Key;
+                    std::optional<FixItHint> Fix;
+                    if (!Unresolved && !ManualIncludePlacement.contains(Owner) && !PP->isInNamedModule()) {
+                        if (!Inserter) {
+                            Inserter.emplace(SM->getFilename(Start), SM->getBufferData(FID), insertionStyle(FileGroups));
+                        }
+                        Fix = planInsertion(*Inserter, FID, Primary, Uses);
+                    }
+                    // A NOLINT on an unrelated existing include applies to that
+                    // directive. Keep the actual edit at its own location.
+                    auto Site = Fix ? Fix->RemoveRange.getBegin() : Anchor;
+                    if (suppressedAt(Site)) {
+                        Site = Uses.front().Location;
+                    }
+                    {
+                        auto Warning = Check.diag(Site, Unresolved ? "missing direct declaration provider for type '%0'"
+                                                                   : "missing direct include %0");
+                        Warning << (Unresolved ? symbolName(Unresolved) : Primary);
+                        if (Fix) {
+                            Warning << *Fix;
+                        }
+                    }
+                    emitUseNotes(Uses, Primary);
+                }
+            }
         }
 
         void finish() {
@@ -1791,9 +1989,7 @@ namespace clang::tidy::sdc {
                     providers(Decl);
                 }
             }
-            for (const auto& Use : Mentions) {
-                diagnose(Use);
-            }
+            diagnoseMissing(Mentions);
             if (CheckUnusedIncludes) {
                 // Written bindings retain aliases and using declarations. Add
                 // semantic references without adding any missing-type obligations.
@@ -1806,12 +2002,9 @@ namespace clang::tidy::sdc {
     };
 
     SdcIncludeWhatYouUseCheck::SdcIncludeWhatYouUseCheck(StringRef Name, ClangTidyContext* Context)
-        : ClangTidyCheck(Name, Context)
-        ,
-        State(std::make_unique<Analysis>(*this, Options.get("Facades", "{}"), Options.get("SymbolProviders", "{}"),
-                                         Options.get("CheckUnusedIncludes", true)))
-    {
-    }
+        : ClangTidyCheck(Name, Context), State(std::make_unique<Analysis>(*this, *Context, Options.get("Facades", "{}"),
+                                                                          Options.get("SymbolProviders", "{}"),
+                                                                          Options.get("CheckUnusedIncludes", true))) {}
 
     SdcIncludeWhatYouUseCheck::~SdcIncludeWhatYouUseCheck() = default;
 
@@ -1823,6 +2016,9 @@ namespace clang::tidy::sdc {
                                                         Preprocessor*) {
         State->SM = &SM;
         State->PP = PP;
+        auto Conditions = std::make_unique<PPConditionalDirectiveRecord>(PP->getSourceManager());
+        State->Conditions = Conditions.get();
+        PP->addPPCallbacks(std::move(Conditions));
         PP->addCommentHandler(State.get());
         PP->addPPCallbacks(std::make_unique<Analysis::IncludeRecorder>(*State));
     }

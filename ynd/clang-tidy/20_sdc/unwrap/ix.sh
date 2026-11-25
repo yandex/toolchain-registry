@@ -435,7 +435,7 @@ add_clang_library(clangTidyYandexModule
 )
 
 clang_target_link_libraries(clangTidyYandexModule
-  PRIVATE clangAnalysis clangAST clangASTMatchers clangBasic clangLex
+  PRIVATE clangAnalysis clangAST clangASTMatchers clangBasic clangFormat clangLex clangToolingInclusions
 )
 EOF
 
