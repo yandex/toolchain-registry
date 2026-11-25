@@ -79,7 +79,9 @@ void SdcReturnValueUsedCheck::check(const MatchFinder::MatchResult& Result) {
 void SdcReturnValueUsedCheck::checkUnusedFunctionCall(
     const CallExpr* Call, const MatchFinder::MatchResult& Result) {
     // Skip void functions
-    QualType ReturnType = Call->getCallReturnType(*Result.Context);
+    // A builtin callee can have a placeholder type. The call expression
+    // already carries the result type needed for the void check.
+    QualType ReturnType = Call->getType();
     if (ReturnType.isNull() || ReturnType->isVoidType()) {
         return;
     }
@@ -119,7 +121,7 @@ void SdcReturnValueUsedCheck::checkUnusedLambdaCall(
 
 void SdcReturnValueUsedCheck::checkUnusedMemberCall(
     const CXXMemberCallExpr* MemberCall, const MatchFinder::MatchResult& Result) {
-    QualType ReturnType = MemberCall->getCallReturnType(*Result.Context);
+    QualType ReturnType = MemberCall->getType();
     if (ReturnType.isNull() || ReturnType->isVoidType()) {
         return;
     }
