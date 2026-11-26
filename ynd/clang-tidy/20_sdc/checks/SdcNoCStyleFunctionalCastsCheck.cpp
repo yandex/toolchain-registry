@@ -51,13 +51,13 @@ namespace clang {
                 // macro body this is the definition; for a cast written as a
                 // macro argument it remains the argument at the call site.
                 PrimaryLocation = SM.getSpellingLoc(CastLocation);
-                if (!PrimaryLocation.isValid() ||
-                    SM.isInSystemHeader(PrimaryLocation)) {
-                    return false;
-                }
-
                 ExpansionLocation = SM.getExpansionLoc(CastLocation);
-                return true;
+                // Token pasting spells the type name in Clang's scratch buffer.
+                // Anchor the diagnostic at the invocation that produced it.
+                if (SM.isWrittenInScratchSpace(PrimaryLocation)) {
+                    PrimaryLocation = ExpansionLocation;
+                }
+                return PrimaryLocation.isValid() && !SM.isInSystemHeader(PrimaryLocation);
             }
 
             void SdcNoCStyleFunctionalCastsCheck::check(const MatchFinder::MatchResult& Result) {
