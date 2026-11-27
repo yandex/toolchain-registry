@@ -173,6 +173,17 @@ static void checkForwardCall(const CallExpr* CE, SdcPolicyCheck* Check,
     }
 
     const auto* P = dyn_cast<ParmVarDecl>(ArgDRE->getDecl());
+    // A requires-expression can model perfect forwarding with a local T&&
+    // parameter. It has no enclosing function parameter to forward at runtime.
+    if (P && isa<RequiresExprBodyDecl>(P->getDeclContext())) {
+        QualType Type = P->getType();
+        QualType Pointee = Type.getNonReferenceType();
+        if (Type->isRValueReferenceType() && !Pointee.hasQualifiers() &&
+            Pointee->isTemplateTypeParmType() &&
+            (Context.hasSameType(ForwardT, Pointee) || isDecltypeOfParam(ForwardT, P))) {
+            return;
+        }
+    }
     if (!P || !isForwardingRef(P)) {
         for (const Decl* Instance :
              Instances.claim(*CE, CE->getBeginLoc(), Context)) {

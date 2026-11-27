@@ -418,15 +418,22 @@ namespace clang {
                     const FunctionDecl* FD = CE->getDirectCallee();
                     unsigned NumParams = FD ? FD->getNumParams() : 0;
                     bool Variadic = FD ? FD->isVariadic() : false;
-                    for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
+                    const auto* Method = dyn_cast_or_null<CXXMethodDecl>(FD);
+                    unsigned ArgOffset = 0;
+                    if (isa<CXXOperatorCallExpr>(CE) && Method &&
+                        Method->isImplicitObjectMemberFunction()) {
+                        ArgOffset = 1;
+                    }
+                    for (unsigned I = ArgOffset; I < CE->getNumArgs(); ++I) {
                         const Expr* Arg = CE->getArg(I);
                         if (!Arg) continue;
-                        if (I < NumParams) {
-                            checkCallArg(CE, I, Arg,
-                                         FD->getParamDecl(I)->getType(),
+                        unsigned ParamIdx = I - ArgOffset;
+                        if (ParamIdx < NumParams) {
+                            checkCallArg(CE, ParamIdx, Arg,
+                                         FD->getParamDecl(ParamIdx)->getType(),
                                          /*Variadic=*/false, Ctx, *this);
                         } else if (Variadic) {
-                            checkCallArg(CE, I, Arg, QualType(),
+                            checkCallArg(CE, ParamIdx, Arg, QualType(),
                                          /*Variadic=*/true, Ctx, *this);
                         }
                     }
