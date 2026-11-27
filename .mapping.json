@@ -142,6 +142,7 @@
   "ynd/bin/pyrefly/unwrap/ix.sh":"toolchains/ynd/bin/pyrefly/unwrap/ix.sh",
   "ynd/bin/ruff/ix.sh":"toolchains/ynd/bin/ruff/ix.sh",
   "ynd/bin/ruff/unwrap/ix.sh":"toolchains/ynd/bin/ruff/unwrap/ix.sh",
+  "ynd/bin/strictfmt/ix.sh":"toolchains/ynd/bin/strictfmt/ix.sh",
   "ynd/bin/yaml2json/ix.sh":"toolchains/ynd/bin/yaml2json/ix.sh",
   "ynd/bin/yaml2json/main.go":"toolchains/ynd/bin/yaml2json/main.go",
   "ynd/bin/yamlfmt/ix.sh":"toolchains/ynd/bin/yamlfmt/ix.sh",
