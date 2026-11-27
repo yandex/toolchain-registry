@@ -44,6 +44,7 @@
   "devtools/gdb/yt_fibers_printer.py":"devtools/gdb/yt_fibers_printer.py",
   "ix":"toolchains/ix",
   "lib/c++/19/patched/ix.sh":"toolchains/lib/c++/19/patched/ix.sh",
+  "lib/c++/19/patched/revert-trivially-copyable-pair.diff":"toolchains/lib/c++/19/patched/revert-trivially-copyable-pair.diff",
   "ynd/ag/ix.sh":"toolchains/ynd/ag/ix.sh",
   "ynd/ag/patches/arcignore.patch":"toolchains/ynd/ag/patches/arcignore.patch",
   "ynd/ag/patches/getpagesize.patch":"toolchains/ynd/ag/patches/getpagesize.patch",

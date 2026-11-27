@@ -1,0 +1,171 @@
+diff --git a/libcxx/include/__configuration/abi.h b/libcxx/include/__configuration/abi.h
+index 0422b645727d8a8d41a7c7932bc9c09cda92c2b1..8efbb42d1d84706c35c2861b1e573002062a35a7 100644
+--- a/libcxx/include/__configuration/abi.h
++++ b/libcxx/include/__configuration/abi.h
+@@ -98,10 +98,6 @@
+ // and WCHAR_MAX. This ABI setting determines whether we should instead track whether the fill
+ // value has been initialized using a separate boolean, which changes the ABI.
+ #  define _LIBCPP_ABI_IOS_ALLOW_ARBITRARY_FILL_VALUE
+-// Make a std::pair of trivially copyable types trivially copyable.
+-// While this technically doesn't change the layout of pair itself, other types may decide to programatically change
+-// their representation based on whether something is trivially copyable.
+-#  define _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+ #elif _LIBCPP_ABI_VERSION == 1
+ #  if !(defined(_LIBCPP_OBJECT_FORMAT_COFF) || defined(_LIBCPP_OBJECT_FORMAT_XCOFF))
+ // Enable compiling copies of now inline methods into the dylib to support
+diff --git a/libcxx/include/__type_traits/datasizeof.h b/libcxx/include/__type_traits/datasizeof.h
+index a27baf67cc2d8a10982396435ff685af54e6ba90..35c12921e8ffa197d9559c6c28cf5d20f9f54560 100644
+--- a/libcxx/include/__type_traits/datasizeof.h
++++ b/libcxx/include/__type_traits/datasizeof.h
+@@ -54,7 +54,6 @@ struct _FirstPaddingByte<_Tp, true> {
+ // the use as an extension.
+ _LIBCPP_DIAGNOSTIC_PUSH
+ _LIBCPP_CLANG_DIAGNOSTIC_IGNORED("-Winvalid-offsetof")
+-_LIBCPP_GCC_DIAGNOSTIC_IGNORED("-Winvalid-offsetof")
+ template <class _Tp>
+ inline const size_t __datasizeof_v = offsetof(_FirstPaddingByte<_Tp>, __first_padding_byte_);
+ _LIBCPP_DIAGNOSTIC_POP
+diff --git a/libcxx/include/__utility/pair.h b/libcxx/include/__utility/pair.h
+index c0002b7abb3ca45e486ee1ea56a4bac65098f8f7..0afbebcdc9f2ae55d6faddd4e8ccb79653b3eb62 100644
+--- a/libcxx/include/__utility/pair.h
++++ b/libcxx/include/__utility/pair.h
+@@ -32,7 +32,6 @@
+ #include <__type_traits/is_implicitly_default_constructible.h>
+ #include <__type_traits/is_nothrow_assignable.h>
+ #include <__type_traits/is_nothrow_constructible.h>
+-#include <__type_traits/is_reference.h>
+ #include <__type_traits/is_same.h>
+ #include <__type_traits/is_swappable.h>
+ #include <__type_traits/is_trivially_relocatable.h>
+@@ -81,38 +80,6 @@ struct _LIBCPP_TEMPLATE_VIS pair
+   _LIBCPP_HIDE_FROM_ABI pair(pair const&) = default;
+   _LIBCPP_HIDE_FROM_ABI pair(pair&&)      = default;
+ 
+-  // When we are requested for pair to be trivially copyable by the ABI macro, we use defaulted members
+-  // if it is both legal to do it (i.e. no references) and we have a way to actually implement it, which requires
+-  // the __enable_if__ attribute before C++20.
+-#ifdef _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+-  // FIXME: This should really just be a static constexpr variable. It's in a struct to avoid gdb printing the value
+-  // when printing a pair
+-  struct __has_defaulted_members {
+-    static const bool value = !is_reference<first_type>::value && !is_reference<second_type>::value;
+-  };
+-#  if _LIBCPP_STD_VER >= 20
+-  _LIBCPP_HIDE_FROM_ABI constexpr pair& operator=(const pair&)
+-    requires __has_defaulted_members::value
+-  = default;
+-
+-  _LIBCPP_HIDE_FROM_ABI constexpr pair& operator=(pair&&)
+-    requires __has_defaulted_members::value
+-  = default;
+-#  elif __has_attribute(__enable_if__)
+-  _LIBCPP_HIDE_FROM_ABI pair& operator=(const pair&)
+-      __attribute__((__enable_if__(__has_defaulted_members::value, ""))) = default;
+-
+-  _LIBCPP_HIDE_FROM_ABI pair& operator=(pair&&)
+-      __attribute__((__enable_if__(__has_defaulted_members::value, ""))) = default;
+-#  else
+-#    error "_LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR isn't supported with this compiler"
+-#  endif
+-#else
+-  struct __has_defaulted_members {
+-    static const bool value = false;
+-  };
+-#endif // defined(_LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR) && __has_attribute(__enable_if__)
+-
+ #ifdef _LIBCPP_CXX03_LANG
+   _LIBCPP_HIDE_FROM_ABI pair() : first(), second() {}
+ 
+@@ -258,8 +225,7 @@ struct _LIBCPP_TEMPLATE_VIS pair
+              typename __make_tuple_indices<sizeof...(_Args2) >::type()) {}
+ 
+   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 pair&
+-  operator=(__conditional_t<!__has_defaulted_members::value && is_copy_assignable<first_type>::value &&
+-                                is_copy_assignable<second_type>::value,
++  operator=(__conditional_t<is_copy_assignable<first_type>::value && is_copy_assignable<second_type>::value,
+                             pair,
+                             __nat> const& __p) noexcept(is_nothrow_copy_assignable<first_type>::value &&
+                                                         is_nothrow_copy_assignable<second_type>::value) {
+@@ -268,12 +234,10 @@ struct _LIBCPP_TEMPLATE_VIS pair
+     return *this;
+   }
+ 
+-  _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 pair&
+-  operator=(__conditional_t<!__has_defaulted_members::value && is_move_assignable<first_type>::value &&
+-                                is_move_assignable<second_type>::value,
+-                            pair,
+-                            __nat>&& __p) noexcept(is_nothrow_move_assignable<first_type>::value &&
+-                                                   is_nothrow_move_assignable<second_type>::value) {
++  _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 pair& operator=(
++      __conditional_t<is_move_assignable<first_type>::value && is_move_assignable<second_type>::value, pair, __nat>&&
++          __p) noexcept(is_nothrow_move_assignable<first_type>::value &&
++                        is_nothrow_move_assignable<second_type>::value) {
+     first  = std::forward<first_type>(__p.first);
+     second = std::forward<second_type>(__p.second);
+     return *this;
+diff --git a/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivial_copy_move.pass.cpp b/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivial_copy_move.pass.cpp
+index 5481ba443046d9ecf017aa4651c6cb82d6c47652..3ec60c08b8eabb84f1c9565aa868b26476470df0 100644
+--- a/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivial_copy_move.pass.cpp
++++ b/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivial_copy_move.pass.cpp
+@@ -162,13 +162,8 @@ void test_trivial()
+         static_assert(!std::is_trivially_copy_constructible<P>::value, "");
+         static_assert(!std::is_trivially_move_constructible<P>::value, "");
+ #endif // TEST_STD_VER >= 11
+-#ifndef _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+         static_assert(!std::is_trivially_copy_assignable<P>::value, "");
+         static_assert(!std::is_trivially_move_assignable<P>::value, "");
+-#else
+-        static_assert(std::is_trivially_copy_assignable<P>::value, "");
+-        static_assert(std::is_trivially_move_assignable<P>::value, "");
+-#endif
+         static_assert(std::is_trivially_destructible<P>::value, "");
+     }
+ }
+diff --git a/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivially_copyable.compile.pass.cpp b/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivially_copyable.compile.pass.cpp
+index c5f9c8d0f2559932bc1e3e1229496bb4469d4988..1132b3e5def18b1ca22d8cd06927a3b11233e60c 100644
+--- a/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivially_copyable.compile.pass.cpp
++++ b/libcxx/test/libcxx/utilities/utility/pairs/pairs.pair/abi.trivially_copyable.compile.pass.cpp
+@@ -47,20 +47,11 @@ static_assert(!std::is_trivially_copyable<std::pair<int&, int> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<int, int&> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<int&, int&> >::value, "");
+ 
+-#ifdef _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+-static_assert(std::is_trivially_copyable<std::pair<int, int> >::value, "");
+-static_assert(std::is_trivially_copyable<std::pair<int, char> >::value, "");
+-static_assert(std::is_trivially_copyable<std::pair<char, int> >::value, "");
+-static_assert(std::is_trivially_copyable<std::pair<std::pair<char, char>, int> >::value, "");
+-static_assert(std::is_trivially_copyable<std::pair<trivially_copyable, int> >::value, "");
+-#else
+ static_assert(!std::is_trivially_copyable<std::pair<int, int> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<int, char> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<char, int> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<std::pair<char, char>, int> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<trivially_copyable, int> >::value, "");
+-#endif // _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+-
+ #if TEST_STD_VER == 03 // Known ABI difference
+ static_assert(!std::is_trivially_copyable<std::pair<trivially_copyable_no_copy_assignment, int> >::value, "");
+ static_assert(!std::is_trivially_copyable<std::pair<trivially_copyable_no_move_assignment, int> >::value, "");
+@@ -68,21 +59,10 @@ static_assert(!std::is_trivially_copyable<std::pair<trivially_copyable_no_move_a
+ static_assert(std::is_trivially_copyable<std::pair<trivially_copyable_no_copy_assignment, int> >::value, "");
+ static_assert(std::is_trivially_copyable<std::pair<trivially_copyable_no_move_assignment, int> >::value, "");
+ #endif
+-
+-#ifdef _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+-static_assert(std::is_trivially_copyable<std::pair<trivially_copyable_no_construction, int> >::value, "");
+-#else
+ static_assert(!std::is_trivially_copyable<std::pair<trivially_copyable_no_construction, int> >::value, "");
+-#endif
+ 
+ static_assert(std::is_trivially_copy_constructible<std::pair<int, int> >::value, "");
+ static_assert(std::is_trivially_move_constructible<std::pair<int, int> >::value, "");
+-static_assert(std::is_trivially_destructible<std::pair<int, int> >::value, "");
+-
+-#ifdef _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
+-static_assert(std::is_trivially_copy_assignable<std::pair<int, int> >::value, "");
+-static_assert(std::is_trivially_move_assignable<std::pair<int, int> >::value, "");
+-#else
+ static_assert(!std::is_trivially_copy_assignable<std::pair<int, int> >::value, "");
+ static_assert(!std::is_trivially_move_assignable<std::pair<int, int> >::value, "");
+-#endif // _LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR
++static_assert(std::is_trivially_destructible<std::pair<int, int> >::value, "");
